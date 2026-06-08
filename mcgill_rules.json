@@ -1,0 +1,848 @@
+{
+  "general_rules": {
+    "category": "Legal Citation I – General Rules",
+    "source_files": [
+      "LAWS 2908_Week 2 (1).pdf"
+    ],
+    "topics": [
+      {
+        "topic": "Footnotes Overview",
+        "rules": [
+          "In legal writing, the standard rule is to use footnotes.",
+          "Textual footnotes contain peripheral information that is relevant but would detract from the thrust of the argument if placed in the main text.",
+          "Citation footnotes are used to indicate the source which an argument or quotation has been drawn from.",
+          "Both textual and citation information can occur within a singular footnote.",
+          "Citation footnotes ALWAYS end with a period."
+        ]
+      },
+      {
+        "topic": "When to Footnote",
+        "rules": [
+          "At the first reference to the source.",
+          "At every subsequent quotation from the source.",
+          "At every subsequent reference or allusion to a particular passage in the source."
+        ]
+      },
+      {
+        "topic": "How to Indicate Footnotes in Text",
+        "rules": [
+          "Footnotes are indicated by superscripted numbers.",
+          "Generally, place the footnote at the end of the sentence, after the punctuation.",
+          "When you reference a specific word or phrase in a sentence, place a footnote beside it.",
+          "When using a quote, cite your source every time you use the thoughts, words, opinions, etc. of others."
+        ],
+        "examples": [
+          "The \"cow jumped over the moon\"¹ is a popular phrase found in books for children.",
+          "You must cite your source \"every time you use the thoughts words opinions, etc. of others.\"²"
+        ]
+      },
+      {
+        "topic": "Combining Footnotes",
+        "rules": [
+          "Never place more than one footnote number at any given point in the main text.",
+          "Combine the supporting citation into one footnote.",
+          "Separate different citations in a footnote with a semicolon and end the entire footnote with a period."
+        ],
+        "examples": [
+          "Historical trauma theory is a branch of research that explores the multigenerational effect of a mass trauma event.¹",
+          "Footnote 1: See, Maria Yellow Horse Brave Heart, \"The Historical Trauma Response\" (2003) 35:1 Journal of Psychoactive Drugs 7; Les B. Whitbeck et al, \"Conceptualizing and Measuring Historical Trauma\" (2004) 35:3-4 American Journal of Community Psychology 1; Teresa Evans Campbell, \"Historical Trauma\" (2008) 23:3 Journal of Interpersonal Violence 316."
+        ]
+      },
+      {
+        "topic": "Introductory Signals",
+        "rules": [
+          "Use introductory signals to indicate the relationship between the source and the proposition."
+        ],
+        "signals": [
+          {
+            "signal": "See",
+            "meaning": "The source cited directly supports the proposition."
+          },
+          {
+            "signal": "See also",
+            "meaning": "The source cited provides added support for the proposition but is not the most authoritative or is not directly on point."
+          },
+          {
+            "signal": "But see",
+            "meaning": "The source cited is in partial disagreement with the proposition but does not directly contradict it."
+          },
+          {
+            "signal": "See e.g.",
+            "meaning": "The source cited is one of several that support that proposition, but the other supporting sources are not cited."
+          },
+          {
+            "signal": "See generally",
+            "meaning": "The source cited supports and provides background information relevant to the proposition."
+          },
+          {
+            "signal": "See especially",
+            "meaning": "The source cited is the strongest of several that support the proposition."
+          }
+        ]
+      },
+      {
+        "topic": "Establishing a Short Form",
+        "rules": [
+          "Only create a short form if you will be using the same reference throughout your paper/work.",
+          "Use the full title the first time you cite.",
+          "Always italicize the title if it is a case or legislation.",
+          "Abbreviations of articles/monographs do not need to be italicized."
+        ],
+        "examples": [
+          "1 R v Gladue, [1999] 1 SCR 688. [Gladue]",
+          "2 Maria Yellow Horse Brave Heart, \"Historical Trauma Response\" (2003) 41:4 American Journal of Psychology 4. [Brave Heart]",
+          "3 Criminal Code of Canada, RSD 1985, c C-46. [Code].",
+          "4 Achille Mbembe, \"Necropolitcs\" (2003) 15:1 Public Culture 80. [Mbembe].",
+          "8 Mbembe, supra note 4 at 82",
+          "14 Gladue, supra note 1 at para 56.",
+          "20 Code, supra note 3 at s.718.2(e)."
+        ]
+      },
+      {
+        "topic": "Ibid",
+        "rules": [
+          "Ibid means 'in the same place'.",
+          "Use 'Ibid' to direct the reader to the immediately preceding reference.",
+          "Ibid may be used after a full citation, after a supra, or even after another Ibid."
+        ],
+        "examples": [
+          "1 R v Gladue, [1999] 1 SCR 688.",
+          "2 Ibid at para 64.",
+          "3 Ibid."
+        ]
+      },
+      {
+        "topic": "Supra",
+        "rules": [
+          "Supra means 'above'.",
+          "Use the short form, in combination with supra to refer to the footnote containing the original full citation.",
+          "Do not use supra to refer to another supra or ibid."
+        ],
+        "examples": [
+          "1 R v Gladue, [1999] 1 SCR 688. [Gladue]",
+          "2 Maria Yellow Horse Brave Heart, \"Historical Trauma Response\" (2003) 4:3 American Community of Psychology 3. [Brave Heart]",
+          "3 Gladue, supra note 1 at para 64.",
+          "12 Achille Mbembe \"Necropolitics\" (2003) 15:1 Public Culture 80. [Mbembe]",
+          "15 Gladue, supra note 1 at para 81."
+        ]
+      },
+      {
+        "topic": "Positioning of Quotations",
+        "rules": [
+          "Short quotation of four lines or fewer: place in quotation marks and incorporate directly into the text.",
+          "Long quotation of more than four lines: indent from both margins (in MS Word, indent 1.25 cm on either side) and single space. Do not use quotation marks."
+        ],
+        "examples": [
+          "Sinema explained that in the context of genocides, we often \"choose not to notice\" if we are directly affected as a result of the conflict.¹"
+        ]
+      },
+      {
+        "topic": "Quoting in Footnotes",
+        "rules": [
+          "It is acceptable to quote in a footnote to add additional context."
+        ],
+        "examples": [
+          "I primarily study historical trauma as proposed by Dr. Maria Yellow Horse Brave Heart. Historical trauma has been further studied by researchers such as Dr. Teresa Evans-Campbell¹, Dr. Les Whitbeck² and Drs. Amy Bombay, Kim Matheson & Hymie Anisman³",
+          "Footnotes:",
+          "1 Evans Campbell explained her approach as \"XXX...\" [citation].",
+          "2 Whitbeck explained his approach as \"XXX...\" [citation].",
+          "3 Bombay, Matheson & Asniman explained their approach as \"XXX...\" [citation]."
+        ]
+      },
+      {
+        "topic": "Structuring a Bibliography",
+        "rules": [
+          "Divide bibliographies into sections: Legislation, Jurisprudence, Secondary materials.",
+          "If a source does not fit into a defined section, a residual section entitled 'other materials' may be used.",
+          "Within each section, list entries in alphabetical order.",
+          "Sort legislation by title.",
+          "Sort jurisprudence by style of cause.",
+          "Sort secondary material by author's surname.",
+          "Include any initials as written on the source, even if this leads to different versions of the author's name in subsequent references.",
+          "If there is more than one author, use the surname for only the first author: Smith, John, William Jones & Timothy Adams.",
+          "If there are more than three authors, write et al. after the first name: Smith, John et al.",
+          "Insert a hanging indent of 0.63 cm for each citation so that the second and subsequent lines are indented.",
+          "The bibliography should be single spaced."
+        ],
+        "examples": [
+          "Brave Heart, Maria Yellow Horse, \"The historical trauma response among natives and its relationship with substance abuse: a Lakota illustration\" (2003) 35:1 Journal of Psychoactive Drugs 7."
+        ]
+      }
+    ]
+  },
+  "government_docs": {
+    "category": "Government Documents & Grey Literature",
+    "source_files": [
+      "LAWS 2908D - Grey Lit, Government Docs, International.pdf",
+      "LAWS 2908D Winter 2026 Legislation.pdf (government documents section)"
+    ],
+    "topics": [
+      {
+        "topic": "Reports on Inquiries and Commissions",
+        "template": "Jurisdiction, | issuing body, | title, | volume | (publication information) | (Chair) | pinpoint",
+        "rules": [
+          "Include the jurisdiction unless it is mentioned in another element of the citation.",
+          "Include the issuing body unless it is mentioned in the title of the report.",
+          "To distinguish between volumes, indicate vol or any other appellation used in the report (such as 'book').",
+          "Do not repeat the volume number anywhere else when citing document."
+        ],
+        "examples": [
+          "National Inquiry into Missing and Murdered Indigenous Women and Girls, Reclaiming Power and Place: The Final Report of the National Inquiry into Missing and Murdered Indigenous Women and Girls, vol 1a (Ottawa: Privy Council, 2016) at 68.",
+          "Commission of Inquiry on the Blood System in Canada: Final Report, vol 1 (Ottawa: Public Works and Governmental Services Canada, 1997) at 100.",
+          "Report of the Royal Commission on Aboriginal Peoples: Looking Forward, Looking Back, vol 1 (Ottawa: Supply and Services Canada, 1996); Report of the Royal Commission on Aboriginal Peoples: Looking Forward, Looking Back, vol 2 (Ottawa: Supply and Services Canada, 1996)."
+        ]
+      },
+      {
+        "topic": "Public Papers of Intergovernmental Conferences",
+        "template": "Name of Conference or committee, | title, | document number | (location of conference: | date of conference).",
+        "examples": [
+          "Meeting of the Continuing Committee of Ministers on the Constitution, The Canadian Charter of Rights and Freedoms: Discussion Draft, July 4, 1980, Doc 830-81/027 (Ottawa: 8-12 September 1980)."
+        ]
+      },
+      {
+        "topic": "Intergovernmental Documents",
+        "template": "Title, | (date), | pinpoint, | online: | <URL> | [archived URL].",
+        "examples": [
+          "Convention de la Baie-James et du Nord québécois et conventions complémentaires (11 November 1975) at 28.3.4, online: <aenq.org> [perma.cc/KA58=QSB9]."
+        ]
+      },
+      {
+        "topic": "Indigenous Treaties",
+        "rules": [
+          "Online versions of Indigenous treaties are found on the website of the Government of Canada in the section on Indigenous and Northern Affairs: <rcaanc-cirnac.gc.ca>",
+          "Provide the short form for numbered treaties even in the absence of subsequent references.",
+          "Indicate the full treaty or the agreement. Do not provide the date if it is already indicated in the title."
+        ],
+        "examples": [
+          "Nunavut Inuit Land Claims Agreement, 1 December 2006, online: <rcaanc-cirnac.gc.ca> [perma.cc/GC4BL-LSMB].",
+          "Agreement Between the Inuit of the Nunavut Settlement Area and Her Majesty the Queen in Right of Canada, 25 May 1993, online: <gov.nu.ca> [perma.cc/J38P=FAMC].",
+          "Treaty No 8 Made June 21, 1899 and Adhesions, Reports, Etc., online: <rcaanc-cirnac.gc.ca/> [perma.cc/5JU9-2D2M] [Treaty 8].",
+          "Treaty 3 between Her Majesty the Queen and the Saulteaux Tribe of Ojibbeway Indians at the Northwest Angle on the Lake of the Wood with Adhesions, 3 October 1987, online: <rcaanc-cirnac.gc.ca> [perma.cc/NN5G-4J6T] [Treaty 3]."
+        ]
+      },
+      {
+        "topic": "Grey Literature",
+        "rules": [
+          "Produced outside of traditional publishing and distribution channels.",
+          "Information produced by organizations 'on the ground' – government and intergovernmental agencies, NGOs.",
+          "Does NOT go through a peer review process – so be cautious about the quality.",
+          "SIFT method: Stop | Investigate the Source | Find better coverages | Trace claims to original content."
+        ],
+        "examples": [
+          "IFSD Report (Institute of Fiscal Studies and Democracy)"
+        ]
+      },
+      {
+        "topic": "Treaties and Other International Agreements",
+        "template": "Treaty or Agreement Name, | parties, | date of signature, | treaty series reference | pinpoint | (additional information).",
+        "rules": [
+          "Write the complete title of the treaty.",
+          "If the names of the parties to a bilateral treaty are not mentioned in the title, include the shortened name after the title.",
+          "Provide the date when the treaty was first signed or opened for signature.",
+          "Provide (optionally) the parallel citation."
+        ],
+        "examples": [
+          "Treaty Relating to Boundary waters and Questions Arising with Canada, US and UK, 11 January 1909, 36 US Stat 2448.",
+          "North American Free Trade Agreement, 17 December 1992, Can TS 1992 NO 2 (Canada, Mexico, and US) [NAFTA].",
+          "Geneva Convention for the Amelioration of the Condition of the Wounded and Sick in Armed Forces in the Field, 12 August 1949, 75 UNTS 31, Can TS 1965 No 20 [Geneva Convention 1].",
+          "Canada—United States—Mexico Agreement, as amended by Protocol of Amendment to the Agreement between Canada, the United States of America, and the United Mexican States, 10 December 2019, Can TS 2020 No 6 [CUSMA]."
+        ]
+      },
+      {
+        "topic": "UN Documents",
+        "subtypes": [
+          {
+            "subtype": "Official Records / Meetings",
+            "template": "Title, | UN body's acronym | session number or year, | UN document number | (year of document) | document type and number | pinpoint.",
+            "examples": [
+              "UNCTAD TDB, 23rd Sess, UN Doc TD/B/SR. 565 (1981) 565th meeting",
+              "UN Charter, 26 June 1945, Can TS 1945 No 7."
+            ]
+          },
+          {
+            "subtype": "Reports",
+            "template": "Title, | UN body's acronym | session number or year, | UN document number | (year of document) | document type and number | pinpoint.",
+            "examples": [
+              "Report of the UN Commissioner for Refugees, UNGA, 15th Sess, UN Doc A/4378"
+            ]
+          },
+          {
+            "subtype": "Decisions and Resolutions",
+            "template": "Title, | UN body's acronym | session number or year, | UN document number | (year of document) | document type and number | pinpoint.",
+            "examples": [
+              "United Nations Declaration of Human Rights, UNGA, 3rd Sess, UN DocA/810 (1948) GA Res 217A (111)."
+            ]
+          }
+        ]
+      },
+      {
+        "topic": "Permanent Court of International Justice (PCIJ)",
+        "subtypes": [
+          {
+            "subtype": "Acts and Rules",
+            "rules": [
+              "Write the title, volume number, and name of publication, followed by the first page or document number."
+            ],
+            "examples": [
+              "Revised Rules of the Court (1926), PCIJ 33 (Ser D) No 1."
+            ]
+          },
+          {
+            "subtype": "Judgements, Orders and Advisory Opinions",
+            "template": "Style of cause (name of parties) | (year), | type of decision, | reporter | case No | pinpoint.",
+            "examples": [
+              "Panevezys-Saldutiskis Railway Case (Estonia v Lithuania), (1939), PCIJ (Ser A/B) No 76 at 16."
+            ]
+          }
+        ]
+      },
+      {
+        "topic": "International Court of Justice (ICJ)",
+        "subtypes": [
+          {
+            "subtype": "Acts and Rules",
+            "rules": [
+              "Write the title, volume number, and name of publication, followed by the first page or document number."
+            ],
+            "examples": [
+              "Travel and Subsistence Regulations of the International Court of Justice, [1947] ICJ Acts & Docs 94."
+            ]
+          },
+          {
+            "subtype": "General Citation",
+            "template": "Style of cause (names of parties), | type of decision | [year of reporter] | reporter | first page | pinpoint.",
+            "examples": []
+          },
+          {
+            "subtype": "Judgments",
+            "rules": [
+              "Do not specify the type of decision."
+            ],
+            "examples": [
+              "Case concerning East Timor (Portugal v Australia), [1995] ICJ Re 90 at 103."
+            ]
+          },
+          {
+            "subtype": "Orders",
+            "rules": [
+              "Provide the full date after the type of decision (Order of day | month | year)."
+            ],
+            "examples": [
+              "Certain Activities Carried Out by Nicaragua in the Border Area (Costa Rica v Nicaragua), Order of 8 March 2011, [2011] ICJ Rep 6."
+            ]
+          },
+          {
+            "subtype": "Advisory Opinions",
+            "rules": [
+              "Do not provide the names of the parties after the style of cause."
+            ],
+            "examples": [
+              "Legality of the Threat or Use of Nuclear Weapons Case, Advisory Opinions, [1996] 1CJ Rep 66 at 70."
+            ]
+          }
+        ]
+      },
+      {
+        "topic": "Parliamentary Documents",
+        "source_note": "From Legislation PDF, pages 33-40",
+        "subtypes": [
+          {
+            "subtype": "Parliamentary Debates (General Form)",
+            "template": "Jurisdiction, | legislature, | title, | legislative session, | volume | number | (date) | pinpoint | (speaker) | online: | <URL> | [archived URL]",
+            "examples": [
+              "House of Commons Debates, 37-1, No 64 (17 May 2001) at 7175 (Hon Elinor Caplan).",
+              "Quebec, National Assembly, Votes and Proceedings, 39-1, No 48 (18 June 2009) at 517.",
+              "House of Commons Debates, 42-1, No 372 (28 January 2019) at 24850 (Hon Geoff Regan) online: <ourcommons.ca> [perma.cc/33G-DPUN].",
+              "Nunavut, Legislative Assembly, Nunavut Hansard (tentative version), (25 May 2022) at 16 online: <assembly.nu.ca/hansard> [perma.cc/CKDS2-6J3Z]."
+            ]
+          },
+          {
+            "subtype": "Debates (Bill readings / Committee Evidence)",
+            "examples": [
+              "\"Bill C-8, An Act to amend the Copyright Act and the Trade-marks Act and to make consequential amendments to other Acts\", 2nd reading, House of Commons Debates, 41-2, No 9 (28 October 2013) at 1504 Hon. Steven Blaney.",
+              "House of Commons, Standing Committee on Justice and Human Rights, Evidence, 39-2, No 12 (7 February 2008) at 15:30 (Tony Cannavino)."
+            ]
+          },
+          {
+            "subtype": "Order Papers",
+            "examples": [
+              "House of Commons, Order Paper, 49-1, No 175 (20 June 2007).",
+              "House of Commons, Notice Paper, 42-1, No 383 (20 February 2019) at IX."
+            ]
+          },
+          {
+            "subtype": "Sessional Papers",
+            "examples": [
+              "Ontario, Legislative Assembly, \"Report on Workmen's Compensation for Injuries\" by James Mavor, Sessional Papers, No 40 (1900) at 6-7.",
+              "House of Commons, \"Reports on the Delegates to negotiate for the acquisition of Rupert's Land and the North West Territory\", Sessional Papers, No 25 (1869)."
+            ]
+          },
+          {
+            "subtype": "Committee Reports – Federal",
+            "examples": [
+              "House of Commons, Legislative Committee on Bill C-38, Report 1 – Bill-C38, An Act respecting certain aspects of legal capacity for marriage for civil purposes (June 2005) (Chair: Marcel Proulx)."
+            ]
+          },
+          {
+            "subtype": "Committee Reports – Provincial",
+            "examples": [
+              "Ontario, Legislative Assembly, Select Committee on Mental Health and Addictions, Final Report – Navigating the Journey to Wellness: The Comprehensive Mental Health and Addictions Plan for Ontarians (August 2010)."
+            ]
+          }
+        ]
+      },
+      {
+        "topic": "Non-Parliamentary Papers",
+        "source_note": "From Legislation PDF, pages 41-43",
+        "template": "Jurisdiction, | issuing body, | title, | (type of document), | other information | (publication information) | pinpoint.",
+        "examples": [
+          "Canada, Royal Commission on Electoral Reform and Party Financing, Reforming Electoral Democracy, vol 4 (Ottawa: Communication Group, 1991) at 99.",
+          "Canadian Intellectual Property Office, Manual of Patent Office Practice (Ottawa: Industry Canada, 1998).",
+          "Canadian Space Agency, 2020 State of the Canadian Space Sector Report: Facts and Figures 2019 (Ottawa: CSA, 2020) at 6 online: <asc-csa.gc.ga> [perma.cc/GNC8-DKDB].",
+          "National Inquiry into Missing and Murdered Indigenous Women and Girls, Reclaiming Power and Place: The Final Report of the National Inquiry into Missing and Murdered Indigenous Women and Girls, vol 1a (Ottawa: Privy Office Council, 2016) at 68."
+        ]
+      }
+    ]
+  },
+  "secondary_sources": {
+    "category": "Secondary Sources",
+    "source_files": [
+      "LAWS 2908D - Secondary Sources_For Posting on Brightspace.pptx"
+    ],
+    "topics": [
+      {
+        "topic": "Journal Articles",
+        "template": "Author, | \"title of article\" | (year) | volume: | issue | abbreviation of journal | first page | pinpoint.",
+        "rules": [
+          "Italicize titles of journals and books; article titles go in quotation marks.",
+          "Indicate the author's name as presented on the title page of the article. Include professional titles as required.",
+          "If there are two authors, separate the names with an ampersand (&).",
+          "If there are three authors, separate the first two with a comma and place an ampersand before the last one.",
+          "If there are more than three authors, include only the first author's name and et al.",
+          "Place the title of the article in quotation marks. Do not put a comma after the title.",
+          "Separate a title from a subtitle with a colon.",
+          "Capitalize the title and use punctuation according to the conventions of the language of the title.",
+          "Always use double quotation marks, regardless of the language.",
+          "Indicate the year of publication in parentheses. If there are multiple years, separate with a dash (e.g., 2010-2011).",
+          "Place the volume number after the year of publication, followed by a colon and the issue number. Do not put spaces before and after the colon.",
+          "If the issue number is unavailable, omit it.",
+          "Where two issues are published at once, separate the numbers with a slash (6/7).",
+          "Indicate the first page of the article after the title of the journal. Do not include 'at' before the first page.",
+          "**abbreviations of journals are fine, PROVIDED that they are universal. Do not create your own abbreviation.**"
+        ],
+        "examples": [
+          "John Borrows, \"Creating an Indigenous Legal Community\" (2005) 50:1 McGill LJ 153 at 155.",
+          "Lynn A Iding, \"In a Poor State: The Long Road to Human Rights Protection on the Basis of Social Condition\" (2003) 41:2 Alta LR 513.",
+          "The Right Honourable Beberly McLachlin, \"The Supreme Court and the Public Interest\" (2001) 64:2 Sask L Rev 309.",
+          "Rafael La Porta et al, \"Law and Finance (1998) 106:6 J Political Economy 1113 at 1152.",
+          "Alan Hanna, \"Reconciliation Through Relationality in Indigenous Legal Orders\" (2019) 56:3 Alta L Rev 817.",
+          "RRA Walker, \"The English Property Legislation of 1922-26\" (1928) 10:1 J Comp Legis & Intl L (3rd) 1.",
+          "Eric David, \"Pourquoi aime-t-on une musique?\" (2022) RQDI (special edition, January)."
+        ]
+      },
+      {
+        "topic": "Books / Monographs",
+        "template": "Author, | title, | edition | other elements | (place of publication: | publisher, | year of publication) | pinpoint",
+        "rules": [
+          "Italicize titles.",
+          "If there is a 'volume number' in the title, place that after the title.",
+          "If you are citing from a specific edition, place that after the title.",
+          "Translations: Author, Title, translated by ____, (location: publisher, year)."
+        ],
+        "examples": [
+          "David Gilles, Telecommunications Law, vol 1 (London, UK: Buttersworths, 2003).",
+          "David Gilles, Telecommunications Law, 3rd ed (London, UK: Buttersworths, 2003).",
+          "Martha Derthick, Up in Smoke: From Legislation to Litigation in Tobacco Politics, 2nd ed (Washington, DC: CQ Press, 2005).",
+          "John Borrows et al, Braiding Legal Orders: Implementing the United Nation Declaration on the Rights of Indigenous Peoples (Waterloo: Centre for International Governance Institution, 2019).",
+          "Philip Girard, Bora Laskin: Bringing Law to Life (Toronto: University of Toronto Press, 2005) at 20.",
+          "Jean-Louis Baudoin & Yvon Renard, Code civile du Quèbec annoté, 20th ed (Montreal: Wilson & Lafleur, 2017) at note 7/3."
+        ]
+      },
+      {
+        "topic": "Essays in Edited Collections",
+        "template": "Author of essay or entry, | \"title of essay or entry\" | in | editor | ed. | title of book, | edition | (place of publication: | publisher | year of publication) | first page | pinpoint.",
+        "examples": [
+          "Dale Brawn, \"Dominant Professionals: The Role of Large-Firm Lawyers in Manitoba\" in Carol Wildon, ed, Inside the Law: Canadian Law Firms in Historical Perspective (Toronto: University of Toronto Press, 1981)."
+        ]
+      },
+      {
+        "topic": "Halsbury's Laws of Canada – Print Edition",
+        "template": "Halsbury's Laws of Canada, | volume | subject matter | section | (reissue, | update).",
+        "examples": [
+          "Halsbury's Laws of Canada, vol 2, Business Corporations at HBC-298 \"Focus on Interests\" (Cum Supp Release 4)."
+        ]
+      },
+      {
+        "topic": "Halsbury's Laws of Canada – Online",
+        "template": "Halsbury's Laws of Canada (online), | subject matter | \"detailed subject heading & subheading\" | (subheading code) | section | (reissue, | update).",
+        "examples": [
+          "Halsbury's Laws of Canada (online), Expropriation, \"Provincial and Territorial Regulation: Manitoba: Compensation: Determination of Compensation\" (III.3(5)(d)(i)) at HEXP-127 \"Due Compensation\" (Cum Sup Release 55, 2019 Reissue)."
+        ]
+      },
+      {
+        "topic": "News Sources",
+        "template": "Author, \"title of article\", | newspaper | (date) | page, | electronic source.",
+        "examples": [
+          "Bill Curry, \"PM, Premiers Work Out Deal on Aboriginal Health Care,\" The Globe and Mail (26 November 2005) A4.",
+          "\"Ottawa Eyes Six Candidates in Search of New Supreme Court Judge\", Canadian Press (17 October 2005).",
+          "\"Ruling on Baby with Three Mothers\", BBC News (10 November 2005), online: <news.bbc.co.uk> [perma.cc/EZ75-LSGB]."
+        ]
+      },
+      {
+        "topic": "Magazines",
+        "template": "Author, \"title of article\", | title of magazine | (date) | pinpoint, | electronic source.",
+        "examples": [
+          "Benjamin Phelan, \"Buried Truths\", Harper's Magazine 309:1855 (December 2004) at 70.",
+          "Michael O'Shea, \"The Wild, Wild, Wild West of Space Law\", The Walrus (20 January 2020), online: <thewalrus.ca> [perma.cc./TM2A-WGCQ]."
+        ]
+      },
+      {
+        "topic": "Theses / Dissertations",
+        "template": "Author, | title | (degree, | institution, | year) | [unpublished].",
+        "examples": [
+          "Aaron James Mills, Miinigowiziwin: All that Has Been Given for Living Well Together – One Vision of Anishinaabe Constitutionalism (PhD Dissertation, University of Victoria, 2019) [unpublished]."
+        ]
+      },
+      {
+        "topic": "Editorials and Letters to the Editor",
+        "template": "Author, \"title of the editorial\", | style of document | newspaper | (date) | page | electronic source.",
+        "examples": [
+          "Harold von Cramon, Letter to the Editor, The [Montreal] Gazette (26 September 2005) A26.",
+          "Abby J. Leibman, Letter to the Editor, \"The (De?)Classified Papers at Mar-a-Lago\" The New York Times (15 August 2022) online: <nytimes.com> [perma.cc/U23M-37KD)."
+        ]
+      },
+      {
+        "topic": "News Releases",
+        "template": "Author, \"title of the editorial\", | style of document | newspaper | (date) | page | electronic source.",
+        "examples": [
+          "Indian and Northern Affairs, News Release, 2-02688, \"Inuit Firms Secure Three Contaminated Sites Contracts\" (6 July 2005).",
+          "United Nations, Press Release, SG/SM/12548-OBV/820-WOM/1764, \"Secretary General, Marking International Day of Rural Women, Calls for Scaling Up Investments in Resources, Infrastructure, Services to Improve Rural Women's Lives\" (15 October 2009), online: <un.org/en/unpress>. [perma.cc/G9BD-U3FG]."
+        ]
+      },
+      {
+        "topic": "Personal Communication",
+        "template": "Type of communication | persons involved | (date) | further information, | publication information.",
+        "examples": [
+          "Interview of Edward Beauvais by Douglas Sanderson (29 May 1948) on This Week.",
+          "Phone call from Donald Trump to Brad Raffensperger (2 January 2021), online: <youtube.com> [perma.cc/ZVD9-YCBQ]."
+        ]
+      },
+      {
+        "topic": "Copyright",
+        "template": "\"Title\" (type) creator, registration info (date).",
+        "examples": [
+          "\"Twilight\" (music) Mary Chapin Carpenter, USA Pau002997899 (20 December 2005).",
+          "\"Feel Happy\" (sound recording) Warner Music Canada, Can 1035760 (24 January 2006) registered."
+        ]
+      },
+      {
+        "topic": "Websites",
+        "template": "Author, | \"title of the page/article\" | (date of the page/article) | pinpoint, | online | (type of electronic source) | : | <URL> | [archived URL].",
+        "examples": [
+          "Richard Gold, \"The Midas Conundrum: Why less can be more when it comes to intellectual property protection\" (25 April 2017) online: <cigionline.org> [perma.cc/XAP7-VWDR].",
+          "Cour fèdérale, \"Tribunaux canadiens\" (last modified 14 April 2019), online: <fet-ef-gc.ca> [perma.cc/N4G2-EP7D]."
+        ]
+      },
+      {
+        "topic": "Online Videos",
+        "template": "Author, | \"title of the page/article\" | (date of the page) | pinpoint | (type of electronic source | : | <URL> | [archived URL].",
+        "examples": [
+          "\"Supreme Court Hearings: Supreme Court Reference Case on the Appointment of Justice Marc Nadon\" (15 January 2014) at 02h:29m:30s, online (video): <cpac.ca/en> [perma.cc/J2EH-TFXL].",
+          "Jagmeet Singh, \"1 Year and Now 2 Impeachments Later, I'm Still Not Joking\" (13 January 2021), online (video): <tiktok.com> [perma.cc/X7AR-A6VX]."
+        ]
+      },
+      {
+        "topic": "Legal Research Services",
+        "template": "Author, \"title\" or title | (date of page/article) | pinpoint | online: | (legal research service) | publisher.",
+        "examples": [
+          "Marc Vincent Ellis, \"Fiduciary Duties in Canada\" (15 November 2020) at ch 7, online: (Proview) Thompson Reuters Canada.",
+          "Practical Law Canada Employment, \"Wrongful Dismissal Toolkit\" (28 February 2022) online: (PL) Thomson Reuters Canada."
+        ]
+      },
+      {
+        "topic": "Physical Objects",
+        "template": "Creator, | Type of work, | additional information | (year) | held at | institution name | [medium] | parallel citation",
+        "examples": [
+          "Anishinaabe, Drum, (circa 1850) held at the British Museum [drum], online\" <britishmuseum.org> [perma.cc/BN3J-B2YV]."
+        ]
+      },
+      {
+        "topic": "Other Digital Media",
+        "template": "Traditional Citation, | type of digital media: | title of the media | (publication information).",
+        "examples": [
+          "Peter W. Hogg & Mary Ellen Turpell, \"Implementing Aboriginal Self-Government: Constitutional and Jurisdictional Issues,\" CD-ROM: For Seven Generations: An Information Legacy of the Royal Commission on Aboriginal Peoples (Ottawa: Libraxus, 1997).",
+          "DVD: The Paper Chase (Beverly Hill, Cal: 20th Century Fox Home Entertainment, 2003)"
+        ]
+      },
+      {
+        "topic": "Social Media",
+        "template": "Author, | \"first sentence of post\" | (date posted), | online: | <URL> [archived URL] | (other information)",
+        "examples": [
+          "Barack Obama, \"When I left office, I told you all that the single most important thing ...\" (5 October 2017), online: <facebook.com/barackobama> [perma.cc/9LXB-7URP].",
+          "Lawrence Lessig, \"I spend as little time with lawmakers as possible\" (2 July 2013), online: <reddit.com> [perma.cc/BXB6-7VNT].",
+          "Ben Garrison, \"Can You hear Us now? Peaceful Americans protesting an undeniably stolen election with mountains of evidence!\" (17 January 2021), online <twitter.om/GrrGraphics> [perma.cc/7SNC-CBDL] (unavailable due to account suspension).",
+          "Alexandria Ocasio-Cortez, \"It's truly frustrating that Dems & GOP alike water this down into some non-evidence based on electoral boogey monster ...\" (23 December 2021), online: <twitter.com/AOC> [perma.cc/7RL9-QF6Z] (post 3/4)."
+        ]
+      }
+    ]
+  },
+  "jurisprudence": {
+    "category": "Jurisprudence",
+    "source_files": [
+      "LAWS 2908D Week 3 Jurisprudence.pdf"
+    ],
+    "topics": [
+      {
+        "topic": "What is in a Citation?",
+        "rules": [
+          "A citation (on one line) includes: the 'style of cause' (parties). If there are intervenors they are not listed.",
+          "Plus the neutral citation (not all older cases have them).",
+          "And a locator or source (Reporter). Not all decisions are reported.",
+          "With an indicator of the court if this is not obvious from the neutral citation or source.",
+          "Generally, you should give parallel citations (more than one way to locate the case)."
+        ]
+      },
+      {
+        "topic": "Some Rules",
+        "rules": [
+          "Neutral citation first (if available).",
+          "Reported citation next. Rules: Official first, then semi/unofficial, then national; then general; then regional; then subject specific.",
+          "If unpublished (unreported), you may use the database file number (eg. OJ no #) and you should say which database source in brackets ... but only if unreported."
+        ],
+        "examples": [
+          "Smith v Jones, 2009 SCC 23.",
+          "Smith v Jones, 2009 SCC 23, [2009] 2 SCR 98, 23 DLR (5th) 156."
+        ]
+      },
+      {
+        "topic": "Pinpoints",
+        "rules": [
+          "Pinpoints are to page or paragraph numbers.",
+          "More recent reports will have paragraph numbers; older cases may use page numbering.",
+          "Do not cite to page numbers in online sources (as they are not fixed but variable depending on how viewed).",
+          "If using page numbers, indicate which Reporter you are citing to in your footnote.",
+          "The page numbers may NOT be embedded in the online report in which case you are expected to go back to the hard copy book to obtain and cite correct page numbers."
+        ]
+      },
+      {
+        "topic": "Neutral Citation",
+        "rules": [
+          "Must include the neutral cite 1st (if available)."
+        ],
+        "examples": [
+          "R v King, 2002 SCC 10.",
+          "R v King, 2002 SCC 10, [2002] 1 SCR 227.",
+          "Twins v Canada (Attorney General), 2016 FC 537 (CanLII), [2017] 1 FCR 79."
+        ],
+        "components": [
+          {
+            "element": "Style of Case",
+            "example": "Twins v Canada (Attorney General)"
+          },
+          {
+            "element": "Neutral Citation",
+            "example": "2016 FC 537"
+          },
+          {
+            "element": "Source",
+            "example": "(CanLII)"
+          },
+          {
+            "element": "Report Citation",
+            "example": "[2017] 1 FCR 79"
+          }
+        ]
+      },
+      {
+        "topic": "Ibid for Cases",
+        "rules": [
+          "Means 'in the same place'.",
+          "Use to direct the reader to the immediately preceding reference."
+        ],
+        "examples": [
+          "1. Hartman v Irwin, 2005 BCCA 267.",
+          "2. Ibid at para 31."
+        ]
+      },
+      {
+        "topic": "Supra for Cases",
+        "rules": [
+          "Means 'above'.",
+          "Use to direct reader to a previous footnote/endnote containing the original full citation."
+        ],
+        "examples": [
+          "1. Hartman v Irwin, 2005 BCCA 267.",
+          "2. Ibid at para 31.",
+          "3. McMillan v. Bloedel Ltd, 2007 ONSC 342, 134 DLR (4th) 321.",
+          "4. Supra note 1 at para 45."
+        ]
+      }
+    ]
+  },
+  "legislation": {
+    "category": "Legislation",
+    "source_files": [
+      "LAWS 2908D Winter 2026 Legislation.pdf"
+    ],
+    "topics": [
+      {
+        "topic": "Statutes – General Form",
+        "template": "Title, | statute volume | jurisdiction | year, | chapter, | other indexing elements, | (session or supplement), | pinpoint",
+        "rules": [
+          "Provide the short title, usually found in the first section of a statute.",
+          "Italicize the title of the statute and place a non-italicized comma after the title.",
+          "Revised Statutes are signified with an 'R' prior to the jurisdiction abbreviation.",
+          "Place the jurisdiction Immediately after the statute volume.",
+          "Do not put a period between the statute and jurisdiction."
+        ],
+        "examples": [
+          "Civil Marriage Act, SC 2005, c 33.",
+          "Children's Law Reform Act, RSO 1992 c C.12.",
+          "Criminal Code, RSC 1985, c C-46, s.718.2(e).",
+          "COVID-19 Emergency Response Act, SC 2020, c 5.",
+          "Workers Compensation Act, SPEI 1994, c 67.",
+          "Access to Abortion Services Act, RSBC 1996, c 1.",
+          "Proceeds of Crime (Money Laundering) and Terrorist Financing Act, SC 2000, c 17."
+        ],
+        "abbreviations": {
+          "RSC": "Revised Statutes of Canada",
+          "SC": "Statutes of Canada",
+          "RSO": "Revised Statutes of Ontario",
+          "SPEI": "Statutes of Prince Edward Island",
+          "RSBC": "Revised Statutes of British Columbia"
+        }
+      },
+      {
+        "topic": "Constitutional Statutes",
+        "rules": [
+          "Many constitutional statutes were enacted under different name than those used today. You will need to include the full and complete citation at first mention."
+        ],
+        "examples": [
+          "Constitution Act, 1982, s 35, being Schedule B to the Canada Act 1982 (UK), 1982, c 11.",
+          "Canadian Charter of Rights and Freedoms, s7, Part 1 of the Constitutional Act, 1982, being Schedule B to the Canada Act 1982 (UK), 1982, c 11.",
+          "Constitution Act, 1867 (UK), 30 & 31 Vict, c 3, s 91, reprinted in RSC 1985, Appendix II, No 5."
+        ],
+        "short_form_examples": [
+          "Charter, s 15."
+        ]
+      },
+      {
+        "topic": "Point-in-Time Citations",
+        "rules": [
+          "When citing a particular point in time, and the standard citation form is inadequate, use 'as it appeared on [day month year]' or 'as it appeared on [month year]' to clarify the point in time cited."
+        ],
+        "examples": [
+          "Income Tax Act, RSC 1985, c 1 (5th Supp), s 20(1)(c) as it appeared on 12 October 2012."
+        ]
+      },
+      {
+        "topic": "Appendices",
+        "rules": [
+          "For statutes that appear in an appendix, always provide the official citation first, followed by the citation to the appendix.",
+          "Introduce the appendix reference with the phrase 'reprinted in'.",
+          "Indicate the statute revision or volume to which the appendix is attached, followed by a comma and the appendix number.",
+          "Write the appendix number in Roman numerals."
+        ],
+        "examples": [
+          "Canadian Bill of Rights, SC 1960, c 44, reprinted in RSC 1985, Appendix III."
+        ]
+      },
+      {
+        "topic": "Indigenous Constitutions",
+        "rules": [
+          "When referring to Indigenous constitution documents, include critical information so that readers can track the source.",
+          "If the document title is not in English or French, provide a description in parentheses or a translation in square brackets.",
+          "Do not italicize such information."
+        ],
+        "examples": [
+          "Sto:lo Xwexwilmexw Shxwelmexwelh [Sto:lo People's Constitution], (2020), online: <sxta.bc.ca> [perma.cc/X9BT-7PAA]."
+        ]
+      },
+      {
+        "topic": "Bills",
+        "template": "Number, | title, | session, | parliament or legislature, | jurisdiction, | year, | pinpoint | (additional information)",
+        "rules": [
+          "For provinces/territories, include jurisdiction."
+        ],
+        "examples": [
+          "Bill C-26, An Act to establish the Canadian Border Services Agency, 1st Sess, 38th Parl, 2005, cl 5(1)(e) (as passed by the House of Commons 13 June 2005).",
+          "Bill 59, An Act to amend the Civil Code as regards marriage, 1st Sess, 37th Leg, Quebec, 2004 (assented to 10 November 2004), SQ 2004, c 23",
+          "Bill S-3, An Act to amend the Energy Efficiency Act, 2nd Sess, 40th Parl, 2009, cl 5, (first reading 29 January 2009).",
+          "Bill C-26, An Act to establish the Canadian Border Services Agency, 1st Sess, 38th Parl, cl 5(1)(e) (as passed by the House of Commons 13 June 2005)"
+        ]
+      },
+      {
+        "topic": "Rules of Court",
+        "template": "Jurisdiction, | issuing body, | title, | indexing number, | additional indexing information, | pinpoint.",
+        "examples": [
+          "Federal Court Immigration Rules, r 18.",
+          "Alberta Rules of Court, Alta reg 124/2010, vol 1, r 1050."
+        ]
+      },
+      {
+        "topic": "Municipal By-laws",
+        "subtypes": [
+          {
+            "subtype": "Unrevised",
+            "template": "Municipality, | by-law or revised by-law | number, | title | (date), | pinpoint.",
+            "examples": [
+              "City of Whitehorse, by-law No 97-42, Zoning By-law (11 May 1998) s1."
+            ]
+          },
+          {
+            "subtype": "Revised",
+            "template": "Municipality, | revised by-law | number, | title, | pinpoint.",
+            "examples": [
+              "City of Montreal, revised by-law C S-0.1.1, By-law Concerning Collection Services, s 5."
+            ]
+          }
+        ]
+      },
+      {
+        "topic": "Securities Commission",
+        "template": "Title, | commission | document | bulletin citation | (date), | pinpoint",
+        "rules": [
+          "Cite securities national instruments, national policies and other documents to provincial securities commissions.",
+          "NP: National Policy",
+          "NI: National Instrument"
+        ],
+        "examples": [
+          "Manual Reliance Review System for Exemptive Relief Applications, OSC NP 12-201, (2005) 28 OSCB 7166."
+        ]
+      },
+      {
+        "topic": "Statutes and Regulations – Types",
+        "subtypes": [
+          {
+            "subtype": "Revised statutes",
+            "examples": [
+              "Divorce Act, RSC 1985, c 3 (2nd Supp)."
+            ]
+          },
+          {
+            "subtype": "Annual statutes",
+            "examples": [
+              "Civil Marriage Act, SC 2005, c 33, ss 1-3."
+            ]
+          },
+          {
+            "subtype": "Consolidated Regulations",
+            "examples": [
+              "Saint John Airport Zoning Regulations, CRC, c 114."
+            ]
+          },
+          {
+            "subtype": "Annual Regulations",
+            "examples": [
+              "Access to Information Regulations, SOR 83/507, s 7."
+            ]
+          }
+        ],
+        "abbreviations": {
+          "CRC": "Consolidated Regulations of Canada",
+          "SOR": "Statutory Orders and Regulations"
+        }
+      }
+    ]
+  }
+}
