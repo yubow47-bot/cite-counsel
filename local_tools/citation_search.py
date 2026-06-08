@@ -36,49 +36,6 @@ def classify_and_normalize(query: str) -> dict:
     return {"type": "case_name", "normalized": query, "original": query}
 
 
-def rerank_results(query: str, results: list) -> list:
-    """用 DeepSeek 对搜索结果重新排序。"""
-    lines = []
-    for i, r in enumerate(results, 1):
-        name = r.get("name_en", "未知")
-        cit = r.get("citation_en", "")
-        lines.append(f"{i}. {name} — {cit}")
-    numbered_list = "\n".join(lines)
-
-    prompt = f"""你是加拿大法律专家。用户查询："{query}"
-以下是搜索结果，请按与用户查询的相关性重新排序，返回前5条的编号。
-
-优先级规则：
-1. 案件名与查询最接近的排最前
-2. SCC（最高法院）判决优先于下级法院
-3. 同等相关性下较新的案件优先
-
-结果列表：
-{numbered_list}
-
-只返回前5个编号，格式：[1, 3, 5, 2, 4]，不要任何解释。"""
-
-    try:
-        content = ask_deepseek(prompt)
-        indices = json.loads(content)
-        ordered = []
-        seen = set()
-        for idx in indices:
-            pos = idx - 1
-            if 0 <= pos < len(results) and pos not in seen:
-                seen.add(pos)
-                ordered.append(results[pos])
-        # 补足不足5条的情况
-        for i, r in enumerate(results):
-            if len(ordered) >= 5:
-                break
-            if i not in seen:
-                ordered.append(r)
-                seen.add(i)
-        return ordered[:5]
-    except Exception:
-        return results[:5]
-
 
 def expand_concept(query: str) -> list:
     """展开法律概念：源头案件 + 法条 + 后续案件。"""
@@ -136,6 +93,7 @@ def expand_concept(query: str) -> list:
 def search_citation(query: str) -> list:
     """主入口：分类 → 标准化 → 搜索/验证。"""
     classified = classify_and_normalize(query)
+    print(f"[DEBUG] 分类结果: {classified}")
     input_type = classified["type"]
     normalized = classified["normalized"]
 
@@ -151,24 +109,80 @@ def search_citation(query: str) -> list:
             "warning": "⚠️ 未能通过 A2AJ 验证，建议在 CanLII 手动确认",
         }]
 
-    # 2. case_name：搜索 → 重排序
+    # 2. case_name：动态分页搜索（title 精确匹配最多2条 + 全文补足）
     elif input_type == "case_name":
-        raw_results = search_cases_multi(normalized, size=40)
-        if not raw_results:
-            return []
-        reranked = rerank_results(query, raw_results)
-        return [dict(_map_fields(r), verified=True) for r in reranked]
+        # 提取核心关键词（去掉 R v / R c / Regina v 等前缀）
+        keyword = re.sub(
+            r"^(?:R\s+v|R\s+c|Regina\s+v|The\s+Queen\s+v)\s+",
+            "",
+            normalized,
+            flags=re.IGNORECASE
+        ).strip()
 
-    # 3. legislation：按法条引用号查
+        title_matches = []
+        fulltext_pool = []
+        MAX_BATCHES = 3
+
+        for batch in range(MAX_BATCHES):
+            batch_results = search_cases_multi(normalized, size=40, offset=batch * 40)
+            if not batch_results:
+                break
+
+            if batch == 0:
+                fulltext_pool = batch_results
+
+            for r in batch_results:
+                name = r.get("name_en", "")
+                if keyword.lower() in name.lower() and r not in title_matches:
+                    title_matches.append(r)
+                if len(title_matches) >= 2:
+                    break
+
+            if len(title_matches) >= 2:
+                break
+
+        seen = set()
+        final = []
+        for r in title_matches + fulltext_pool:
+            key = r.get("citation_en") or r.get("name_en")
+            if key and key not in seen:
+                seen.add(key)
+                final.append(r)
+            if len(final) >= 5:
+                break
+
+        if not final:
+            return []
+        return [dict(_map_fields(r), verified=True) for r in final]
+
+    # 3. legislation：A2AJ /fetch (doc_type=laws) 验证
     elif input_type == "legislation":
-        result = fetch_by_citation(normalized, doc_type="legislation")
-        if "error" not in result and "raw_input" not in result:
-            result["verified"] = True
-            return [result]
+        import requests
+
+        # 从标准化文本中提取基础引用号
+        # 匹配 SC/RSC/SOR 等编号（去掉法条名和条款部分）
+        cit_match = re.search(
+            r"(?:RSC|SC|SOR|RRO|O\sReg|BC\sReg|RLRQ)\s[^,]+(?:,\s*c\s[^,]+)?",
+            normalized
+        )
+        base_citation = cit_match.group(0).strip() if cit_match else normalized
+        verified = False
+        try:
+            resp = requests.get(
+                "https://api.a2aj.ca/fetch",
+                params={"citation": base_citation, "doc_type": "laws"},
+                timeout=15
+            )
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
+            verified = len(results) > 0
+        except Exception:
+            verified = False
+
         return [{
-            "name": normalized,
-            "verified": False,
-            "warning": "⚠️ 未能通过 A2AJ 验证，建议在 CanLII 手动确认",
+            "statute_title": normalized,
+            "verified": verified,
+            "warning": "" if verified else "⚠️ 未能通过 A2AJ 验证，建议在 CanLII 手动确认",
         }]
 
     # 4. concept：概念展开

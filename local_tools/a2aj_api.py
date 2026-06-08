@@ -88,7 +88,7 @@ def _dedup_key(result: dict) -> str:
     return result.get("citation_en", "") or result.get("name_en", "") or result.get("url_en", "")
 
 
-def search_cases_multi(query: str, size: int = 40) -> list:
+def search_cases_multi(query: str, size: int = 40, offset: int = 0) -> list:
     """双轨搜索：先用 /fetch 精确匹配，再用 /search 全文搜索，精确结果排前面。"""
     seen = set()
     merged = []
@@ -115,10 +115,13 @@ def search_cases_multi(query: str, size: int = 40) -> list:
                 merged.append(r)
 
     # 第二轨：/search 全文搜索
+    params = {"query": query, "doc_type": "cases", "size": size}
+    if offset:
+        params["offset"] = offset
     try:
         resp = requests.get(
             f"{A2AJ_BASE}/search",
-            params={"query": query, "doc_type": "cases", "size": size},
+            params=params,
             timeout=15
         )
         resp.raise_for_status()
