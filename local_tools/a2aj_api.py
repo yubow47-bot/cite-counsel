@@ -3,19 +3,25 @@ import requests
 A2AJ_BASE = "https://api.a2aj.ca"
 
 
-def fetch_by_citation(citation: str) -> dict:
-    """按 citation 直接查询，返回结构化字段。"""
+def fetch_by_citation(citation: str, doc_type: str = "cases") -> dict:
+    """按 citation 直接查询，返回结构化字段。
+
+    Args:
+        citation: 引用号
+        doc_type: "cases" 或 "legislation"。默认为 "cases"，
+                  设为 "legislation" 时只查法条不做 fallback。
+    """
     try:
         response = requests.get(
             f"{A2AJ_BASE}/fetch",
-            params={"citation": citation, "doc_type": "cases"},
+            params={"citation": citation, "doc_type": doc_type},
             timeout=15
         )
         response.raise_for_status()
         data = response.json()
         results = data.get("results", [])
-        if not results:
-            # 尝试 legislation
+        if not results and doc_type == "cases":
+            # cases 查不到时尝试 legislation
             try:
                 response = requests.get(
                     f"{A2AJ_BASE}/fetch",
@@ -75,16 +81,56 @@ def _extract_jurisdiction(dataset: str) -> str:
         if key in dataset.upper():
             return value
     return ""
-def search_cases_multi(query: str, size: int = 5) -> list:
-    """模糊搜索，返回多条结果供用户选择。"""
+
+
+def _dedup_key(result: dict) -> str:
+    """生成去重用的唯一键。"""
+    return result.get("citation_en", "") or result.get("name_en", "") or result.get("url_en", "")
+
+
+def search_cases_multi(query: str, size: int = 40) -> list:
+    """双轨搜索：先用 /fetch 精确匹配，再用 /search 全文搜索，精确结果排前面。"""
+    seen = set()
+    merged = []
+
+    # 第一轨：/fetch 精确匹配
     try:
-        response = requests.get(
+        resp = requests.get(
+            f"{A2AJ_BASE}/fetch",
+            params={"citation": query, "doc_type": "cases"},
+            timeout=15
+        )
+        resp.raise_for_status()
+        fetch_results = resp.json().get("results", [])
+    except requests.exceptions.RequestException:
+        fetch_results = []
+
+    for r in fetch_results:
+        name = (r.get("name_en") or "").lower()
+        citation = (r.get("citation_en") or "").lower()
+        if query.lower() in name or query.lower() in citation:
+            key = _dedup_key(r)
+            if key and key not in seen:
+                seen.add(key)
+                merged.append(r)
+
+    # 第二轨：/search 全文搜索
+    try:
+        resp = requests.get(
             f"{A2AJ_BASE}/search",
             params={"query": query, "doc_type": "cases", "size": size},
             timeout=15
         )
-        response.raise_for_status()
-        results = response.json().get("results", [])
-        return results
-    except requests.exceptions.RequestException as e:
-        return []
+        resp.raise_for_status()
+        search_results = resp.json().get("results", [])
+    except requests.exceptions.RequestException:
+        search_results = []
+
+    for r in search_results:
+        key = _dedup_key(r)
+        if key and key not in seen:
+            seen.add(key)
+            merged.append(r)
+
+    # 截断到 size 条
+    return merged[:size]
