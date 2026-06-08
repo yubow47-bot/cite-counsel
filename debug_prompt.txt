@@ -1,0 +1,194 @@
+类型: general_rules
+
+prompt:
+You are a McGill legal citation formatter.
+Format the following information into a proper McGill citation.
+
+Source type: general_rules
+
+McGill Rules for this source type:
+{
+  "category": "Legal Citation I – General Rules",
+  "topics": [
+    {
+      "topic": "Footnotes Overview",
+      "rules": [
+        "In legal writing, the standard rule is to use footnotes.",
+        "Textual footnotes contain peripheral information that is relevant but would detract from the thrust of the argument if placed in the main text.",
+        "Citation footnotes are used to indicate the source which an argument or quotation has been drawn from.",
+        "Both textual and citation information can occur within a singular footnote.",
+        "Citation footnotes ALWAYS end with a period."
+      ]
+    },
+    {
+      "topic": "When to Footnote",
+      "rules": [
+        "At the first reference to the source.",
+        "At every subsequent quotation from the source.",
+        "At every subsequent reference or allusion to a particular passage in the source."
+      ]
+    },
+    {
+      "topic": "How to Indicate Footnotes in Text",
+      "rules": [
+        "Footnotes are indicated by superscripted numbers.",
+        "Generally, place the footnote at the end of the sentence, after the punctuation.",
+        "When you reference a specific word or phrase in a sentence, place a footnote beside it.",
+        "When using a quote, cite your source every time you use the thoughts, words, opinions, etc. of others."
+      ],
+      "examples": [
+        "The \"cow jumped over the moon\"¹ is a popular phrase found in books for children.",
+        "You must cite your source \"every time you use the thoughts words opinions, etc. of others.\"²"
+      ]
+    },
+    {
+      "topic": "Combining Footnotes",
+      "rules": [
+        "Never place more than one footnote number at any given point in the main text.",
+        "Combine the supporting citation into one footnote.",
+        "Separate different citations in a footnote with a semicolon and end the entire footnote with a period."
+      ],
+      "examples": [
+        "Historical trauma theory is a branch of research that explores the multigenerational effect of a mass trauma event.¹",
+        "Footnote 1: See, Maria Yellow Horse Brave Heart, \"The Historical Trauma Response\" (2003) 35:1 Journal of Psychoactive Drugs 7; Les B. Whitbeck et al, \"Conceptualizing and Measuring Historical Trauma\" (2004) 35:3-4 American Journal of Community Psychology 1; Teresa Evans Campbell, \"Historical Trauma\" (2008) 23:3 Journal of Interpersonal Violence 316."
+      ]
+    },
+    {
+      "topic": "Introductory Signals",
+      "rules": [
+        "Use introductory signals to indicate the relationship between the source and the proposition."
+      ],
+      "signals": [
+        {
+          "signal": "See",
+          "meaning": "The source cited directly supports the proposition."
+        },
+        {
+          "signal": "See also",
+          "meaning": "The source cited provides added support for the proposition but is not the most authoritative or is not directly on point."
+        },
+        {
+          "signal": "But see",
+          "meaning": "The source cited is in partial disagreement with the proposition but does not directly contradict it."
+        },
+        {
+          "signal": "See e.g.",
+          "meaning": "The source cited is one of several that support that proposition, but the other supporting sources are not cited."
+        },
+        {
+          "signal": "See generally",
+          "meaning": "The source cited supports and provides background information relevant to the proposition."
+        },
+        {
+          "signal": "See especially",
+          "meaning": "The source cited is the strongest of several that support the proposition."
+        }
+      ]
+    },
+    {
+      "topic": "Establishing a Short Form",
+      "rules": [
+        "Only create a short form if you will be using the same reference throughout your paper/work.",
+        "Use the full title the first time you cite.",
+        "Always italicize the title if it is a case or legislation.",
+        "Abbreviations of articles/monographs do not need to be italicized."
+      ],
+      "examples": [
+        "1 R v Gladue, [1999] 1 SCR 688. [Gladue]",
+        "2 Maria Yellow Horse Brave Heart, \"Historical Trauma Response\" (2003) 41:4 American Journal of Psychology 4. [Brave Heart]",
+        "3 Criminal Code of Canada, RSD 1985, c C-46. [Code].",
+        "4 Achille Mbembe, \"Necropolitcs\" (2003) 15:1 Public Culture 80. [Mbembe].",
+        "8 Mbembe, supra note 4 at 82",
+        "14 Gladue, supra note 1 at para 56.",
+        "20 Code, supra note 3 at s.718.2(e)."
+      ]
+    },
+    {
+      "topic": "Ibid",
+      "rules": [
+        "Ibid means 'in the same place'.",
+        "Use 'Ibid' to direct the reader to the immediately preceding reference.",
+        "Ibid may be used after a full citation, after a supra, or even after another Ibid."
+      ],
+      "examples": [
+        "1 R v Gladue, [1999] 1 SCR 688.",
+        "2 Ibid at para 64.",
+        "3 Ibid."
+      ]
+    },
+    {
+      "topic": "Supra",
+      "rules": [
+        "Supra means 'above'.",
+        "Use the short form, in combination with supra to refer to the footnote containing the original full citation.",
+        "Do not use supra to refer to another supra or ibid."
+      ],
+      "examples": [
+        "1 R v Gladue, [1999] 1 SCR 688. [Gladue]",
+        "2 Maria Yellow Horse Brave Heart, \"Historical Trauma Response\" (2003) 4:3 American Community of Psychology 3. [Brave Heart]",
+        "3 Gladue, supra note 1 at para 64.",
+        "12 Achille Mbembe \"Necropolitics\" (2003) 15:1 Public Culture 80. [Mbembe]",
+        "15 Gladue, supra note 1 at para 81."
+      ]
+    },
+    {
+      "topic": "Positioning of Quotations",
+      "rules": [
+        "Short quotation of four lines or fewer: place in quotation marks and incorporate directly into the text.",
+        "Long quotation of more than four lines: indent from both margins (in MS Word, indent 1.25 cm on either side) and single space. Do not use quotation marks."
+      ],
+      "examples": [
+        "Sinema explained that in the context of genocides, we often \"choose not to notice\" if we are directly affected as a result of the conflict.¹"
+      ]
+    },
+    {
+      "topic": "Quoting in Footnotes",
+      "rules": [
+        "It is acceptable to quote in a footnote to add additional context."
+      ],
+      "examples": [
+        "I primarily study historical trauma as proposed by Dr. Maria Yellow Horse Brave Heart. Historical trauma has been further studied by researchers such as Dr. Teresa Evans-Campbell¹, Dr. Les Whitbeck² and Drs. Amy Bombay, Kim Matheson & Hymie Anisman³",
+        "Footnotes:",
+        "1 Evans Campbell explained her approach as \"XXX...\" [citation].",
+        "2 Whitbeck explained his approach as \"XXX...\" [citation].",
+        "3 Bombay, Matheson & Asniman explained their approach as \"XXX...\" [citation]."
+      ]
+    },
+    {
+      "topic": "Structuring a Bibliography",
+      "rules": [
+        "Divide bibliographies into sections: Legislation, Jurisprudence, Secondary materials.",
+        "If a source does not fit into a defined section, a residual section entitled 'other materials' may be used.",
+        "Within each section, list entries in alphabetical order.",
+        "Sort legislation by title.",
+        "Sort jurisprudence by style of cause.",
+        "Sort secondary material by author's surname.",
+        "Include any initials as written on the source, even if this leads to different versions of the author's name in subsequent references.",
+        "If there is more than one author, use the surname for only the first author: Smith, John, William Jones & Timothy Adams.",
+        "If there are more than three authors, write et al. after the first name: Smith, John et al.",
+        "Insert a hanging indent of 0.63 cm for each citation so that the second and subsequent lines are indented.",
+        "The bibliography should be single spaced."
+      ],
+      "examples": [
+        "Brave Heart, Maria Yellow Horse, \"The historical trauma response among natives and its relationship with substance abuse: a Lakota illustration\" (2003) 35:1 Journal of Psychoactive Drugs 7."
+      ]
+    }
+  ]
+}
+
+Information to format:
+{
+  "url": "http://politics.people.com.cn/n1/2026/0527/c461001-40728622.html",
+  "error": "SSL connection failed: ..."
+}
+
+STRICT OUTPUT RULES:
+- Output ONLY the McGill citation, nothing else
+- No sentences like "can be found online at" or "is available at"
+- No numbers or bullets at the start
+- No explanation, no commentary
+- Follow EXACTLY the template structure shown in the McGill Rules above
+- Replace placeholder words like Author, Title, Date with the actual values from the information provided
+- If a field is null or missing, omit it entirely
+- For websites: Author (if any), "Title", (Date), online: Site Name <URL>.
+- Output must end with a period
