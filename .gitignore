@@ -4,3 +4,11 @@ __pycache__/
 *.pyc
 .env
 config/settings.py
+
+# 调试 / 临时文件
+debug_prompt.txt
+diag_result.json
+
+# 会话数据
+data/current_session.json
+data/test.docx
