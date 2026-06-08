@@ -1,7 +1,6 @@
 import json
 
-from llm_api.local_ollama import ask_ollama, chat_ollama
-from llm_api.kimi_api import extract_from_url
+from llm_api.deepseek_api import ask_deepseek, extract_from_url
 from local_tools.a2aj_api import fetch_by_citation
 from local_tools.file_extractor import extract_from_file
 from local_tools.citation_tracker import CitationTracker
@@ -20,7 +19,7 @@ def route(input_type: str, content: str, tracker: CitationTracker = None) -> str
     # 本地：文件提取
     elif input_type == "file":
         extracted_fields = extract_from_file(content)
-        # 文件内容可能较复杂，先用 Ollama 提取结构化字段
+        # 文件内容可能较复杂，先用 DeepSeek 提取结构化字段
         raw_text = extracted_fields.pop("raw_text", "")
         if raw_text and not extracted_fields.get("author"):
             prompt = f"""Extract citation fields from the following text and return JSON only.
@@ -32,7 +31,7 @@ Text: {raw_text}
 
 Return JSON only, no explanation."""
             try:
-                response = ask_ollama(prompt)
+                response = ask_deepseek(prompt)
                 extracted_fields.update(json.loads(response))
             except Exception:
                 pass
@@ -51,11 +50,11 @@ Return JSON only, no explanation."""
             params.get("pinpoint", "")
         )
 
-    # 本地：Ollama 自由咨询（不走RAG，直接返回）
+    # 本地：DeepSeek 自由咨询（不走RAG，直接返回）
     elif input_type == "chat":
-        return chat_ollama([{"role": "user", "content": content}])
+        return ask_deepseek(content)
 
-    # 联网：Kimi 提取 → RAG 格式化
+    # 联网：DeepSeek 提取 → 格式化
     elif input_type == "llm":
         extracted_fields = extract_from_url(content)
         result = format_citation(extracted_fields)

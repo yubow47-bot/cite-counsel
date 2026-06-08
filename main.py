@@ -1,7 +1,7 @@
 import sys
 from core.model_router import route
 from local_tools.citation_tracker import CitationTracker
-from llm_api.local_ollama import chat_ollama
+from llm_api.deepseek_api import chat_deepseek
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -17,7 +17,7 @@ def local_mode():
         print("  1 = Citation 查询(A2AJ)")
         print("  2 = 文件提取(docx / pdf / pptx / xlsx)")
         print("  3 = ibid / supra 管理")
-        print("  4 = Ollama 自由咨询")
+        print("  4 = DeepSeek 自由咨询")
 
         choice = input("选择功能: ").strip()
 
@@ -111,7 +111,7 @@ def ibid_menu(tracker: CitationTracker):
 
 
 def chat_mode():
-    print("\nOllama 自由咨询（输入 exit 退出咨询）")
+    print("\nDeepSeek 自由咨询（输入 exit 退出咨询）")
     history = []
 
     while True:
@@ -121,9 +121,9 @@ def chat_mode():
         if not user_input:
             continue
         history.append({"role": "user", "content": user_input})
-        reply = chat_ollama(history)
+        reply = chat_deepseek(history)
         history.append({"role": "assistant", "content": reply})
-        print(f"Ollama:{reply}")
+        print(f"DeepSeek:{reply}")
 
 
 def main():
@@ -132,7 +132,7 @@ def main():
 
     while True:
         print("\n  1 = 本地模式")
-        print("  2 = 联网模式(Kimi)")
+        print("  2 = 联网模式(DeepSeek)")
 
         mode = input("选择模式: ").strip()
 
