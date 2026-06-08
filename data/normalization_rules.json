@@ -1,0 +1,21 @@
+{
+  "case_name_variants": {
+    "Regina v": "R v",
+    "The Queen v": "R v",
+    "R. v.": "R v",
+    "R. c.": "R c",
+    "case": ""
+  },
+  "legislation_abbreviations": {
+    "CCC": "Criminal Code, RSC 1985, c C-46",
+    "Charter": "Canadian Charter of Rights and Freedoms, Part 1 of the Constitution Act, 1982, being Schedule B to the Canada Act 1982 (UK), 1982, c 11",
+    "CCRF": "Canadian Charter of Rights and Freedoms, Part 1 of the Constitution Act, 1982, being Schedule B to the Canada Act 1982 (UK), 1982, c 11",
+    "IRPA": "Immigration and Refugee Protection Act, SC 2001, c 27",
+    "CDSA": "Controlled Drugs and Substances Act, SC 1996, c 19",
+    "CEA": "Canada Evidence Act, RSC 1985, c C-5",
+    "YCJA": "Youth Criminal Justice Act, SC 2002, c 1",
+    "CHRA": "Canadian Human Rights Act, RSC 1985, c H-6",
+    "Code civil": "Code civil du Québec, RLRQ c CCQ-1991",
+    "CCQ": "Code civil du Québec, RLRQ c CCQ-1991"
+  }
+}

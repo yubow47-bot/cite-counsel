@@ -22,39 +22,39 @@ def local_mode():
         choice = input("选择功能: ").strip()
 
         if choice == "1":
-            from local_tools.a2aj_api import search_cases_multi, fetch_by_citation, _map_fields
+            from local_tools.citation_search import search_citation
             from core.mcgill_engine import format_citation
-            query = input("输入 citation 或案件名（如 R v Gladue): ").strip()
 
-            # 先尝试精确 citation 匹配（如 "2023 SCC 17" 或 "1999 CanLII 679"）
-            exact_result = fetch_by_citation(query)
-            if "error" not in exact_result and "raw_input" not in exact_result:
-                extracted_fields = exact_result
-                result = format_citation(extracted_fields)
-                print(f"\nMcGill 引用：{result}")
-                continue
-
-            # 精确匹配无结果，降级到模糊搜索
-            results = search_cases_multi(query, size=5)
+            query = input("输入 citation、案件名、法条或法律概念: ").strip()
+            results = search_citation(query)
 
             if not results:
-                print("未找到相关案件，请尝试其他关键词。")
+                print("未找到相关结果，请尝试其他关键词。")
+                continue
+
+            if len(results) == 1:
+                r = results[0]
+                if r.get("warning"):
+                    print(f"\n{r['warning']}")
+                if "style_of_cause" in r or "statute_title" in r:
+                    print(f"\nMcGill 引用：{format_citation(r)}")
                 continue
 
             print(f"\n找到 {len(results)} 条相关结果：")
             for i, r in enumerate(results, 1):
-                name = r.get("name_en", "未知")
-                citation = r.get("citation_en", "无引用")
-                date = r.get("document_date_en", "")[:4]
-                print(f"  {i}. {name} — {citation} ({date})")
+                name = r.get("style_of_cause") or r.get("statute_title") or r.get("name", "未知")
+                citation = r.get("neutral_citation") or r.get("reporter", "")
+                verified = "✅" if r.get("verified") else "⚠️"
+                print(f"  {i}. {verified} {name} — {citation}")
 
             pick = input("\n选择编号(直接回车取第1条): ").strip()
             idx = (int(pick) - 1) if pick.isdigit() else 0
             idx = max(0, min(idx, len(results) - 1))
 
-            extracted_fields = _map_fields(results[idx])
-            result = format_citation(extracted_fields)
-            print(f"\nMcGill 引用：{result}")
+            selected = results[idx]
+            if selected.get("warning"):
+                print(f"\n{selected['warning']}")
+            print(f"\nMcGill 引用：{format_citation(selected)}")
 
 
         elif choice == "2":
