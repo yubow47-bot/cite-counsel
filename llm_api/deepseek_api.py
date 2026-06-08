@@ -1,12 +1,14 @@
 import os
 import re
-import requests
 import json
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+import requests
+
+DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
+DEEPSEEK_MODEL = "deepseek-chat"
 
 
 def _load_env():
+    """Load .env file for API key."""
     env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
     if os.path.exists(env_path):
         with open(env_path, "r", encoding="utf-8") as f:
@@ -20,40 +22,68 @@ def _load_env():
 
 _load_env()
 
-KIMI_API_KEY = os.environ.get("KIMI_API_KEY", "")
-KIMI_API_URL = "https://api.moonshot.cn/v1/chat/completions"
-KIMI_MODEL = "moonshot-v1-8k"
+
+def _get_api_key() -> str:
+    """Get DeepSeek API key from env or settings."""
+    key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if not key:
+        try:
+            from config.settings import DEEPSEEK_API_KEY as _key
+            key = _key or ""
+        except (ImportError, AttributeError):
+            pass
+    return key
 
 
-def _make_session(timeout: int = 8) -> requests.Session:
-    session = requests.Session()
-    retry = Retry(total=0)
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    session.timeout = timeout
-    # 从环境变量读取代理（Windows 系统代理或手动设置）
-    for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
-        if os.environ.get(var):
-            session.proxies.update({var.lower().split("_")[0]: os.environ[var]})
-            break
-    return session
+def _call_deepseek(messages: list, temperature: float = 0) -> str:
+    """Internal: call DeepSeek API with messages, return response text."""
+    api_key = _get_api_key()
+    if not api_key:
+        raise ValueError(
+            "DEEPSEEK_API_KEY not configured. "
+            "Set it in .env or config/settings.py"
+        )
+
+    response = requests.post(
+        DEEPSEEK_API_URL,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": DEEPSEEK_MODEL,
+            "messages": messages,
+            "temperature": temperature,
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+
+
+def ask_deepseek(prompt: str) -> str:
+    """Single-turn prompt, replaces ask_ollama."""
+    return _call_deepseek([{"role": "user", "content": prompt}])
+
+
+def chat_deepseek(messages: list) -> str:
+    """Multi-turn chat, replaces chat_ollama."""
+    return _call_deepseek(messages, temperature=0.7)
 
 
 def fetch_url_content(url: str) -> str:
+    """Fetch and extract plain text from a URL."""
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
-        session = _make_session(timeout=8)
-        print("  抓取网页中...", flush=True)
-        resp = session.get(url, headers=headers, timeout=8)
+        resp = requests.get(url, headers=headers, timeout=8)
         resp.raise_for_status()
         text = re.sub(r"<[^>]+>", "", resp.text)
         text = re.sub(r"\s+", " ", text).strip()
         return text[:8000]
     except requests.exceptions.ConnectTimeout:
-        return "Failed to fetch URL: Connection timed out (site may be unreachable from your network)"
+        return "Failed to fetch URL: Connection timed out"
     except requests.exceptions.ConnectionError:
-        return "Failed to fetch URL: Connection refused — the site may be blocked in your region"
+        return "Failed to fetch URL: Connection refused"
     except requests.exceptions.ReadTimeout:
         return "Failed to fetch URL: Server took too long to respond"
     except Exception as e:
@@ -61,6 +91,7 @@ def fetch_url_content(url: str) -> str:
 
 
 def extract_from_url(url: str) -> dict:
+    """Fetch a URL and use DeepSeek to extract citation fields (replaces Kimi version)."""
     page_content = fetch_url_content(url)
     if page_content.startswith("Failed to fetch URL"):
         return {"url": url, "error": page_content}
@@ -100,32 +131,11 @@ Content:
 {page_content}"""
 
     try:
-        print("  调用 Kimi API 中...", flush=True)
-        session = _make_session(timeout=30)
-        response = session.post(
-            KIMI_API_URL,
-            headers={
-                "Authorization": f"Bearer {KIMI_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": KIMI_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0
-            },
-            timeout=30
-        )
-        response.raise_for_status()
-        content = response.json()["choices"][0]["message"]["content"]
+        print("  调用 DeepSeek API 中...", flush=True)
+        content = ask_deepseek(prompt)
         try:
             return json.loads(content)
-        except Exception:
+        except json.JSONDecodeError:
             return {"url": url, "page_title": content}
-    except requests.exceptions.SSLError as e:
-        return {"url": url, "error": f"SSL connection failed: {e}"}
-    except requests.exceptions.ConnectionError as e:
-        return {"url": url, "error": f"Connection failed: {e}"}
-    except requests.exceptions.Timeout:
-        return {"url": url, "error": "Request timed out"}
     except Exception as e:
-        return {"url": url, "error": f"Kimi API error: {e}"}
+        return {"url": url, "error": f"DeepSeek API error: {e}"}

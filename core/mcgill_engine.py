@@ -1,5 +1,5 @@
 import json
-from llm_api.local_ollama import ask_ollama
+from llm_api.deepseek_api import ask_deepseek
 
 import os
 RULES_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcgill_rules.json")
@@ -104,7 +104,7 @@ def get_rules(detected_type: str) -> dict:
 
 
 def build_prompt(extracted_fields: dict, detected_type: str, relevant_rules: dict) -> str:
-    """将字段与规则拼成传给 Ollama 的 prompt。"""
+    """将字段与规则拼成传给 DeepSeek 的 prompt。"""
     rules_text = json.dumps(relevant_rules, ensure_ascii=False, indent=2)
     rules_text = rules_text.replace(" | ", " ").replace("|", "")
     fields_text = json.dumps(extracted_fields, ensure_ascii=False, indent=2)
@@ -134,8 +134,8 @@ STRICT OUTPUT RULES:
 
 
 def format_citation(extracted_fields: dict) -> str:
-    """对外主入口：自动判断类型 → 取规则 → 拼 prompt → 调 Ollama → 返回引用。"""
+    """对外主入口：自动判断类型 → 取规则 → 拼 prompt → 调 DeepSeek → 返回引用。"""
     detected_type = detect_type(extracted_fields)
     relevant_rules = get_rules(detected_type)
     prompt = build_prompt(extracted_fields, detected_type, relevant_rules)
-    return ask_ollama(prompt)
+    return ask_deepseek(prompt)

@@ -1,7 +1,7 @@
 import json
 import os
 
-from llm_api.local_ollama import ask_ollama
+from llm_api.deepseek_api import ask_deepseek
 
 SESSION_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "current_session.json")
 
@@ -19,7 +19,7 @@ def _load_citations() -> list[dict]:
 
 
 def _build_prompt(citations: list[dict], clip_text: str) -> str:
-    """构建 Ollama 判断 prompt。"""
+    """构建 DeepSeek 判断 prompt。"""
     lines = []
     for c in citations:
         lines.append(f'{c["num"]}. {c["full"]} (简称: {c["short"]})')
@@ -65,7 +65,7 @@ def match_citation(clip_text: str) -> str | None:
 
     prompt = _build_prompt(citations, clip_text)
     try:
-        response = ask_ollama(prompt)
+        response = ask_deepseek(prompt)
     except Exception:
         return None
 
