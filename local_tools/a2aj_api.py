@@ -3,23 +3,6 @@ import requests
 A2AJ_BASE = "https://api.a2aj.ca"
 
 
-def search_case(query: str) -> dict:
-    """搜索判例，返回第一条结果的结构化字段。"""
-    try:
-        response = requests.get(
-            f"{A2AJ_BASE}/search",
-            params={"query": query, "doc_type": "cases", "size": 1},
-            timeout=15
-        )
-        response.raise_for_status()
-        results = response.json().get("results", [])
-        if not results:
-            return {"raw_input": query}
-        return _map_fields(results[0])
-    except requests.exceptions.RequestException as e:
-        return {"raw_input": query, "error": f"A2AJ search failed: {e}"}
-
-
 def fetch_by_citation(citation: str) -> dict:
     """按 citation 直接查询，返回结构化字段。"""
     try:

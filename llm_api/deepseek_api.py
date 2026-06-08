@@ -24,14 +24,13 @@ _load_env()
 
 
 def _get_api_key() -> str:
-    """Get DeepSeek API key from env or settings."""
+    """Get DeepSeek API key from .env via environment variable."""
     key = os.environ.get("DEEPSEEK_API_KEY", "")
     if not key:
-        try:
-            from config.settings import DEEPSEEK_API_KEY as _key
-            key = _key or ""
-        except (ImportError, AttributeError):
-            pass
+        raise ValueError(
+            "DEEPSEEK_API_KEY not configured. "
+            "Set it in the .env file: DEEPSEEK_API_KEY=sk-your-key-here"
+        )
     return key
 
 
