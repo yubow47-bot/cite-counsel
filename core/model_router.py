@@ -9,15 +9,8 @@ from core.mcgill_engine import format_citation
 
 def route(input_type: str, content: str, tracker: CitationTracker = None) -> str:
 
-    # 本地：A2AJ citation 查询
-    if input_type == "a2aj":
-        extracted_fields = fetch_by_citation(content)
-        result = format_citation(extracted_fields)
-        CitationTracker().auto_add(result)
-        return result
-
     # 本地：文件提取
-    elif input_type == "file":
+    if input_type == "file":
         extracted_fields = extract_from_file(content)
         # 文件内容可能较复杂，先用 DeepSeek 提取结构化字段
         raw_text = extracted_fields.pop("raw_text", "")
@@ -49,10 +42,6 @@ Return JSON only, no explanation."""
             params["target"],
             params.get("pinpoint", "")
         )
-
-    # 本地：DeepSeek 自由咨询（不走RAG，直接返回）
-    elif input_type == "chat":
-        return ask_deepseek(content)
 
     # 联网：DeepSeek 提取 → 格式化
     elif input_type == "llm":

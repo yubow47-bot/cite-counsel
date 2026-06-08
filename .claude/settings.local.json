@@ -1,9 +1,1 @@
-{
-  "permissions": {
-    "allow": [
-      "PowerShell(C:\\\\Users\\\\HP\\\\Desktop\\\\mcgill\\\\.venv_new\\\\Scripts\\\\python.exe C:\\\\Users\\\\HP\\\\Desktop\\\\mcgill\\\\_test_a2aj.py 2>&1)",
-      "PowerShell(C:\\\\Users\\\\HP\\\\Desktop\\\\mcgill\\\\.venv_new\\\\Scripts\\\\python.exe C:\\\\Users\\\\HP\\\\Desktop\\\\mcgill\\\\_test_fetch.py 2>&1)",
-      "PowerShell(C:\\\\Users\\\\HP\\\\Desktop\\\\mcgill\\\\.venv_new\\\\Scripts\\\\python.exe C:\\\\Users\\\\HP\\\\Desktop\\\\mcgill\\\\_test_chain.py 2>&1)"
-    ]
-  }
-}
+{}
