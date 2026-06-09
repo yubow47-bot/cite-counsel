@@ -1,3 +1,5 @@
+import re
+
 import requests
 
 A2AJ_BASE = "https://api.a2aj.ca"
@@ -88,16 +90,45 @@ def _dedup_key(result: dict) -> str:
     return result.get("citation_en", "") or result.get("name_en", "") or result.get("url_en", "")
 
 
-def search_cases_multi(query: str, size: int = 40, offset: int = 0) -> list:
-    """双轨搜索：先用 /fetch 精确匹配，再用 /search 全文搜索，精确结果排前面。"""
+def _extract_year(text: str) -> tuple[str, str | None]:
+    """从文本中提取4位年份，返回(清洗后的文本, 年份或None)。"""
+    m = re.search(r'\b(19\d{2}|20\d{2})\b', text)
+    if m:
+        year = m.group(1)
+        cleaned = re.sub(r'\b' + year + r'\b', '', text).strip()
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        return cleaned, year
+    return text, None
+
+
+def search_cases_multi(query: str, size: int = 40, offset: int = 0,
+                       search_type: str = "name",
+                       start_date: str | None = None,
+                       end_date: str | None = None) -> list:
+    """双轨搜索：先用 /fetch 精确匹配，再用 /search 补充。
+
+    Args:
+        query: 案件名（会自动提取年份并清理输入）
+        size: 返回条数
+        offset: 偏移量
+        search_type: "name" 按标题或 "full_text" 按全文
+        start_date: 开始日期 YYYY-MM-DD（不传则从 query 中提取年份）
+        end_date: 结束日期 YYYY-MM-DD（不传则从 query 中提取年份）
+    """
     seen = set()
     merged = []
+
+    # 从 query 中提取年份并清洗
+    clean_query, year = _extract_year(query)
+    if year and not start_date and not end_date:
+        start_date = f"{year}-01-01"
+        end_date = f"{year}-12-31"
 
     # 第一轨：/fetch 精确匹配
     try:
         resp = requests.get(
             f"{A2AJ_BASE}/fetch",
-            params={"citation": query, "doc_type": "cases"},
+            params={"citation": clean_query, "doc_type": "cases"},
             timeout=15
         )
         resp.raise_for_status()
@@ -107,15 +138,24 @@ def search_cases_multi(query: str, size: int = 40, offset: int = 0) -> list:
 
     for r in fetch_results:
         name = (r.get("name_en") or "").lower()
-        citation = (r.get("citation_en") or "").lower()
-        if query.lower() in name or query.lower() in citation:
+        citation_en = (r.get("citation_en") or "").lower()
+        if clean_query.lower() in name or clean_query.lower() in citation_en:
             key = _dedup_key(r)
             if key and key not in seen:
                 seen.add(key)
                 merged.append(r)
 
-    # 第二轨：/search 全文搜索
-    params = {"query": query, "doc_type": "cases", "size": size}
+    # 第二轨：/search（search_type=name 按案件名搜索）
+    params = {
+        "query": clean_query,
+        "doc_type": "cases",
+        "size": size,
+        "search_type": search_type,
+    }
+    if start_date:
+        params["start_date"] = start_date
+    if end_date:
+        params["end_date"] = end_date
     if offset:
         params["offset"] = offset
     try:
@@ -135,5 +175,4 @@ def search_cases_multi(query: str, size: int = 40, offset: int = 0) -> list:
             seen.add(key)
             merged.append(r)
 
-    # 截断到 size 条
     return merged[:size]
