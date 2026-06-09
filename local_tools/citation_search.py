@@ -2,7 +2,7 @@ import json
 import re
 
 from llm_api.deepseek_api import ask_deepseek
-from local_tools.a2aj_api import fetch_by_citation, search_cases_multi, _map_fields
+from local_tools.a2aj_api import fetch_by_citation, search_cases_multi, _map_fields, _extract_year
 
 
 def classify_and_normalize(query: str) -> dict:
@@ -109,8 +109,15 @@ def search_citation(query: str) -> list:
             "warning": "⚠️ 未能通过 A2AJ 验证，建议在 CanLII 手动确认",
         }]
 
-    # 2. case_name：动态分页搜索（title 精确匹配最多2条 + 全文补足）
+    # 2. case_name：按名称搜索 + 可选年份过滤
     elif input_type == "case_name":
+        # 从原始输入提取年份，与 DeepSeek 标准化互不干扰
+        _, year = _extract_year(classified["original"])
+        start_date = f"{year}-01-01" if year else None
+        end_date = f"{year}-12-31" if year else None
+        if year:
+            print(f"[DEBUG] 从原始输入提取到年份: {year} → {start_date} ~ {end_date}")
+
         # 提取核心关键词（去掉 R v / R c / Regina v 等前缀）
         keyword = re.sub(
             r"^(?:R\s+v|R\s+c|Regina\s+v|The\s+Queen\s+v)\s+",
@@ -124,7 +131,10 @@ def search_citation(query: str) -> list:
         MAX_BATCHES = 3
 
         for batch in range(MAX_BATCHES):
-            batch_results = search_cases_multi(normalized, size=40, offset=batch * 40)
+            batch_results = search_cases_multi(
+                normalized, size=40, offset=batch * 40,
+                start_date=start_date, end_date=end_date,
+            )
             if not batch_results:
                 break
 
