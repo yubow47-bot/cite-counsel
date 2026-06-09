@@ -90,51 +90,54 @@ def fetch_url_content(url: str) -> str:
 
 
 def extract_from_url(url: str) -> dict:
-    """Fetch a URL and use DeepSeek to extract citation fields (replaces Kimi version)."""
-    page_content = fetch_url_content(url)
-    if page_content.startswith("Failed to fetch URL"):
-        return {"url": url, "error": page_content}
+    """Fetch a URL with trafilatura and extract structured citation fields.
 
-    prompt = f"""Extract citation fields from the following content.
-Return JSON only, no explanation. Use null for missing fields.
-
-{{
-  "style_of_cause": "parties name if case law",
-  "neutral_citation": "neutral citation if case law",
-  "reporter": "reporter if case law",
-  "statute_title": "statute title if legislation",
-  "jurisdiction": "jurisdiction if legislation",
-  "chapter": "chapter number if legislation",
-  "degree": "degree type if thesis",
-  "institution": "university if thesis",
-  "unpublished": "true if unpublished thesis, otherwise null",
-  "video": "true if video, otherwise null",
-  "timestamp": "timestamp pinpoint if video, otherwise null",
-  "url": "{url}",
-  "platform": "social media platform name if social media post",
-  "post": "first sentence of post if social media",
-  "newspaper": "newspaper name if news article",
-  "page_title": "page or article title if website",
-  "author": "author name(s), null if none",
-  "journal": "journal name if academic article",
-  "volume": "volume number if journal article",
-  "publisher": "publisher name if book",
-  "place_of_publication": "city of publication if book",
-  "issuing_body": "government body name if government document",
-  "government_jurisdiction": "country or province if government document",
-  "year": "publication year",
-  "date": "full publication date"
-}}
-
-Content:
-{page_content}"""
+    Uses trafilatura's JSON output to get title, author, date, and sitename
+    directly from the page metadata, without needing DeepSeek for extraction.
+    """
+    import trafilatura
 
     try:
-        print("  调用 DeepSeek API 中...", flush=True)
-        content = ask_deepseek(prompt)
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            return {"url": url, "page_title": content}
+        downloaded = trafilatura.fetch_url(url)
+        if downloaded is None:
+            return {"url": url, "error": "trafilatura 未能下载该 URL"}
+        result = trafilatura.extract(
+            downloaded,
+            output_format="json",
+            with_metadata=True,
+            include_comments=False,
+        )
+        if result is None:
+            return {"url": url, "error": "trafilatura 未能从页面提取到内容"}
+
+        meta = json.loads(result)
     except Exception as e:
-        return {"url": url, "error": f"DeepSeek API error: {e}"}
+        return {"url": url, "error": f"trafilatura 提取失败: {e}"}
+
+    # 从 hostname 推断来源名称（去掉 .com/.org 等后缀）
+    hostname = meta.get("hostname", "") or ""
+    sitename = re.sub(r"\.[a-z]{2,4}(?:\.[a-z]{2})?$", "", hostname).upper()
+    if not sitename:
+        sitename = hostname
+
+    # 映射 trafilatura 字段 → McGill 引擎字段
+    fields = {
+        "url": url,
+        "page_title": meta.get("title") or None,
+        "author": meta.get("author") or None,
+        "date": meta.get("date") or None,
+        "newspaper": sitename or None,
+        "hostname": hostname,
+        # 留空让 detect_type 自己判断类型
+        "style_of_cause": None,
+        "neutral_citation": None,
+        "statute_title": None,
+        "jurisdiction": None,
+        "year": (meta.get("date") or "")[:4] or None,
+    }
+
+    # 如果没有 newspaper，fallback 到 website 模式
+    if not fields["newspaper"] and fields["page_title"]:
+        fields["website"] = hostname
+
+    return fields
