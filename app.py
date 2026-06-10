@@ -1,7 +1,7 @@
 """McGill Citation Tool — Gradio 前端（四Tab版）"""
 
 import gradio as gr
-from local_tools.citation_search import search_citation
+from local_tools.citation_search import search_citation, classify_and_normalize
 from local_tools.file_extractor import extract_from_file
 from llm_api.deepseek_api import extract_from_url, chat_deepseek
 from core.mcgill_engine import format_citation
@@ -52,19 +52,58 @@ def format_result(item: dict) -> str:
     return "\n".join(lines) if lines else str(item)
 
 
-def tab1_lookup(query: str) -> str:
+def tab1_search(query: str) -> tuple:
+    """Step 1: 搜索。返回 (候选列表更新, 输出文本, 原始数据列表)。"""
     if not query or not query.strip():
-        return "请输入案例名、法条、或法律概念"
+        return gr.update(choices=[], value=None), "请输入案例名、法条、或法律概念", []
+
+    classified = classify_and_normalize(query.strip())
+    input_type = classified["type"]
     results = search_citation(query.strip())
+
     if not results:
-        return "未找到匹配结果，请尝试其他关键词。"
-    outputs = []
+        return gr.update(choices=[], value=None), "未找到匹配结果，请尝试其他关键词。", []
+
+    # citation_number / legislation → 直接输出 McGill 引用
+    if input_type in ("citation_number", "legislation"):
+        try:
+            citation = format_citation(results[0])
+            return gr.update(choices=[], value=None), citation, []
+        except Exception as e:
+            return gr.update(choices=[], value=None), f"生成引用失败: {e}", []
+
+    # case_name / concept → 显示带编号的候选列表（含验证状态）
+    candidates = []
     for i, item in enumerate(results, 1):
-        if len(results) > 1:
-            outputs.append(f"--- 结果 {i} ---")
-        outputs.append(format_result(item))
-        outputs.append("")
-    return "\n".join(outputs).strip()
+        badge = "✅" if item.get("verified") else "⚠️"
+        if item.get("style_of_cause"):
+            display = f"{i}. {badge} {item['style_of_cause']} — {item.get('neutral_citation', '')}"
+        elif item.get("statute_title"):
+            display = f"{i}. {badge} {item['statute_title']} — {item.get('neutral_citation', '')}"
+        elif item.get("name"):
+            display = f"{i}. {badge} {item['name']} — {item.get('neutral_citation', '')}"
+        else:
+            display = f"{i}. {badge} {item}"
+        candidates.append(display)
+
+    return gr.update(choices=candidates, value=None), "请从上方候选列表中选择一条结果", results
+
+
+def tab1_select(choice: str, state: list) -> str:
+    """Step 2: 用户选中候选后，按编号索引取出原始数据生成 McGill 引用。"""
+    if not choice:
+        return gr.skip()  # Radio 被程序清空时不修改输出
+    if not state:
+        return "会话数据丢失，请重新搜索"
+
+    try:
+        idx = int(choice.split(".")[0]) - 1
+        if idx < 0 or idx >= len(state):
+            return "选中项索引超出范围"
+        item = state[idx]
+        return format_citation(item)
+    except (ValueError, IndexError, AttributeError, TypeError) as e:
+        return f"解析选中项失败: {e}"
 
 
 # ═══════════════════════════════════════════════
@@ -147,10 +186,32 @@ with gr.Blocks(title="McGill Citation Tool") as demo:
                 )
             with gr.Row():
                 submit_btn = gr.Button("Submit", variant="primary")
-            output = gr.Textbox(label="结果", lines=12)
 
-            submit_btn.click(fn=tab1_lookup, inputs=query_input, outputs=output)
-            query_input.submit(fn=tab1_lookup, inputs=query_input, outputs=output)
+            candidates_radio = gr.Radio(
+                label="候选结果（点击选择）",
+                choices=[],
+            )
+            citation_output = gr.Textbox(label="McGill 引用", lines=12)
+            state_store = gr.State([])
+
+            # Step 1: Submit → 搜索，填充候选或直接输出
+            submit_btn.click(
+                fn=tab1_search,
+                inputs=query_input,
+                outputs=[candidates_radio, citation_output, state_store],
+            )
+            query_input.submit(
+                fn=tab1_search,
+                inputs=query_input,
+                outputs=[candidates_radio, citation_output, state_store],
+            )
+
+            # Step 2: 点击候选 → 生成 McGill 引用
+            candidates_radio.change(
+                fn=tab1_select,
+                inputs=[candidates_radio, state_store],
+                outputs=citation_output,
+            )
 
         # ─── Tab 2 ───────────────────────────────
         with gr.TabItem("📄 文件提取"):
@@ -207,4 +268,4 @@ with gr.Blocks(title="McGill Citation Tool") as demo:
 
 
 if __name__ == "__main__":
-    demo.launch(server_name="localhost", server_port=7860, css=CSS, theme=gr.themes.Soft())
+    demo.launch(server_name="localhost", server_port=7860, share=True, css=CSS, theme=gr.themes.Soft())
