@@ -1,39 +1,45 @@
 import re
+import time
 
 import requests
+
+from local_tools import timing_util as timing
 
 A2AJ_BASE = "https://api.a2aj.ca"
 
 
 def fetch_by_citation(citation: str, doc_type: str = "cases") -> dict:
-    """按 citation 直接查询，返回结构化字段。
-
-    Args:
-        citation: 引用号
-        doc_type: "cases" 或 "legislation"。默认为 "cases"，
-                  设为 "legislation" 时只查法条不做 fallback。
-    """
+    """按 citation 直接查询，返回结构化字段。"""
     try:
+        t0 = time.time()
         response = requests.get(
             f"{A2AJ_BASE}/fetch",
             params={"citation": citation, "doc_type": doc_type},
             timeout=15
         )
+        if timing.ENABLE_TIMING:
+            timing.report().add_a2aj(f"fetch({doc_type}) {citation[:40]}", time.time() - t0)
         response.raise_for_status()
         data = response.json()
         results = data.get("results", [])
         if not results and doc_type == "cases":
-            # cases 查不到时尝试 legislation
-            try:
-                response = requests.get(
-                    f"{A2AJ_BASE}/fetch",
-                    params={"citation": citation, "doc_type": "legislation"},
-                    timeout=15
-                )
-                response.raise_for_status()
-                results = response.json().get("results", [])
-            except requests.exceptions.RequestException:
+            # 查询串含 " v. " 或 " v " 的是案件引用，跳过 legislation fallback
+            if " v. " in citation or " v " in citation:
                 results = []
+            else:
+                try:
+                    t0 = time.time()
+                    response = requests.get(
+                        f"{A2AJ_BASE}/fetch",
+                        params={"citation": citation, "doc_type": "legislation"},
+                        timeout=15
+                    )
+                    if timing.ENABLE_TIMING:
+                        timing.report().add_a2aj(f"fetch(legislation fallback) {citation[:40]}", time.time() - t0)
+                    response.raise_for_status()
+                    results = response.json().get("results", [])
+                except requests.exceptions.RequestException:
+                    results = []
         if not results:
             return {"raw_input": citation}
         return _map_fields(results[0])
@@ -126,11 +132,14 @@ def search_cases_multi(query: str, size: int = 40, offset: int = 0,
 
     # 第一轨：/fetch 精确匹配
     try:
+        t0 = time.time()
         resp = requests.get(
             f"{A2AJ_BASE}/fetch",
             params={"citation": clean_query, "doc_type": "cases"},
             timeout=15
         )
+        if timing.ENABLE_TIMING:
+            timing.report().add_a2aj(f"search_multi /fetch ({clean_query[:30]})", time.time() - t0)
         resp.raise_for_status()
         fetch_results = resp.json().get("results", [])
     except requests.exceptions.RequestException:
@@ -159,11 +168,14 @@ def search_cases_multi(query: str, size: int = 40, offset: int = 0,
     if offset:
         params["offset"] = offset
     try:
+        t0 = time.time()
         resp = requests.get(
             f"{A2AJ_BASE}/search",
             params=params,
             timeout=15
         )
+        if timing.ENABLE_TIMING:
+            timing.report().add_a2aj(f"search_multi /search (offset={offset})", time.time() - t0)
         resp.raise_for_status()
         search_results = resp.json().get("results", [])
     except requests.exceptions.RequestException:
