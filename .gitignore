@@ -5,6 +5,9 @@ __pycache__/
 .env
 config/settings.py
 
+# Gradio share 缓存
+.gradio/
+
 # 调试 / 临时文件
 debug_prompt.txt
 diag_result.json

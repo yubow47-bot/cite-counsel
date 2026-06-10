@@ -1,8 +1,10 @@
 """McGill Citation Tool — Gradio 前端（四Tab版）"""
 
+import time
 import gradio as gr
 from local_tools.citation_search import search_citation, classify_and_normalize
 from local_tools.file_extractor import extract_from_file
+from local_tools import timing_util as timing
 from llm_api.deepseek_api import extract_from_url, chat_deepseek
 from core.mcgill_engine import format_citation
 
@@ -54,12 +56,19 @@ def format_result(item: dict) -> str:
 
 def tab1_search(query: str) -> tuple:
     """Step 1: 搜索。返回 (候选列表更新, 输出文本, 原始数据列表)。"""
+    if timing.ENABLE_TIMING:
+        timing.start()
+
     if not query or not query.strip():
         return gr.update(choices=[], value=None), "请输入案例名、法条、或法律概念", []
 
+    t0 = time.time()
     classified = classify_and_normalize(query.strip())
+    if timing.ENABLE_TIMING:
+        timing.report().set_classify(time.time() - t0)
+
     input_type = classified["type"]
-    results = search_citation(query.strip())
+    results = search_citation(query.strip(), classification=classified)
 
     if not results:
         return gr.update(choices=[], value=None), "未找到匹配结果，请尝试其他关键词。", []
@@ -67,9 +76,15 @@ def tab1_search(query: str) -> tuple:
     # citation_number / legislation → 直接输出 McGill 引用
     if input_type in ("citation_number", "legislation"):
         try:
+            t0 = time.time()
             citation = format_citation(results[0])
+            if timing.ENABLE_TIMING:
+                timing.report().set_format(time.time() - t0)
+                timing.report().print()
             return gr.update(choices=[], value=None), citation, []
         except Exception as e:
+            if timing.ENABLE_TIMING:
+                timing.report().print()
             return gr.update(choices=[], value=None), f"生成引用失败: {e}", []
 
     # case_name / concept → 显示带编号的候选列表（含验证状态）
@@ -86,11 +101,16 @@ def tab1_search(query: str) -> tuple:
             display = f"{i}. {badge} {item}"
         candidates.append(display)
 
+    if timing.ENABLE_TIMING:
+        timing.report().print()
     return gr.update(choices=candidates, value=None), "请从上方候选列表中选择一条结果", results
 
 
 def tab1_select(choice: str, state: list) -> str:
     """Step 2: 用户选中候选后，按编号索引取出原始数据生成 McGill 引用。"""
+    if timing.ENABLE_TIMING:
+        timing.start()
+
     if not choice:
         return gr.skip()  # Radio 被程序清空时不修改输出
     if not state:
@@ -101,7 +121,12 @@ def tab1_select(choice: str, state: list) -> str:
         if idx < 0 or idx >= len(state):
             return "选中项索引超出范围"
         item = state[idx]
-        return format_citation(item)
+        t0 = time.time()
+        result = format_citation(item)
+        if timing.ENABLE_TIMING:
+            timing.report().set_format(time.time() - t0)
+            timing.report().print()
+        return result
     except (ValueError, IndexError, AttributeError, TypeError) as e:
         return f"解析选中项失败: {e}"
 

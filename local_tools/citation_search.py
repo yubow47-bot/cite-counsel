@@ -1,8 +1,10 @@
 import json
 import re
+import time
 
 from llm_api.deepseek_api import ask_deepseek
 from local_tools.a2aj_api import fetch_by_citation, search_cases_multi, _map_fields, _extract_year
+from local_tools import timing_util as timing
 
 
 def classify_and_normalize(query: str) -> dict:
@@ -27,7 +29,10 @@ def classify_and_normalize(query: str) -> dict:
 用户输入：{query}"""
 
     try:
+        t0 = time.time()
         content = ask_deepseek(prompt)
+        if timing.ENABLE_TIMING:
+            timing.report().add_llm("classify_and_normalize", time.time() - t0)
         result = json.loads(content)
         if result.get("type") in ("citation_number", "case_name", "legislation", "concept"):
             return result
@@ -38,61 +43,203 @@ def classify_and_normalize(query: str) -> dict:
 
 
 def expand_concept(query: str) -> list:
-    """展开法律概念：源头案件 + 法条 + 后续案件。"""
-    prompt = f"""你是加拿大法律专家。用户查询的法律概念是："{query}"
+    """展开法律概念：源头案件 + 法条 + 后续案件（并发验证，结果稳定）。"""
+    prompt = f"""You are a Canadian legal citation expert. The user query is: "{query}"
 
-请给出以下内容（只给你确定知道的，不确定的不要编造）：
-1. 确立该原则的源头案件（完整 citation）
-2. 相关法条（完整 citation，包括具体条款）
-3. 最重要的2-3个后续案件（完整 citation）
+A legal concept can have two types of sources:
+(a) Statutory basis — the relevant legislation, code, or section (if one exists)
+(b) Case precedents — the landmark decisions that established or developed the concept
 
-只返回 JSON 数组，格式：
-[
-  {{"type": "case", "citation": "引用号", "name": "案件名", "role": "源头案件"}},
-  {{"type": "legislation", "citation": "引用号", "name": "法条名", "role": "相关法条"}},
-  {{"type": "case", "citation": "引用号", "name": "案件名", "role": "重要后续案件"}}
-]
-不要任何解释。"""
+List 3-6 candidates covering BOTH types where applicable.
+Return ONLY strict JSON, no markdown, no other text:
 
-    try:
+{{"candidates": [
+  {{"name": "Criminal Code, RSC 1985, c C-46, s 718.2(e)", "citation": null, "type": "legislation"}},
+  {{"name": "R v Gladue", "citation": "[1999] 1 SCR 688", "type": "case"}},
+  {{"name": "R v Ipeelee", "citation": "2012 SCC 13", "type": "case"}}
+]}}
+
+Rules:
+- "type": "case" for court decisions, "legislation" for statutes / acts / codes.
+- For "case": "citation" must contain ONLY the neutral citation number (e.g. "[1999] 1 SCR 688"),
+  NOT the case name. If unsure, set to null.
+- For "legislation": "citation" should contain the statute citation (e.g. "RSC 1985, c C-46").
+  If unsure, set to null; the system will search by name instead.
+- "name" must be the full case name or statute title. Do NOT include citation number in name.
+- If the concept flows from a statute, include it as one candidate with type "legislation".
+  Include at least 2-3 key cases with type "case".
+- List only what you are confident about. Quality over quantity."""
+
+    def _parse_llm_output(content: str) -> list | None:
+        """解析 LLM 输出：剥离 ```json 标记后 json.loads。"""
+        cleaned = content.strip()
+        cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned)
+        cleaned = re.sub(r'\s*```$', '', cleaned)
+        cleaned = cleaned.strip()
+        try:
+            obj = json.loads(cleaned)
+        except json.JSONDecodeError:
+            return None
+        candidates = obj.get("candidates") if isinstance(obj, dict) else obj
+        if isinstance(candidates, list):
+            return candidates
+        return None
+
+    # ── 第 1 次 LLM 调用 ──
+    t0 = time.time()
+    content = ask_deepseek(prompt)
+    if timing.ENABLE_TIMING:
+        timing.report().add_llm("expand_concept (首次)", time.time() - t0)
+    items = _parse_llm_output(content)
+
+    # ── 解析失败则重试一次 ──
+    if not items:
+        print(f"[WARN] expand_concept 首次解析失败，重试...")
+        t0 = time.time()
         content = ask_deepseek(prompt)
-        items = json.loads(content)
-        if not isinstance(items, list):
-            return []
-    except Exception:
+        if timing.ENABLE_TIMING:
+            timing.report().add_llm("expand_concept (重试)", time.time() - t0)
+        items = _parse_llm_output(content)
+
+    if not items:
+        print(f"[WARN] expand_concept 重试后仍解析失败，返回空。")
         return []
 
-    results = []
-    for item in items:
-        citation = item.get("citation", "")
-        if not citation:
-            continue
-        # 尝试验证
+    # ── 并发验证 ──
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _verify_case(name: str, citation: str) -> dict:
+        """验证判例候选：citation 优先 /fetch，失败/为空则按案名搜索。"""
+        entry = {"verified": False}
+        if citation:
+            try:
+                verified = fetch_by_citation(citation)
+                if "error" not in verified and "raw_input" not in verified:
+                    entry["verified"] = True
+                    entry.update(verified)
+                    return entry
+            except Exception:
+                pass
+        if name:
+            try:
+                results = search_cases_multi(name, size=1, search_type="name")
+                if results:
+                    mapped = _map_fields(results[0])
+                    entry["verified"] = True
+                    entry.update(mapped)
+                    return entry
+            except Exception:
+                pass
+        entry["warning"] = "⚠️ 未能在数据库验证该判例"
+        return entry
+
+    def _verify_legislation(name: str) -> dict:
+        """验证法规候选：标准化 → A2AJ /fetch(doc_type=laws)。
+        与 search_citation() legislation 路由做法一致。
+        """
+        import requests as _req
+        import os as _os
+
+        entry = {"verified": False}
+
+        # 1. 用 normalization_rules.json 展开缩写
+        normalized = name
+        rules_path = _os.path.join(
+            _os.path.dirname(_os.path.dirname(__file__)),
+            "data", "normalization_rules.json"
+        )
         try:
-            verified = fetch_by_citation(citation)
-            has_content = "style_of_cause" in verified or "statute_title" in verified
+            with open(rules_path, encoding='utf-8') as _f:
+                rules = json.load(_f)
+            abbrevs = rules.get("legislation_abbreviations", {})
+            if name in abbrevs:
+                normalized = abbrevs[name]
+            else:
+                for abbr in sorted(abbrevs, key=lambda x: -len(x)):
+                    if name.lower().startswith(abbr.lower()):
+                        normalized = name[:len(abbr)].replace(abbr, abbrevs[abbr]) + name[len(abbr):]
+                        break
         except Exception:
-            verified = {}
-            has_content = False
+            pass
+
+        # 2. 提取引用号（与 legislation 路由同一正则）
+        cit_match = re.search(
+            r"(?:RSC|SC|SOR|RRO|O\sReg|BC\sReg|RLRQ)\s[^,]+(?:,\s*c\s[^,]+)?",
+            normalized
+        )
+        base_citation = cit_match.group(0).strip() if cit_match else normalized
+
+        # 3. A2AJ /fetch(doc_type="laws")
+        try:
+            _t0 = time.time()
+            resp = _req.get(
+                "https://api.a2aj.ca/fetch",
+                params={"citation": base_citation, "doc_type": "laws"},
+                timeout=15
+            )
+            if timing.ENABLE_TIMING:
+                timing.report().add_a2aj(f"expand_concept legislation verify ({base_citation[:30]})", time.time() - _t0)
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
+            if results:
+                entry["verified"] = True
+                entry["statute_title"] = results[0].get("name_en", normalized)
+                entry["neutral_citation"] = results[0].get("citation_en", base_citation)
+                return entry
+        except Exception:
+            pass
+
+        entry["warning"] = "⚠️ 未能在数据库验证该法规"
+        return entry
+
+    def verify_one(item: dict) -> dict | None:
+        name = item.get("name", "")
+        citation = item.get("citation") or ""
+        ctype = item.get("type", "case")
+        if not name and not citation:
+            return None
 
         entry = {
-            "name": item.get("name", citation),
-            "neutral_citation": citation,
-            "role": item.get("role", ""),
-            "verified": has_content,
+            "name": name,
+            "neutral_citation": citation or None,
+            "role": ctype,
+            "verified": False,
         }
-        if has_content:
-            entry.update(verified)
+
+        if ctype == "legislation":
+            result = _verify_legislation(name)
+            entry.update(result)
+            return entry
         else:
-            entry["warning"] = "⚠️ 未能通过 A2AJ 验证，建议在 CanLII 手动确认"
-        results.append(entry)
+            result = _verify_case(name, citation)
+            entry.update(result)
+            return entry
 
-    return results
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        fut_map = {executor.submit(verify_one, item): i for i, item in enumerate(items)}
+        ordered = [None] * len(items)
+        for future in as_completed(fut_map):
+            idx = fut_map[future]
+            try:
+                ordered[idx] = future.result()
+            except Exception:
+                ordered[idx] = None
+
+    return [r for r in ordered if r is not None]
 
 
-def search_citation(query: str) -> list:
-    """主入口：分类 → 标准化 → 搜索/验证。"""
-    classified = classify_and_normalize(query)
+def search_citation(query: str, classification: dict | None = None) -> list:
+    """主入口：分类 → 标准化 → 搜索/验证。
+
+    Args:
+        query: 用户原始输入
+        classification: 可选。外部已算好的分类结果（避免重复 LLM 调用）。
+                       为 None 时自动调用 classify_and_normalize（向后兼容）。
+    """
+    if classification is None:
+        classified = classify_and_normalize(query)
+    else:
+        classified = classification
     print(f"[DEBUG] 分类结果: {classified}")
     input_type = classified["type"]
     normalized = classified["normalized"]
@@ -131,10 +278,13 @@ def search_citation(query: str) -> list:
         MAX_BATCHES = 3
 
         for batch in range(MAX_BATCHES):
+            t0 = time.time()
             batch_results = search_cases_multi(
                 normalized, size=40, offset=batch * 40,
                 start_date=start_date, end_date=end_date,
             )
+            if timing.ENABLE_TIMING:
+                timing.report().add_a2aj(f"search_cases_multi batch={batch+1} ({normalized[:30]})", time.time() - t0)
             if not batch_results:
                 break
 
@@ -178,11 +328,14 @@ def search_citation(query: str) -> list:
         base_citation = cit_match.group(0).strip() if cit_match else normalized
         verified = False
         try:
+            t0 = time.time()
             resp = requests.get(
                 "https://api.a2aj.ca/fetch",
                 params={"citation": base_citation, "doc_type": "laws"},
                 timeout=15
             )
+            if timing.ENABLE_TIMING:
+                timing.report().add_a2aj(f"legislation fetch({base_citation[:30]})", time.time() - t0)
             resp.raise_for_status()
             results = resp.json().get("results", [])
             verified = len(results) > 0
