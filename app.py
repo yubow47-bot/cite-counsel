@@ -154,6 +154,7 @@ def tab2_extract(file) -> tuple:
         debug_info = {
             "metadata": fields,
             "classified_type": doc_type,
+            "source": dbg.get("source", ""),
             "empty_fields": empty_fields,
             "prompt": dbg.get("prompt", ""),
             "raw_response": dbg.get("raw_response", ""),
@@ -166,6 +167,8 @@ def tab2_extract(file) -> tuple:
             debug_info["prompt"] = dbg["prompt"]
         if dbg.get("raw_response"):
             debug_info["raw_response"] = dbg["raw_response"]
+        if dbg.get("source"):
+            debug_info["source"] = dbg["source"]
         return f"文件处理失败: {e}", debug_info
 
 
@@ -185,6 +188,7 @@ def tab3_url(url: str) -> tuple:
         debug_info = {
             "metadata": fields,
             "empty_fields": [k for k, v in fields.items() if not v],
+            "source": dbg.get("source", ""),
             "prompt": dbg.get("prompt", ""),
             "raw_response": dbg.get("raw_response", ""),
         }
@@ -196,6 +200,8 @@ def tab3_url(url: str) -> tuple:
             debug_info["prompt"] = dbg["prompt"]
         if dbg.get("raw_response"):
             debug_info["raw_response"] = dbg["raw_response"]
+        if dbg.get("source"):
+            debug_info["source"] = dbg["source"]
         return f"URL处理失败: {e}", debug_info
 
 

@@ -3,13 +3,15 @@ import time
 
 from llm_api.deepseek_api import ask_deepseek
 from local_tools import timing_util as timing
+from local_tools.crossref_api import extract_doi, fetch_crossref, build_journal_citation
 
 import os
 RULES_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcgill_rules.json")
 
-# 调试缓存：最近一次 format_citation 的 prompt 和原始返回
+# 调试缓存：最近一次 format_citation 的 prompt、原始返回、数据源
 _last_prompt = None
 _last_raw_response = None
+_last_source = None
 
 
 def get_last_debug() -> dict:
@@ -17,6 +19,7 @@ def get_last_debug() -> dict:
     return {
         "prompt": _last_prompt,
         "raw_response": _last_raw_response,
+        "source": _last_source,
     }
 
 
@@ -185,6 +188,25 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
         doc_type: 可选。LLM 分类的文档类型（如 "case"、"journal_article"），
                   不为 None 时覆盖 detect_type() 的结果。
     """
+    global _last_prompt, _last_raw_response, _last_source
+
+    # ── CrossRef 优先路径（仅 journal_article） ──
+    if doc_type == "journal_article":
+        raw_text = extracted_fields.get("raw_text", "") or ""
+        url = extracted_fields.get("url", "") or ""
+        doi = extract_doi(raw_text) or extract_doi(url)
+        if doi:
+            cr_data = fetch_crossref(doi)
+            if cr_data:
+                result = build_journal_citation(cr_data)
+                _last_prompt = f"[CrossRef] DOI: {doi}"
+                _last_raw_response = result
+                _last_source = "crossref"
+                return result
+        # CrossRef 未命中 → 由 LLM 兜底
+        _last_source = "deepseek_fallback"
+
+    # ── 常规 type → detect_type 映射 ──
     if doc_type is not None:
         type_map = {
             "case":                "jurisprudence",
@@ -208,7 +230,8 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
     result = ask_deepseek(prompt)
     if timing.ENABLE_TIMING:
         timing.report().add_llm("format_citation", time.time() - t0)
-    global _last_prompt, _last_raw_response
     _last_prompt = prompt
     _last_raw_response = result
+    if _last_source is None:
+        _last_source = "deepseek"
     return result
