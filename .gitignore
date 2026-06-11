@@ -8,6 +8,9 @@ config/settings.py
 # Gradio share 缓存
 .gradio/
 
+# 日志
+*.log
+
 # 调试 / 临时文件
 debug_prompt.txt
 diag_result.json
