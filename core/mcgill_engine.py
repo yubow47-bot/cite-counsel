@@ -7,6 +7,18 @@ from local_tools import timing_util as timing
 import os
 RULES_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcgill_rules.json")
 
+# 调试缓存：最近一次 format_citation 的 prompt 和原始返回
+_last_prompt = None
+_last_raw_response = None
+
+
+def get_last_debug() -> dict:
+    """返回最近一次 format_citation 的调试信息。"""
+    return {
+        "prompt": _last_prompt,
+        "raw_response": _last_raw_response,
+    }
+
 
 def detect_type(extracted_fields: dict) -> str:
     """根据提取字段自动判断 McGill 引用类型。"""
@@ -165,13 +177,38 @@ STRICT OUTPUT RULES:
 {italic_rules}"""
 
 
-def format_citation(extracted_fields: dict) -> str:
-    """对外主入口：自动判断类型 → 取规则 → 拼 prompt → 调 DeepSeek → 返回引用。"""
-    detected_type = detect_type(extracted_fields)
+def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
+    """对外主入口：自动判断类型 → 取规则 → 拼 prompt → 调 DeepSeek → 返回引用。
+
+    Args:
+        extracted_fields: 从文件/URL 提取的结构化字段。
+        doc_type: 可选。LLM 分类的文档类型（如 "case"、"journal_article"），
+                  不为 None 时覆盖 detect_type() 的结果。
+    """
+    if doc_type is not None:
+        type_map = {
+            "case":                "jurisprudence",
+            "legislation":         "legislation",
+            "government_document": "government_docs",
+            "journal_article":     "secondary_sources.journal_articles",
+            "book":                "secondary_sources.books",
+            "book_chapter":        "secondary_sources.books",
+            "thesis":              "secondary_sources.theses",
+            "newspaper":           "secondary_sources.news_sources",
+            "website":             "secondary_sources.websites",
+            "report":              "government_docs",
+            "other":               "general_rules",
+        }
+        detected_type = type_map.get(doc_type, "general_rules")
+    else:
+        detected_type = detect_type(extracted_fields)
     relevant_rules = get_rules(detected_type)
     prompt = build_prompt(extracted_fields, detected_type, relevant_rules)
     t0 = time.time()
     result = ask_deepseek(prompt)
     if timing.ENABLE_TIMING:
         timing.report().add_llm("format_citation", time.time() - t0)
+    global _last_prompt, _last_raw_response
+    _last_prompt = prompt
+    _last_raw_response = result
     return result

@@ -102,3 +102,45 @@ def _guess_title(text: str) -> str:
         if len(line) > 5:
             return line[:100]
     return ""
+
+
+def classify_document_type(raw_text: str) -> str:
+    """Use LLM to classify the document type from its raw text.
+
+    Returns one of: journal_article, book, book_chapter, thesis, report,
+    newspaper, case, legislation, government_document, website, other.
+    """
+    if not raw_text or not raw_text.strip():
+        return "other"
+
+    text_sample = raw_text[:800].strip()
+    prompt = f"""You are a document type classifier for legal citations.
+Analyze the following text and return ONE type that best describes the document.
+Only return the type string, nothing else.
+
+Types:
+- journal_article: academic journal article
+- book: full book or monograph
+- book_chapter: a chapter within a book
+- thesis: thesis or dissertation
+- report: report from an organization, NGO, or government
+- newspaper: newspaper or news article
+- case: court decision or judgment
+- legislation: statute, act, or regulation
+- government_document: official government publication (not legislation)
+- website: web page, blog post, or online article
+- other: none of the above
+
+Text:
+{text_sample}"""
+
+    from llm_api.deepseek_api import ask_deepseek
+    try:
+        result = ask_deepseek(prompt).strip().lower()
+        valid = {"journal_article", "book", "book_chapter", "thesis", "report",
+                 "newspaper", "case", "legislation", "government_document", "website", "other"}
+        if result in valid:
+            return result
+    except Exception:
+        pass
+    return "other"

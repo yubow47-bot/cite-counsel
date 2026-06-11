@@ -3,10 +3,10 @@
 import time
 import gradio as gr
 from local_tools.citation_search import search_citation, classify_and_normalize
-from local_tools.file_extractor import extract_from_file
+from local_tools.file_extractor import extract_from_file, classify_document_type
 from local_tools import timing_util as timing
 from llm_api.deepseek_api import extract_from_url, chat_deepseek
-from core.mcgill_engine import format_citation
+from core.mcgill_engine import format_citation, get_last_debug
 
 
 # ═══════════════════════════════════════════════
@@ -142,32 +142,61 @@ def tab1_select(choice: str, state: list) -> str:
 # Tab 2 — 文件提取
 # ═══════════════════════════════════════════════
 
-def tab2_extract(file) -> str:
+def tab2_extract(file) -> tuple:
     if file is None:
-        return "请先上传文件"
+        return "请先上传文件", {}
     try:
         fields = extract_from_file(file.name)
-        citation = format_citation(fields)
-        return citation
+        empty_fields = [k for k, v in fields.items() if not v]
+        doc_type = classify_document_type(fields.get("raw_text", ""))
+        citation = format_citation(fields, doc_type=doc_type)
+        dbg = get_last_debug()
+        debug_info = {
+            "metadata": fields,
+            "classified_type": doc_type,
+            "empty_fields": empty_fields,
+            "prompt": dbg.get("prompt", ""),
+            "raw_response": dbg.get("raw_response", ""),
+        }
+        return citation, debug_info
     except Exception as e:
-        return f"文件处理失败: {e}"
+        dbg = get_last_debug()
+        debug_info = {"error": str(e)}
+        if dbg.get("prompt"):
+            debug_info["prompt"] = dbg["prompt"]
+        if dbg.get("raw_response"):
+            debug_info["raw_response"] = dbg["raw_response"]
+        return f"文件处理失败: {e}", debug_info
 
 
 # ═══════════════════════════════════════════════
 # Tab 3 — URL 提取
 # ═══════════════════════════════════════════════
 
-def tab3_url(url: str) -> str:
+def tab3_url(url: str) -> tuple:
     if not url or not url.strip():
-        return "请输入URL"
+        return "请输入URL", {}
     try:
         fields = extract_from_url(url.strip())
         if "error" in fields:
-            return f"❌ {fields['error']}"
+            return f"❌ {fields['error']}", {"metadata": fields}
         citation = format_citation(fields)
-        return citation
+        dbg = get_last_debug()
+        debug_info = {
+            "metadata": fields,
+            "empty_fields": [k for k, v in fields.items() if not v],
+            "prompt": dbg.get("prompt", ""),
+            "raw_response": dbg.get("raw_response", ""),
+        }
+        return citation, debug_info
     except Exception as e:
-        return f"URL处理失败: {e}"
+        dbg = get_last_debug()
+        debug_info = {"error": str(e)}
+        if dbg.get("prompt"):
+            debug_info["prompt"] = dbg["prompt"]
+        if dbg.get("raw_response"):
+            debug_info["raw_response"] = dbg["raw_response"]
+        return f"URL处理失败: {e}", debug_info
 
 
 # ═══════════════════════════════════════════════
@@ -267,8 +296,12 @@ with gr.Blocks(title="McGill Citation Tool") as demo:
             file_plain = gr.Textbox(
                 label="纯文本（复制用）", buttons=["copy"], lines=4
             )
+            with gr.Accordion("调试信息", open=False):
+                file_debug = gr.JSON(label="调试详情")
 
-            file_submit.click(fn=tab2_extract, inputs=file_input, outputs=file_md).success(
+            file_submit.click(
+                fn=tab2_extract, inputs=file_input, outputs=[file_md, file_debug]
+            ).success(
                 fn=_plain_text, inputs=file_md, outputs=file_plain,
             )
 
@@ -286,11 +319,17 @@ with gr.Blocks(title="McGill Citation Tool") as demo:
             url_plain = gr.Textbox(
                 label="纯文本（复制用）", buttons=["copy"], lines=4
             )
+            with gr.Accordion("调试信息", open=False):
+                url_debug = gr.JSON(label="调试详情")
 
-            url_submit.click(fn=tab3_url, inputs=url_input, outputs=url_md).success(
+            url_submit.click(
+                fn=tab3_url, inputs=url_input, outputs=[url_md, url_debug]
+            ).success(
                 fn=_plain_text, inputs=url_md, outputs=url_plain,
             )
-            url_input.submit(fn=tab3_url, inputs=url_input, outputs=url_md).success(
+            url_input.submit(
+                fn=tab3_url, inputs=url_input, outputs=[url_md, url_debug]
+            ).success(
                 fn=_plain_text, inputs=url_md, outputs=url_plain,
             )
 
