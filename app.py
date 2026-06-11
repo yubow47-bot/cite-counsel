@@ -13,6 +13,13 @@ from core.mcgill_engine import format_citation
 # Tab 1 — Citation 查询
 # ═══════════════════════════════════════════════
 
+def _plain_text(md_text: str) -> str:
+    """去除 Markdown 标记（*），供纯文本复制用。"""
+    if not md_text:
+        return ""
+    return md_text.replace("*", "")
+
+
 def format_result(item: dict) -> str:
     """将单条结果格式化为可读文本。"""
     lines = []
@@ -216,26 +223,35 @@ with gr.Blocks(title="McGill Citation Tool") as demo:
                 label="候选结果（点击选择）",
                 choices=[],
             )
-            citation_output = gr.Textbox(label="McGill 引用", lines=12)
+            citation_md = gr.Markdown(label="McGill 引用")
+            citation_plain = gr.Textbox(
+                label="纯文本（复制用）", buttons=["copy"], lines=4
+            )
             state_store = gr.State([])
 
             # Step 1: Submit → 搜索，填充候选或直接输出
             submit_btn.click(
                 fn=tab1_search,
                 inputs=query_input,
-                outputs=[candidates_radio, citation_output, state_store],
+                outputs=[candidates_radio, citation_md, state_store],
+            ).success(
+                fn=_plain_text, inputs=citation_md, outputs=citation_plain,
             )
             query_input.submit(
                 fn=tab1_search,
                 inputs=query_input,
-                outputs=[candidates_radio, citation_output, state_store],
+                outputs=[candidates_radio, citation_md, state_store],
+            ).success(
+                fn=_plain_text, inputs=citation_md, outputs=citation_plain,
             )
 
             # Step 2: 点击候选 → 生成 McGill 引用
             candidates_radio.change(
                 fn=tab1_select,
                 inputs=[candidates_radio, state_store],
-                outputs=citation_output,
+                outputs=citation_md,
+            ).success(
+                fn=_plain_text, inputs=citation_md, outputs=citation_plain,
             )
 
         # ─── Tab 2 ───────────────────────────────
@@ -247,9 +263,14 @@ with gr.Blocks(title="McGill Citation Tool") as demo:
                 )
             with gr.Row():
                 file_submit = gr.Button("提取引用", variant="primary")
-            file_output = gr.Textbox(label="McGill 引用", lines=12)
+            file_md = gr.Markdown(label="McGill 引用")
+            file_plain = gr.Textbox(
+                label="纯文本（复制用）", buttons=["copy"], lines=4
+            )
 
-            file_submit.click(fn=tab2_extract, inputs=file_input, outputs=file_output)
+            file_submit.click(fn=tab2_extract, inputs=file_input, outputs=file_md).success(
+                fn=_plain_text, inputs=file_md, outputs=file_plain,
+            )
 
         # ─── Tab 3 ───────────────────────────────
         with gr.TabItem("🌐 URL 提取"):
@@ -261,10 +282,17 @@ with gr.Blocks(title="McGill Citation Tool") as demo:
                 )
             with gr.Row():
                 url_submit = gr.Button("提取引用", variant="primary")
-            url_output = gr.Textbox(label="McGill 引用", lines=12)
+            url_md = gr.Markdown(label="McGill 引用")
+            url_plain = gr.Textbox(
+                label="纯文本（复制用）", buttons=["copy"], lines=4
+            )
 
-            url_submit.click(fn=tab3_url, inputs=url_input, outputs=url_output)
-            url_input.submit(fn=tab3_url, inputs=url_input, outputs=url_output)
+            url_submit.click(fn=tab3_url, inputs=url_input, outputs=url_md).success(
+                fn=_plain_text, inputs=url_md, outputs=url_plain,
+            )
+            url_input.submit(fn=tab3_url, inputs=url_input, outputs=url_md).success(
+                fn=_plain_text, inputs=url_md, outputs=url_plain,
+            )
 
         # ─── Tab 4 ───────────────────────────────
         with gr.TabItem("💬 自由咨询"):
