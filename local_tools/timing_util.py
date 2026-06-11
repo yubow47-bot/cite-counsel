@@ -22,6 +22,8 @@ def start():
 
 def report():
     global _report
+    if _report is None and ENABLE_TIMING:
+        _report = TimingReport()
     return _report
 
 
