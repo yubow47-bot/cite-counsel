@@ -3,7 +3,7 @@ import re
 import time
 
 from llm_api.deepseek_api import ask_deepseek
-from local_tools.a2aj_api import fetch_by_citation, search_cases_multi, _map_fields, _extract_year
+from local_tools.a2aj_api import fetch_by_citation, search_cases_multi, _map_fields, _extract_year, _extract_jurisdiction
 from local_tools import timing_util as timing
 
 
@@ -327,6 +327,9 @@ def search_citation(query: str, classification: dict | None = None) -> list:
         )
         base_citation = cit_match.group(0).strip() if cit_match else normalized
         verified = False
+        jurisdiction = None
+        chapter = None
+        statute_title = normalized
         try:
             t0 = time.time()
             resp = requests.get(
@@ -339,11 +342,20 @@ def search_citation(query: str, classification: dict | None = None) -> list:
             resp.raise_for_status()
             results = resp.json().get("results", [])
             verified = len(results) > 0
+            if results:
+                r0 = results[0]
+                jurisdiction = _extract_jurisdiction(r0.get("dataset", ""))
+                cit_en = r0.get("citation_en", "")
+                ch_match = re.search(r'(c\s[\w.-]+)', cit_en)
+                chapter = ch_match.group(1) if ch_match else None
+                statute_title = r0.get("name_en", normalized)
         except Exception:
             verified = False
 
         return [{
-            "statute_title": normalized,
+            "statute_title": statute_title,
+            "jurisdiction": jurisdiction,
+            "chapter": chapter,
             "verified": verified,
             "warning": "" if verified else "⚠️ 未能通过 A2AJ 验证，建议在 CanLII 手动确认",
         }]

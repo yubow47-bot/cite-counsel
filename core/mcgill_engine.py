@@ -112,6 +112,35 @@ def build_prompt(extracted_fields: dict, detected_type: str, relevant_rules: dic
     rules_text = rules_text.replace(" | ", " ").replace("|", "")
     fields_text = json.dumps(extracted_fields, ensure_ascii=False, indent=2)
 
+    # 按来源类型添加斜体规则（mcgill_rules.json 要求）
+    italic_rules = ""
+    if detected_type == "jurisprudence":
+        italic_rules = (
+            "- YOU MUST italicize the case name using Markdown *asterisks*.\n"
+            "  Example: *R v Sharma*, 2022 SCC 39, [2022] 3 SCR 147.\n"
+        )
+    elif detected_type == "legislation":
+        italic_rules = (
+            "- YOU MUST italicize the statute title using Markdown *asterisks*,\n"
+            "  followed by a non-italicized comma.\n"
+            "  Example: *Criminal Code*, RSC 1985, c C-46.\n"
+        )
+    elif detected_type == "secondary_sources.journal_articles":
+        italic_rules = (
+            "- YOU MUST italicize journal names using Markdown *asterisks*.\n"
+            "  Article titles go in quotation marks, not italics.\n"
+            "  Example: Jane Smith, \"Article Title\" (2020) 45 *McGill LJ* 123.\n"
+        )
+    elif detected_type == "secondary_sources.books":
+        italic_rules = (
+            "- YOU MUST italicize book titles using Markdown *asterisks*.\n"
+            "  Example: Jane Smith, *Book Title*, 2nd ed (Publisher, 2020).\n"
+        )
+    elif detected_type == "government_docs":
+        italic_rules = (
+            "- Do NOT italicize Indigenous constitutional documents.\n"
+        )
+
     return f"""You are a McGill legal citation formatter.
 Format the following information into a proper McGill citation.
 
@@ -133,7 +162,7 @@ STRICT OUTPUT RULES:
 - If a field is null or missing, omit it entirely
 - For websites: Author (if any), "Title", (Date), online: Site Name <URL>.
 - Output must end with a period
-"""
+{italic_rules}"""
 
 
 def format_citation(extracted_fields: dict) -> str:
