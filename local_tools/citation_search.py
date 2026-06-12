@@ -1,10 +1,12 @@
 import json
+import os
 import re
 import time
 
 from llm_api.deepseek_api import ask_deepseek
 from local_tools.a2aj_api import fetch_by_citation, search_cases_multi, _map_fields, _extract_year, _extract_jurisdiction
 from local_tools import timing_util as timing
+from profiling import timing as prof
 
 
 def classify_and_normalize(query: str) -> dict:
@@ -30,7 +32,8 @@ def classify_and_normalize(query: str) -> dict:
 
     try:
         t0 = time.time()
-        content = ask_deepseek(prompt)
+        with prof.measure("llm.classify", model="deepseek-chat"):
+            content = ask_deepseek(prompt)
         if timing.ENABLE_TIMING:
             timing.report().add_llm("classify_and_normalize", time.time() - t0)
         result = json.loads(content)
@@ -40,6 +43,73 @@ def classify_and_normalize(query: str) -> dict:
         pass
     return {"type": "case_name", "normalized": query, "original": query}
 
+
+
+def _diagnose_parse_failure(raw: str) -> str:
+    """Analyze raw LLM output to determine why _parse_llm_output failed."""
+    stripped = raw.strip()
+    # 1) Check for markdown code fences
+    if "```" in stripped:
+        # Check if fences are properly balanced
+        fence_count = stripped.count("```")
+        if fence_count < 2:
+            return f"unmatched_backtick_fence(count={fence_count})"
+        # Try stripping fences and re-parse
+        cleaned = re.sub(r'^```(?:json)?\s*', '', stripped)
+        cleaned = re.sub(r'\s*```$', '', cleaned).strip()
+        if cleaned:
+            try:
+                json.loads(cleaned)
+                return "fence_strippable_json_ok"  # fences were the only issue
+            except json.JSONDecodeError as e:
+                pos = e.pos
+                snippet = cleaned[max(0, pos-20):pos+20]
+                return f"fence_stripped_json_invalid(pos={pos}, snippet={snippet!r})"
+        else:
+            return "fence_only_no_content"
+    # 2) Try direct JSON parse (no fences)
+    try:
+        obj = json.loads(stripped)
+    except json.JSONDecodeError as e:
+        pos = e.pos
+        snippet = stripped[max(0, pos-20):pos+20]
+        return f"json_decode_error(pos={pos}, msg={e.msg}, snippet={snippet!r})"
+    # 3) JSON parsed but schema wrong
+    if isinstance(obj, dict):
+        if "candidates" not in obj:
+            keys = list(obj.keys())
+            return f"missing_candidates_key(keys={keys})"
+        cand = obj["candidates"]
+        if not isinstance(cand, list):
+            return f"candidates_not_list(type={type(cand).__name__})"
+        if len(cand) == 0:
+            return "empty_candidates_list"
+        return f"unknown_filter(parsed_ok_candidates={len(cand)})"
+    if isinstance(obj, list):
+        return f"top_level_list_not_dict(len={len(obj)})"
+    return f"unexpected_type(type={type(obj).__name__})"
+
+
+def _log_retry_event(query: str, attempt: int, raw: str,
+                     reason: str, succeeded: bool):
+    """Append one retry diagnostic record to profiling/expand_retry_log.jsonl."""
+    log_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "profiling", "expand_retry_log.jsonl"
+    )
+    record = {
+        "input_concept": query,
+        "attempt": attempt,
+        "raw_response": raw,
+        "failure_reason": reason,
+        "finally_succeeded": succeeded,
+    }
+    try:
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 
 def expand_concept(query: str) -> list:
@@ -87,19 +157,25 @@ Rules:
 
     # ── 第 1 次 LLM 调用 ──
     t0 = time.time()
-    content = ask_deepseek(prompt)
+    with prof.measure("llm.expand", model="deepseek-chat", attempt=1):
+        raw_first = ask_deepseek(prompt)
     if timing.ENABLE_TIMING:
         timing.report().add_llm("expand_concept (首次)", time.time() - t0)
-    items = _parse_llm_output(content)
+    items = _parse_llm_output(raw_first)
 
     # ── 解析失败则重试一次 ──
     if not items:
-        print(f"[WARN] expand_concept 首次解析失败，重试...")
+        # 诊断：记录首次失败原因
+        fail_reason = _diagnose_parse_failure(raw_first)
+        print(f"[WARN] expand_concept 首次解析失败: {fail_reason}")
         t0 = time.time()
-        content = ask_deepseek(prompt)
+        with prof.measure("llm.expand", model="deepseek-chat", attempt=2):
+            raw_retry = ask_deepseek(prompt)
         if timing.ENABLE_TIMING:
             timing.report().add_llm("expand_concept (重试)", time.time() - t0)
-        items = _parse_llm_output(content)
+        items = _parse_llm_output(raw_retry)
+        _log_retry_event(query, 1, raw_first, fail_reason,
+                         succeeded=bool(items))
 
     if not items:
         print(f"[WARN] expand_concept 重试后仍解析失败，返回空。")
@@ -332,11 +408,12 @@ def search_citation(query: str, classification: dict | None = None) -> list:
         statute_title = normalized
         try:
             t0 = time.time()
-            resp = requests.get(
-                "https://api.a2aj.ca/fetch",
-                params={"citation": base_citation, "doc_type": "laws"},
-                timeout=15
-            )
+            with prof.measure("http.a2aj_legislation", endpoint="/fetch", doc_type="laws"):
+                resp = requests.get(
+                    "https://api.a2aj.ca/fetch",
+                    params={"citation": base_citation, "doc_type": "laws"},
+                    timeout=15
+                )
             if timing.ENABLE_TIMING:
                 timing.report().add_a2aj(f"legislation fetch({base_citation[:30]})", time.time() - t0)
             resp.raise_for_status()

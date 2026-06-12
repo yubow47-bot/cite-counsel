@@ -2,6 +2,7 @@ import os
 import re
 import json
 import requests
+from profiling import timing
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_MODEL = "deepseek-chat"
@@ -43,19 +44,20 @@ def _call_deepseek(messages: list, temperature: float = 0) -> str:
             "Set it in .env or config/settings.py"
         )
 
-    response = requests.post(
-        DEEPSEEK_API_URL,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": DEEPSEEK_MODEL,
-            "messages": messages,
-            "temperature": temperature,
-        },
-        timeout=30,
-    )
+    with timing.measure("http.deepseek", model=DEEPSEEK_MODEL):
+        response = requests.post(
+            DEEPSEEK_API_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": DEEPSEEK_MODEL,
+                "messages": messages,
+                "temperature": temperature,
+            },
+            timeout=30,
+        )
     response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"]
 

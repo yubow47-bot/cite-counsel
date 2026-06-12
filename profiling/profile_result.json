@@ -1,0 +1,217 @@
+{
+  "concept": {
+    "wall_s": 6.431,
+    "spans": [
+      {
+        "label": "http.deepseek",
+        "start_s": 1373437.1047,
+        "end_s": 1373439.1285,
+        "duration_s": 2.024,
+        "meta": {
+          "model": "deepseek-chat"
+        }
+      },
+      {
+        "label": "llm.classify",
+        "start_s": 1373437.1047,
+        "end_s": 1373439.1323,
+        "duration_s": 2.028,
+        "meta": {
+          "model": "deepseek-chat"
+        }
+      },
+      {
+        "label": "http.deepseek",
+        "start_s": 1373439.1324,
+        "end_s": 1373441.7868,
+        "duration_s": 2.654,
+        "meta": {
+          "model": "deepseek-chat"
+        }
+      },
+      {
+        "label": "llm.expand",
+        "start_s": 1373439.1324,
+        "end_s": 1373441.7876,
+        "duration_s": 2.655,
+        "meta": {
+          "model": "deepseek-chat",
+          "attempt": 1
+        }
+      },
+      {
+        "label": "http.a2aj_fetch",
+        "start_s": 1373441.8032,
+        "end_s": 1373443.0375,
+        "duration_s": 1.234,
+        "meta": {
+          "endpoint": "/fetch",
+          "doc_type": "cases"
+        }
+      },
+      {
+        "label": "http.a2aj_fetch",
+        "start_s": 1373441.8069,
+        "end_s": 1373443.0776,
+        "duration_s": 1.271,
+        "meta": {
+          "endpoint": "/fetch",
+          "doc_type": "cases"
+        }
+      },
+      {
+        "label": "http.a2aj_fetch",
+        "start_s": 1373441.8046,
+        "end_s": 1373443.0848,
+        "duration_s": 1.28,
+        "meta": {
+          "endpoint": "/fetch",
+          "doc_type": "cases"
+        }
+      }
+    ]
+  },
+  "journal_crossref": {
+    "wall_s": 1.786,
+    "spans": [
+      {
+        "label": "http.crossref",
+        "start_s": 1373459.7494,
+        "end_s": 1373461.5338,
+        "duration_s": 1.784,
+        "meta": {
+          "endpoint": "api.crossref.org"
+        }
+      }
+    ]
+  },
+  "citation_number": {
+    "wall_s": 2.75,
+    "spans": [
+      {
+        "label": "http.deepseek",
+        "start_s": 1373467.0423,
+        "end_s": 1373468.6939,
+        "duration_s": 1.652,
+        "meta": {
+          "model": "deepseek-chat"
+        }
+      },
+      {
+        "label": "llm.classify",
+        "start_s": 1373467.0423,
+        "end_s": 1373468.6956,
+        "duration_s": 1.653,
+        "meta": {
+          "model": "deepseek-chat"
+        }
+      },
+      {
+        "label": "http.a2aj_fetch",
+        "start_s": 1373468.6957,
+        "end_s": 1373469.7878,
+        "duration_s": 1.092,
+        "meta": {
+          "endpoint": "/fetch",
+          "doc_type": "cases"
+        }
+      }
+    ]
+  },
+  "case_name": {
+    "wall_s": 6.292,
+    "spans": [
+      {
+        "label": "http.deepseek",
+        "start_s": 1373480.2307,
+        "end_s": 1373482.5877,
+        "duration_s": 2.357,
+        "meta": {
+          "model": "deepseek-chat"
+        }
+      },
+      {
+        "label": "llm.classify",
+        "start_s": 1373480.2306,
+        "end_s": 1373482.5886,
+        "duration_s": 2.358,
+        "meta": {
+          "model": "deepseek-chat"
+        }
+      },
+      {
+        "label": "http.a2aj_search_fetch",
+        "start_s": 1373482.5887,
+        "end_s": 1373483.3709,
+        "duration_s": 0.782,
+        "meta": {
+          "endpoint": "/fetch",
+          "query_type": "case_name"
+        }
+      },
+      {
+        "label": "http.a2aj_search_query",
+        "start_s": 1373483.3709,
+        "end_s": 1373484.2944,
+        "duration_s": 0.924,
+        "meta": {
+          "endpoint": "/search",
+          "offset": 0
+        }
+      },
+      {
+        "label": "http.a2aj_search_fetch",
+        "start_s": 1373484.2956,
+        "end_s": 1373485.3971,
+        "duration_s": 1.102,
+        "meta": {
+          "endpoint": "/fetch",
+          "query_type": "case_name"
+        }
+      },
+      {
+        "label": "http.a2aj_search_query",
+        "start_s": 1373485.3972,
+        "end_s": 1373486.5208,
+        "duration_s": 1.124,
+        "meta": {
+          "endpoint": "/search",
+          "offset": 40
+        }
+      }
+    ]
+  },
+  "legislation": {
+    "wall_s": 3.367,
+    "spans": [
+      {
+        "label": "http.deepseek",
+        "start_s": 1373501.1854,
+        "end_s": 1373503.0183,
+        "duration_s": 1.833,
+        "meta": {
+          "model": "deepseek-chat"
+        }
+      },
+      {
+        "label": "llm.classify",
+        "start_s": 1373501.1854,
+        "end_s": 1373503.0197,
+        "duration_s": 1.834,
+        "meta": {
+          "model": "deepseek-chat"
+        }
+      },
+      {
+        "label": "http.a2aj_legislation",
+        "start_s": 1373503.0199,
+        "end_s": 1373504.5414,
+        "duration_s": 1.522,
+        "meta": {
+          "endpoint": "/fetch",
+          "doc_type": "laws"
+        }
+      }
+    ]
+  }
+}
