@@ -4,6 +4,7 @@ import time
 from llm_api.deepseek_api import ask_deepseek
 from local_tools import timing_util as timing
 from local_tools.crossref_api import extract_doi, fetch_crossref, build_journal_citation
+from profiling import timing as prof
 
 import os
 RULES_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcgill_rules.json")
@@ -227,7 +228,8 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
     relevant_rules = get_rules(detected_type)
     prompt = build_prompt(extracted_fields, detected_type, relevant_rules)
     t0 = time.time()
-    result = ask_deepseek(prompt)
+    with prof.measure("llm.format", model="deepseek-chat"):
+        result = ask_deepseek(prompt)
     if timing.ENABLE_TIMING:
         timing.report().add_llm("format_citation", time.time() - t0)
     _last_prompt = prompt

@@ -2,6 +2,7 @@
 
 import re
 import requests
+from profiling import timing as prof
 
 CROSSREF_HEADERS = {
     "User-Agent": "McGillCitationTool/0.1 (mailto:test@example.com)"
@@ -31,7 +32,8 @@ def fetch_crossref(doi: str) -> dict | None:
     """Fetch CrossRef metadata for a DOI. Returns the 'message' dict, or None."""
     url = f"https://api.crossref.org/works/{doi}"
     try:
-        resp = requests.get(url, headers=CROSSREF_HEADERS, timeout=15)
+        with prof.measure("http.crossref", endpoint="api.crossref.org"):
+            resp = requests.get(url, headers=CROSSREF_HEADERS, timeout=15)
         resp.raise_for_status()
         return resp.json().get("message")
     except Exception:
