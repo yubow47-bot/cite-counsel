@@ -332,7 +332,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
             "warning": "⚠️ 未能通过 A2AJ 验证，建议在 CanLII 手动确认",
         }]
 
-    # 2. case_name：按名称搜索 + 可选年份过滤
+    # 2. case_name：单次 A2AJ /search（A2AJ 无分页，size ≤ 50）
     elif input_type == "case_name":
         # 从原始输入提取年份，与 DeepSeek 标准化互不干扰
         _, year = _extract_year(classified["original"])
@@ -349,37 +349,29 @@ def search_citation(query: str, classification: dict | None = None) -> list:
             flags=re.IGNORECASE
         ).strip()
 
-        title_matches = []
-        fulltext_pool = []
-        MAX_BATCHES = 3
+        t0 = time.time()
+        results = search_cases_multi(
+            normalized, size=45,
+            start_date=start_date, end_date=end_date,
+        )
+        if timing.ENABLE_TIMING:
+            timing.report().add_a2aj(f"search_cases_multi ({normalized[:30]})", time.time() - t0)
+        if not results:
+            return []
 
-        for batch in range(MAX_BATCHES):
-            t0 = time.time()
-            batch_results = search_cases_multi(
-                normalized, size=40, offset=batch * 40,
-                start_date=start_date, end_date=end_date,
-            )
-            if timing.ENABLE_TIMING:
-                timing.report().add_a2aj(f"search_cases_multi batch={batch+1} ({normalized[:30]})", time.time() - t0)
-            if not batch_results:
-                break
-
-            if batch == 0:
-                fulltext_pool = batch_results
-
-            for r in batch_results:
-                name = r.get("name_en", "")
-                if keyword.lower() in name.lower() and r not in title_matches:
-                    title_matches.append(r)
-                if len(title_matches) >= 2:
-                    break
-
-            if len(title_matches) >= 2:
-                break
-
+        # 去重 → 优先 keyword 命中的结果 → 最多 5 条
         seen = set()
         final = []
-        for r in title_matches + fulltext_pool:
+        for r in results:
+            name = r.get("name_en", "")
+            if keyword.lower() in name.lower():
+                key = r.get("citation_en") or r.get("name_en")
+                if key and key not in seen:
+                    seen.add(key)
+                    final.append(r)
+                if len(final) >= 5:
+                    break
+        for r in results:
             key = r.get("citation_en") or r.get("name_en")
             if key and key not in seen:
                 seen.add(key)
@@ -387,8 +379,6 @@ def search_citation(query: str, classification: dict | None = None) -> list:
             if len(final) >= 5:
                 break
 
-        if not final:
-            return []
         return [dict(_map_fields(r), verified=True) for r in final]
 
     # 3. legislation：A2AJ /fetch (doc_type=laws) 验证
