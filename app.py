@@ -121,8 +121,27 @@ def tab1_search(query: str) -> tuple:
         return (gr.update(choices=[], value=None), "未找到匹配结果，请尝试其他关键词。", [],
                 route_debug, a2aj_debug, "N/A", "N/A", "N/A")
 
-    # citation_number / legislation / bill → 直接输出 McGill 引用
-    if input_type in ("citation_number", "legislation", "bill"):
+    # bill → LEGISinfo 确定性路径，不过 A2AJ/detect_type/LLM
+    if input_type == "bill":
+        try:
+            t0 = time.time()
+            citation = format_citation(results[0])
+            dbg = get_last_debug()
+            if timing.ENABLE_TIMING:
+                timing.report().set_format(time.time() - t0)
+                timing.report().print()
+            raw_r = (dbg.get("raw_response", "") or "")
+            return (gr.update(choices=[], value=None), citation, [],
+                    route_debug, "N/A（bill 路由不走 A2AJ）", "N/A（bill 路由不走 detect_type）",
+                    "N/A（build_bill_citation 不过 LLM）", raw_r)
+        except Exception as e:
+            if timing.ENABLE_TIMING:
+                timing.report().print()
+            return (gr.update(choices=[], value=None), f"生成引用失败: {e}", [],
+                    route_debug, "N/A", "N/A", "N/A", "N/A")
+
+    # citation_number / legislation → 直接输出 McGill 引用
+    if input_type in ("citation_number", "legislation"):
         try:
             t0 = time.time()
             citation = format_citation(results[0])
