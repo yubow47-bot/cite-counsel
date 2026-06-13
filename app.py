@@ -6,7 +6,7 @@ from local_tools.citation_search import search_citation, classify_and_normalize
 from local_tools.file_extractor import extract_from_file, classify_document_type
 from local_tools import timing_util as timing
 from llm_api.deepseek_api import extract_from_url, chat_deepseek
-from core.mcgill_engine import format_citation, get_last_debug
+from core.mcgill_engine import format_citation, get_last_debug, detect_type, get_rules
 
 
 # ═══════════════════════════════════════════════
@@ -18,6 +18,41 @@ def _plain_text(md_text: str) -> str:
     if not md_text:
         return ""
     return md_text.replace("*", "")
+
+
+def _a2aj_summary(item: dict) -> str:
+    """Format a single A2AJ result item as a debug string."""
+    if not item:
+        return "未命中"
+    if item.get("style_of_cause"):
+        return f"案件: {item['style_of_cause']}  —  {item.get('neutral_citation','')}"
+    if item.get("statute_title"):
+        cit = item.get('neutral_citation') or ''
+        jur = item.get('jurisdiction') or ''
+        ch = item.get('chapter') or ''
+        return f"法规: {item['statute_title']}  —  {cit}  juris={jur}  ch={ch}"
+    if item.get("name"):
+        return f"名称: {item['name']}  —  {item.get('neutral_citation','')}"
+    if item.get("warning"):
+        return f"⚠️ {item['warning'][:60]}"
+    return str(item)[:100]
+
+
+def _candidate_list(results: list) -> str:
+    if not results:
+        return '未命中'
+    lines = []
+    for i, item in enumerate(results, 1):
+        badge = chr(9989) if item.get('verified') else chr(9888)
+        if item.get('style_of_cause'):
+            lines.append(f"{i}. {badge} {item['style_of_cause']} —  {item.get('neutral_citation','')}")
+        elif item.get('statute_title'):
+            lines.append(f"{i}. {badge} {item['statute_title']} —  {item.get('neutral_citation','')}")
+        elif item.get('name'):
+            lines.append(f"{i}. {badge} {item['name']} —  {item.get('neutral_citation','')}")
+        else:
+            lines.append(f"{i}. {str(item)[:60]}")
+    return chr(10).join(lines)
 
 
 def format_result(item: dict) -> str:
@@ -62,12 +97,13 @@ def format_result(item: dict) -> str:
 
 
 def tab1_search(query: str) -> tuple:
-    """Step 1: 搜索。返回 (候选列表更新, 输出文本, 原始数据列表)。"""
+    """Step 1: 搜索。返回 8 值: radio, citation, state, 5 debug."""
     if timing.ENABLE_TIMING:
         timing.start()
 
     if not query or not query.strip():
-        return gr.update(choices=[], value=None), "请输入案例名、法条、或法律概念", []
+        return (gr.update(choices=[], value=None), "请输入案例名、法条、或法律概念", [],
+                "N/A", "N/A", "N/A", "N/A", "N/A")
 
     t0 = time.time()
     classified = classify_and_normalize(query.strip())
@@ -77,24 +113,36 @@ def tab1_search(query: str) -> tuple:
     input_type = classified["type"]
     results = search_citation(query.strip(), classification=classified)
 
+    WAIT = "等待选择候选..."
+    route_debug = f"type={classified['type']}  normalized={classified['normalized']}"
+    a2aj_debug = _candidate_list(results) if results else "未命中"
+
     if not results:
-        return gr.update(choices=[], value=None), "未找到匹配结果，请尝试其他关键词。", []
+        return (gr.update(choices=[], value=None), "未找到匹配结果，请尝试其他关键词。", [],
+                route_debug, a2aj_debug, "N/A", "N/A", "N/A")
 
     # citation_number / legislation → 直接输出 McGill 引用
     if input_type in ("citation_number", "legislation"):
         try:
             t0 = time.time()
             citation = format_citation(results[0])
+            dbg = get_last_debug()
             if timing.ENABLE_TIMING:
                 timing.report().set_format(time.time() - t0)
                 timing.report().print()
-            return gr.update(choices=[], value=None), citation, []
+            dtype = detect_type(results[0])
+            dtype_debug = f"detect_type={dtype}  rules={get_rules(dtype).get('category','?')}"
+            prompt = (dbg.get("prompt", "") or "")[:500]
+            raw_r = (dbg.get("raw_response", "") or "")
+            return (gr.update(choices=[], value=None), citation, [],
+                    route_debug, a2aj_debug, dtype_debug, prompt, raw_r)
         except Exception as e:
             if timing.ENABLE_TIMING:
                 timing.report().print()
-            return gr.update(choices=[], value=None), f"生成引用失败: {e}", []
+            return (gr.update(choices=[], value=None), f"生成引用失败: {e}", [],
+                    route_debug, a2aj_debug, "N/A", "N/A", "N/A")
 
-    # case_name / concept → 显示带编号的候选列表（含验证状态）
+    # case_name / concept → 显示候选列表（引用尚未生成）
     candidates = []
     for i, item in enumerate(results, 1):
         badge = "✅" if item.get("verified") else "⚠️"
@@ -110,32 +158,46 @@ def tab1_search(query: str) -> tuple:
 
     if timing.ENABLE_TIMING:
         timing.report().print()
-    return gr.update(choices=candidates, value=None), "请从上方候选列表中选择一条结果", results
+    return (gr.update(choices=candidates, value=None), "请从上方候选列表中选择一条结果", results,
+            route_debug, a2aj_debug, WAIT, WAIT, WAIT)
 
 
-def tab1_select(choice: str, state: list) -> str:
-    """Step 2: 用户选中候选后，按编号索引取出原始数据生成 McGill 引用。"""
+def tab1_select(choice: str, state: list) -> tuple:
+    """Step 2: 用户选中候选后，按编号索引取出原始数据生成 McGill 引用。
+    返回 (citation, route, a2aj, dtype, prompt_500, raw)."""
     if timing.ENABLE_TIMING:
         timing.start()
 
     if not choice:
-        return gr.skip()  # Radio 被程序清空时不修改输出
+        return (gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip())
     if not state:
-        return "会话数据丢失，请重新搜索"
+        return ("会话数据丢失，请重新搜索", "N/A", "N/A", "N/A", "N/A", "N/A")
 
     try:
         idx = int(choice.split(".")[0]) - 1
         if idx < 0 or idx >= len(state):
-            return "选中项索引超出范围"
+            return ("选中项索引超出范围", "N/A", "N/A", "N/A", "N/A", "N/A")
         item = state[idx]
         t0 = time.time()
         result = format_citation(item)
         if timing.ENABLE_TIMING:
             timing.report().set_format(time.time() - t0)
             timing.report().print()
-        return result
+        dbg = get_last_debug()
+        prompt = (dbg.get("prompt", "") or "")[:500]
+        raw_r = (dbg.get("raw_response", "") or "")
+        dtype = detect_type(item)
+        dtype_debug = f"detect_type={dtype}  rules={get_rules(dtype).get('category','?')}"
+        full_list = _candidate_list(state)
+        a2aj_debug = f"{full_list}\n\n>> 已选: {choice}"
+        item_name = item.get("style_of_cause") or item.get("statute_title") or item.get("name", "?")
+        route_debug = f">> selected #{idx+1}: {item_name}"
+        return result, route_debug, a2aj_debug, dtype_debug, prompt, raw_r
     except (ValueError, IndexError, AttributeError, TypeError) as e:
-        return f"解析选中项失败: {e}"
+        dbg = get_last_debug()
+        p = (dbg.get("prompt", "") or "")[:500]
+        r = (dbg.get("raw_response", "") or "")
+        return (f"解析选中项失败: {e}", "N/A", "N/A", "N/A", p, r)
 
 
 # ═══════════════════════════════════════════════
@@ -143,8 +205,9 @@ def tab1_select(choice: str, state: list) -> str:
 # ═══════════════════════════════════════════════
 
 def tab2_extract(file) -> tuple:
+    """返回 (citation, debug_info, meta, classify, crossref, source, prompt, raw)."""
     if file is None:
-        return "请先上传文件", {}
+        return "请先上传文件", {}, "N/A", "N/A", "N/A", "N/A", "N/A", "N/A"
     try:
         fields = extract_from_file(file.name)
         empty_fields = [k for k, v in fields.items() if not v]
@@ -159,7 +222,24 @@ def tab2_extract(file) -> tuple:
             "prompt": dbg.get("prompt", ""),
             "raw_response": dbg.get("raw_response", ""),
         }
-        return citation, debug_info
+        # Structured text fields
+        title = fields.get("title", "")
+        author = fields.get("author", "")
+        date = fields.get("date", "")
+        pub = fields.get("publisher", "")
+        meta_str = f"title={title}  author={author}  date={date}  publisher={pub}"
+        classify_str = f"doc_type={doc_type}"
+        src = dbg.get("source", "")
+        source_str = f"source={src}"
+        prompt_500 = (dbg.get("prompt", "") or "")[:500]
+        raw_r = dbg.get("raw_response", "") or ""
+        if doc_type == "journal_article" and src == "crossref":
+            crossref_str = "DOI 命中 → CrossRef 成功"
+        elif doc_type == "journal_article" and src == "deepseek_fallback":
+            crossref_str = "CrossRef 未命中（DOI 未找到或查询失败），降级 DeepSeek"
+        else:
+            crossref_str = f"N/A（非期刊路径: {doc_type}）"
+        return citation, debug_info, meta_str, classify_str, crossref_str, source_str, prompt_500, raw_r
     except Exception as e:
         dbg = get_last_debug()
         debug_info = {"error": str(e)}
@@ -169,7 +249,10 @@ def tab2_extract(file) -> tuple:
             debug_info["raw_response"] = dbg["raw_response"]
         if dbg.get("source"):
             debug_info["source"] = dbg["source"]
-        return f"文件处理失败: {e}", debug_info
+        p = (dbg.get("prompt", "") or "")[:500]
+        r = (dbg.get("raw_response", "") or "")
+        s = dbg.get("source", "")
+        return f"文件处理失败: {e}", debug_info, "N/A", "N/A", "N/A", f"source={s}", p, r
 
 
 # ═══════════════════════════════════════════════
@@ -177,12 +260,13 @@ def tab2_extract(file) -> tuple:
 # ═══════════════════════════════════════════════
 
 def tab3_url(url: str) -> tuple:
+    """返回 (citation, debug_info, meta, dtype, source, prompt, raw)."""
     if not url or not url.strip():
-        return "请输入URL", {}
+        return "请输入URL", {}, "N/A", "N/A", "N/A", "N/A", "N/A"
     try:
         fields = extract_from_url(url.strip())
         if "error" in fields:
-            return f"❌ {fields['error']}", {"metadata": fields}
+            return f"❌ {fields['error']}", {"metadata": fields}, "N/A", "N/A", "N/A", "N/A", "N/A"
         citation = format_citation(fields)
         dbg = get_last_debug()
         debug_info = {
@@ -192,7 +276,18 @@ def tab3_url(url: str) -> tuple:
             "prompt": dbg.get("prompt", ""),
             "raw_response": dbg.get("raw_response", ""),
         }
-        return citation, debug_info
+        pt = fields.get("page_title", "") or ""
+        au = fields.get("author", "") or ""
+        dt = fields.get("date", "") or ""
+        np = fields.get("newspaper", "") or ""
+        hn = fields.get("hostname", "") or ""
+        meta_str = f"url={url}  title={pt}  author={au}  date={dt}  newspaper={np}  hostname={hn}"
+        dtype_str = f"detect_type={detect_type(fields)}"
+        src = dbg.get("source", "")
+        source_str = f"source={src}"
+        prompt_500 = (dbg.get("prompt", "") or "")[:500]
+        raw_r = dbg.get("raw_response", "") or ""
+        return citation, debug_info, meta_str, dtype_str, source_str, prompt_500, raw_r
     except Exception as e:
         dbg = get_last_debug()
         debug_info = {"error": str(e)}
@@ -202,7 +297,10 @@ def tab3_url(url: str) -> tuple:
             debug_info["raw_response"] = dbg["raw_response"]
         if dbg.get("source"):
             debug_info["source"] = dbg["source"]
-        return f"URL处理失败: {e}", debug_info
+        p = (dbg.get("prompt", "") or "")[:500]
+        r = (dbg.get("raw_response", "") or "")
+        s = dbg.get("source", "")
+        return f"URL处理失败: {e}", debug_info, "N/A", "N/A", f"source={s}", p, r
 
 
 # ═══════════════════════════════════════════════
@@ -264,18 +362,24 @@ with gr.Blocks(title="McGill Citation Tool") as demo:
             )
             state_store = gr.State([])
 
+            with gr.Accordion("🔍 Debug", open=False):
+                t1_route  = gr.Textbox(label="分类路由", lines=2, interactive=False)
+                t1_a2aj   = gr.Textbox(label="A2AJ 响应", lines=3, interactive=False)
+                t1_dtype  = gr.Textbox(label="detect_type 判定", lines=1, interactive=False)
+                t1_prompt = gr.Textbox(label="LLM Prompt（前 500 字）", lines=6, interactive=False)
+                t1_raw    = gr.Textbox(label="LLM Raw Response", lines=6, interactive=False)
+
+            t1_all = [candidates_radio, citation_md, state_store,
+                      t1_route, t1_a2aj, t1_dtype, t1_prompt, t1_raw]
+
             # Step 1: Submit → 搜索，填充候选或直接输出
             submit_btn.click(
-                fn=tab1_search,
-                inputs=query_input,
-                outputs=[candidates_radio, citation_md, state_store],
+                fn=tab1_search, inputs=query_input, outputs=t1_all,
             ).success(
                 fn=_plain_text, inputs=citation_md, outputs=citation_plain,
             )
             query_input.submit(
-                fn=tab1_search,
-                inputs=query_input,
-                outputs=[candidates_radio, citation_md, state_store],
+                fn=tab1_search, inputs=query_input, outputs=t1_all,
             ).success(
                 fn=_plain_text, inputs=citation_md, outputs=citation_plain,
             )
@@ -284,7 +388,7 @@ with gr.Blocks(title="McGill Citation Tool") as demo:
             candidates_radio.change(
                 fn=tab1_select,
                 inputs=[candidates_radio, state_store],
-                outputs=citation_md,
+                outputs=[citation_md, t1_route, t1_a2aj, t1_dtype, t1_prompt, t1_raw],
             ).success(
                 fn=_plain_text, inputs=citation_md, outputs=citation_plain,
             )
@@ -302,11 +406,19 @@ with gr.Blocks(title="McGill Citation Tool") as demo:
             file_plain = gr.Textbox(
                 label="纯文本（复制用）", buttons=["copy"], lines=4
             )
-            with gr.Accordion("调试信息", open=False):
-                file_debug = gr.JSON(label="调试详情")
+            with gr.Accordion("🔍 Debug", open=False):
+                t2_meta     = gr.Textbox(label="文件解析结果", lines=2, interactive=False)
+                t2_classify = gr.Textbox(label="LLM 文档分类", lines=1, interactive=False)
+                t2_crossref = gr.Textbox(label="CrossRef 路径", lines=2, interactive=False)
+                t2_source   = gr.Textbox(label="数据来源", lines=1, interactive=False)
+                t2_prompt   = gr.Textbox(label="LLM Prompt（前 500 字）", lines=6, interactive=False)
+                t2_raw      = gr.Textbox(label="LLM Raw Response", lines=6, interactive=False)
+                file_debug  = gr.JSON(label="原始调试数据")
+
+            t2_all = [file_md, file_debug, t2_meta, t2_classify, t2_crossref, t2_source, t2_prompt, t2_raw]
 
             file_submit.click(
-                fn=tab2_extract, inputs=file_input, outputs=[file_md, file_debug]
+                fn=tab2_extract, inputs=file_input, outputs=t2_all,
             ).success(
                 fn=_plain_text, inputs=file_md, outputs=file_plain,
             )
@@ -325,16 +437,23 @@ with gr.Blocks(title="McGill Citation Tool") as demo:
             url_plain = gr.Textbox(
                 label="纯文本（复制用）", buttons=["copy"], lines=4
             )
-            with gr.Accordion("调试信息", open=False):
-                url_debug = gr.JSON(label="调试详情")
+            with gr.Accordion("🔍 Debug", open=False):
+                t3_meta   = gr.Textbox(label="trafilatura 提取结果", lines=3, interactive=False)
+                t3_dtype  = gr.Textbox(label="detect_type 判定", lines=1, interactive=False)
+                t3_source = gr.Textbox(label="数据来源", lines=1, interactive=False)
+                t3_prompt = gr.Textbox(label="LLM Prompt（前 500 字）", lines=6, interactive=False)
+                t3_raw    = gr.Textbox(label="LLM Raw Response", lines=6, interactive=False)
+                url_debug = gr.JSON(label="原始调试数据")
+
+            t3_all = [url_md, url_debug, t3_meta, t3_dtype, t3_source, t3_prompt, t3_raw]
 
             url_submit.click(
-                fn=tab3_url, inputs=url_input, outputs=[url_md, url_debug]
+                fn=tab3_url, inputs=url_input, outputs=t3_all,
             ).success(
                 fn=_plain_text, inputs=url_md, outputs=url_plain,
             )
             url_input.submit(
-                fn=tab3_url, inputs=url_input, outputs=[url_md, url_debug]
+                fn=tab3_url, inputs=url_input, outputs=t3_all,
             ).success(
                 fn=_plain_text, inputs=url_md, outputs=url_plain,
             )

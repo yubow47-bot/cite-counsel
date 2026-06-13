@@ -718,13 +718,14 @@
           "Many constitutional statutes were enacted under different name than those used today. You will need to include the full and complete citation at first mention."
         ],
         "examples": [
-          "Constitution Act, 1982, s 35, being Schedule B to the Canada Act 1982 (UK), 1982, c 11.",
-          "Canadian Charter of Rights and Freedoms, s7, Part 1 of the Constitutional Act, 1982, being Schedule B to the Canada Act 1982 (UK), 1982, c 11.",
-          "Constitution Act, 1867 (UK), 30 & 31 Vict, c 3, s 91, reprinted in RSC 1985, Appendix II, No 5."
+          "*Constitution Act, 1982*, s 35, being Schedule B to the *Canada Act 1982* (UK), 1982, c 11.",
+          "*Canadian Charter of Rights and Freedoms*, s 7, Part I of the *Constitution Act, 1982*, being Schedule B to the *Canada Act 1982* (UK), 1982, c 11.",
+          "*Constitution Act, 1867* (UK), 30 & 31 Vict, c 3, s 91, reprinted in RSC 1985, Appendix II, No 5."
         ],
         "short_form_examples": [
           "Charter, s 15."
-        ]
+        ],
+        "template": "*Title*, | constitutional_reference | jurisdiction | year, | chapter, | other_info | pinpoint"
       },
       {
         "topic": "Point-in-Time Citations",
