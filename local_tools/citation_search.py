@@ -38,7 +38,7 @@ def classify_and_normalize(query: str) -> dict:
 
     try:
         t0 = time.time()
-        with prof.measure("llm.classify", model="deepseek-chat"):
+        with prof.measure("llm.classify", model=os.getenv("LLM_DEFAULT_MODEL", "deepseek-v4-flash")):
             content = ask_deepseek(prompt)
         if timing.ENABLE_TIMING:
             timing.report().add_llm("classify_and_normalize", time.time() - t0)
@@ -163,8 +163,8 @@ Rules:
 
     # ── 第 1 次 LLM 调用 ──
     t0 = time.time()
-    with prof.measure("llm.expand", model="deepseek-chat", attempt=1):
-        raw_first = ask_deepseek(prompt)
+    with prof.measure("llm.expand", model=os.getenv("LLM_CONCEPT_MODEL", "deepseek-v4-pro"), attempt=1):
+        raw_first = ask_deepseek(prompt, model=os.getenv("LLM_CONCEPT_MODEL", "deepseek-v4-pro"))
     if timing.ENABLE_TIMING:
         timing.report().add_llm("expand_concept (首次)", time.time() - t0)
     items = _parse_llm_output(raw_first)
@@ -175,8 +175,8 @@ Rules:
         fail_reason = _diagnose_parse_failure(raw_first)
         print(f"[WARN] expand_concept 首次解析失败: {fail_reason}")
         t0 = time.time()
-        with prof.measure("llm.expand", model="deepseek-chat", attempt=2):
-            raw_retry = ask_deepseek(prompt)
+        with prof.measure("llm.expand", model=os.getenv("LLM_CONCEPT_MODEL", "deepseek-v4-pro"), attempt=2):
+            raw_retry = ask_deepseek(prompt, model=os.getenv("LLM_CONCEPT_MODEL", "deepseek-v4-pro"))
         if timing.ENABLE_TIMING:
             timing.report().add_llm("expand_concept (重试)", time.time() - t0)
         items = _parse_llm_output(raw_retry)
