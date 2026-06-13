@@ -5,7 +5,7 @@ import requests
 from profiling import timing
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
-DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_MODEL = os.getenv("LLM_DEFAULT_MODEL", "deepseek-v4-flash")
 
 
 def _load_env():
@@ -35,7 +35,7 @@ def _get_api_key() -> str:
     return key
 
 
-def _call_deepseek(messages: list, temperature: float = 0) -> str:
+def _call_deepseek(messages: list, temperature: float = 0, model: str | None = None) -> str:
     """Internal: call DeepSeek API with messages, return response text."""
     api_key = _get_api_key()
     if not api_key:
@@ -43,8 +43,9 @@ def _call_deepseek(messages: list, temperature: float = 0) -> str:
             "DEEPSEEK_API_KEY not configured. "
             "Set it in .env or config/settings.py"
         )
+    actual_model = model or DEEPSEEK_MODEL
 
-    with timing.measure("http.deepseek", model=DEEPSEEK_MODEL):
+    with timing.measure("http.deepseek", model=actual_model):
         response = requests.post(
             DEEPSEEK_API_URL,
             headers={
@@ -52,7 +53,7 @@ def _call_deepseek(messages: list, temperature: float = 0) -> str:
                 "Content-Type": "application/json",
             },
             json={
-                "model": DEEPSEEK_MODEL,
+                "model": actual_model,
                 "messages": messages,
                 "temperature": temperature,
             },
@@ -62,9 +63,9 @@ def _call_deepseek(messages: list, temperature: float = 0) -> str:
     return response.json()["choices"][0]["message"]["content"]
 
 
-def ask_deepseek(prompt: str) -> str:
-    """Single-turn prompt, replaces ask_ollama."""
-    return _call_deepseek([{"role": "user", "content": prompt}])
+def ask_deepseek(prompt: str, model: str | None = None) -> str:
+    """Single-turn prompt."""
+    return _call_deepseek([{"role": "user", "content": prompt}], model=model)
 
 
 def chat_deepseek(messages: list) -> str:
