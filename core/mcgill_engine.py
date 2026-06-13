@@ -24,6 +24,16 @@ def get_last_debug() -> dict:
     }
 
 
+
+
+# 宪法性文件标题封闭集合（不依赖 A2AJ 验证）
+CONSTITUTIONAL_TITLES = {
+    "canadian charter of rights and freedoms",
+    "constitution act, 1867",
+    "constitution act, 1982",
+    "canada act 1982",
+}
+
 def detect_type(extracted_fields: dict) -> str:
     """根据提取字段自动判断 McGill 引用类型。"""
     keys = {k.lower().replace(" ", "_") for k, v in extracted_fields.items() if v is not None}
@@ -34,6 +44,11 @@ def detect_type(extracted_fields: dict) -> str:
     # 1. Jurisprudence
     if has("style_of_cause", "neutral_citation", "reporter"):
         return "jurisprudence"
+
+    # 1.5 Constitutional statutes（按标题前缀匹配，不依赖 A2AJ 字段）
+    title_val = (extracted_fields.get("statute_title") or "").strip().lower()
+    if any(title_val.startswith(t) for t in CONSTITUTIONAL_TITLES):
+        return "constitutional_statutes"
 
     # 2. Legislation (statute)
     if has("statute_title", "title") and has("jurisdiction", "chapter"):
@@ -105,6 +120,15 @@ def get_rules(detected_type: str) -> dict:
             "topics": filtered,
         }
 
+    if detected_type == "constitutional_statutes":
+        cat_data = rules_db.get("legislation", {})
+        all_t = cat_data.get("topics", [])
+        filtered = [t for t in all_t if t.get("topic") == "Constitutional Statutes"]
+        return {
+            "category": "Legislation",
+            "topics": filtered,
+        }
+
     direct_map = {
         "jurisprudence": "jurisprudence",
         "legislation": "legislation",
@@ -143,14 +167,23 @@ def build_prompt(extracted_fields: dict, detected_type: str, relevant_rules: dic
         )
     elif detected_type == "secondary_sources.journal_articles":
         italic_rules = (
-            "- YOU MUST italicize journal names using Markdown *asterisks*.\n"
-            "  Article titles go in quotation marks, not italics.\n"
-            "  Example: Jane Smith, \"Article Title\" (2020) 45 *McGill LJ* 123.\n"
+            "- Journal titles/abbreviations are in Roman (NOT italicized).\n"
+            "  Only the article title takes quotation marks.\n"
+            "  Author list: 1 author \"A\"; 2 authors \"A & B\"; 3 authors \"A, B & C\"; 4+ \"A et al\".\n"
+            "  Example: David M Tanovich, \"E-Racing Racial Profiling\" (2004) 41 Alta L Rev 905.\n"
+            "  Example: Rachel Cox & Karen Messing, \"...\" (2006) 24 Windsor YB Access Just 23.\n"
+            "  Example: Rafael La Porta et al, \"Law and Finance\" (1998) 106:6 Journal of Political Economy 1113.\n"
         )
     elif detected_type == "secondary_sources.books":
         italic_rules = (
             "- YOU MUST italicize book titles using Markdown *asterisks*.\n"
             "  Example: Jane Smith, *Book Title*, 2nd ed (Publisher, 2020).\n"
+        )
+    elif detected_type == "constitutional_statutes":
+        italic_rules = (
+            "- YOU MUST italicize the title of the constitutional statute using Markdown *asterisks*.\n"
+            "  Example: *Constitution Act, 1982*, s 35, being Schedule B to the *Canada Act 1982* (UK), 1982, c 11.\n"
+            "  Example: *Canadian Charter of Rights and Freedoms*, s 7, Part I of the *Constitution Act, 1982*, being Schedule B to the *Canada Act 1982* (UK), 1982, c 11.\n"
         )
     elif detected_type == "government_docs":
         italic_rules = (

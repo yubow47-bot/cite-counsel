@@ -52,21 +52,24 @@ def build_journal_citation(cr_data: dict) -> str:
     elif len(authors) == 1:
         a = authors[0]
         author_str = _format_author(a) + ", "
+    elif len(authors) == 2:
+        author_str = _format_author(authors[0]) + " & " + _format_author(authors[1]) + ", "
     elif len(authors) > 3:
         author_str = _format_author(authors[0]) + " et al, "
     else:
-        names = [_format_author(a) for a in authors]
-        author_str = ", ".join(names) + ", "
+        # exactly 3 authors: "A, B & C"
+        author_str = _format_author(authors[0]) + ", " + _format_author(authors[1]) \
+                     + " & " + _format_author(authors[2]) + ", "
 
     # ── Title ──
     title_raw = cr_data.get("title", [""])[0]
     title_str = f'"{title_raw}"' if title_raw else ""
 
-    # ── Journal (Markdown italic) ──
+    # ── Journal (Roman, not italic) ──
     journal_raw = cr_data.get("container-title", [""])
     if isinstance(journal_raw, list):
         journal_raw = journal_raw[0] if journal_raw else ""
-    journal_str = f" *{journal_raw}*" if journal_raw else ""
+    journal_str = f" {journal_raw}" if journal_raw else ""
 
     # ── Year ──
     date_parts = cr_data.get("published", {}).get("date-parts", [[None]])
