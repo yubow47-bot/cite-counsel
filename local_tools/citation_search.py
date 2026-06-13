@@ -11,6 +11,12 @@ from profiling import timing as prof
 
 def classify_and_normalize(query: str) -> dict:
     """判断输入类型并标准化。"""
+
+    # Bill 快速检测（"Bill C-22" / "bill s-2"），不调 LLM
+    bill_match = re.match(r"(?i)^bill\s+([A-Za-z]+-\d+)", query.strip())
+    if bill_match:
+        return {"type": "bill", "normalized": bill_match.group(1).upper(), "original": query.strip()}
+
     prompt = f"""你是加拿大法律引用专家。分析以下用户输入，完成两件事：
 1. 判断输入类型（只能是以下四种之一）：
    - citation_number：已知的引用号，如 "2022 SCC 39"、"[1999] 1 SCR 688"、"RSC 1985, c C-46"
@@ -427,7 +433,21 @@ def search_citation(query: str, classification: dict | None = None) -> list:
             "warning": "" if verified else "⚠️ 未能通过 A2AJ 验证，建议在 CanLII 手动确认",
         }]
 
-    # 4. concept：概念展开
+    # 4. bill：LEGISinfo 联邦法案（确定性组装，不过 LLM）
+    elif input_type == "bill":
+        from local_tools.legisinfo_api import find_bill, build_bill_citation, build_bill_scaffold
+        bill_rec = find_bill(normalized)
+        if bill_rec:
+            citation = build_bill_citation(bill_rec)
+            return [{"_bill_citation": citation, "verified": True, "style_of_cause": f"Bill {normalized}"}]
+        scaffold = build_bill_scaffold(normalized)
+        return [{
+            "_bill_citation": scaffold, "verified": False,
+            "style_of_cause": f"Bill {normalized}",
+            "warning": "⚠️ 当前会期未找到该法案，以下为格式脚手架",
+        }]
+
+    # 5. concept：概念展开
     elif input_type == "concept":
         return expand_concept(normalized)
 

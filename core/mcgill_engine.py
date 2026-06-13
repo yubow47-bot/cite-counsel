@@ -224,6 +224,14 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
     """
     global _last_prompt, _last_raw_response, _last_source
 
+    # ── Bill 确定性路径（LEGISinfo，不过 LLM） ──
+    bill_cit = extracted_fields.get("_bill_citation")
+    if bill_cit:
+        _last_prompt = "[LEGISinfo] " + (extracted_fields.get("style_of_cause", ""))
+        _last_raw_response = bill_cit
+        _last_source = "legisinfo"
+        return bill_cit
+
     # ── CrossRef 优先路径（仅 journal_article） ──
     if doc_type == "journal_article":
         raw_text = extracted_fields.get("raw_text", "") or ""
