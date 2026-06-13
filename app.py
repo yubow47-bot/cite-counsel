@@ -121,8 +121,8 @@ def tab1_search(query: str) -> tuple:
         return (gr.update(choices=[], value=None), "未找到匹配结果，请尝试其他关键词。", [],
                 route_debug, a2aj_debug, "N/A", "N/A", "N/A")
 
-    # citation_number / legislation → 直接输出 McGill 引用
-    if input_type in ("citation_number", "legislation"):
+    # citation_number / legislation / bill → 直接输出 McGill 引用
+    if input_type in ("citation_number", "legislation", "bill"):
         try:
             t0 = time.time()
             citation = format_citation(results[0])
