@@ -51,71 +51,8 @@ def classify_and_normalize(query: str) -> dict:
 
 
 
-def _diagnose_parse_failure(raw: str) -> str:
-    """Analyze raw LLM output to determine why _parse_llm_output failed."""
-    stripped = raw.strip()
-    # 1) Check for markdown code fences
-    if "```" in stripped:
-        # Check if fences are properly balanced
-        fence_count = stripped.count("```")
-        if fence_count < 2:
-            return f"unmatched_backtick_fence(count={fence_count})"
-        # Try stripping fences and re-parse
-        cleaned = re.sub(r'^```(?:json)?\s*', '', stripped)
-        cleaned = re.sub(r'\s*```$', '', cleaned).strip()
-        if cleaned:
-            try:
-                json.loads(cleaned)
-                return "fence_strippable_json_ok"  # fences were the only issue
-            except json.JSONDecodeError as e:
-                pos = e.pos
-                snippet = cleaned[max(0, pos-20):pos+20]
-                return f"fence_stripped_json_invalid(pos={pos}, snippet={snippet!r})"
-        else:
-            return "fence_only_no_content"
-    # 2) Try direct JSON parse (no fences)
-    try:
-        obj = json.loads(stripped)
-    except json.JSONDecodeError as e:
-        pos = e.pos
-        snippet = stripped[max(0, pos-20):pos+20]
-        return f"json_decode_error(pos={pos}, msg={e.msg}, snippet={snippet!r})"
-    # 3) JSON parsed but schema wrong
-    if isinstance(obj, dict):
-        if "candidates" not in obj:
-            keys = list(obj.keys())
-            return f"missing_candidates_key(keys={keys})"
-        cand = obj["candidates"]
-        if not isinstance(cand, list):
-            return f"candidates_not_list(type={type(cand).__name__})"
-        if len(cand) == 0:
-            return "empty_candidates_list"
-        return f"unknown_filter(parsed_ok_candidates={len(cand)})"
-    if isinstance(obj, list):
-        return f"top_level_list_not_dict(len={len(obj)})"
-    return f"unexpected_type(type={type(obj).__name__})"
-
-
-def _log_retry_event(query: str, attempt: int, raw: str,
-                     reason: str, succeeded: bool):
-    """Append one retry diagnostic record to profiling/expand_retry_log.jsonl."""
-    log_path = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)),
-        "profiling", "expand_retry_log.jsonl"
-    )
-    record = {
-        "input_concept": query,
-        "attempt": attempt,
-        "raw_response": raw,
-        "failure_reason": reason,
-        "finally_succeeded": succeeded,
-    }
-    try:
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+# (expand_concept 重试逻辑及相关诊断函数 _diagnose_parse_failure / _log_retry_event
+#  于 2026-06 移除：110 次调用 0 次重试，JSON 输出模式稳定)
 
 
 def expand_concept(query: str) -> list:
@@ -161,30 +98,16 @@ Rules:
             return candidates
         return None
 
-    # ── 第 1 次 LLM 调用 ──
+    # ── 单次 LLM 调用（重试逻辑于 2026-06 移除：110 次调用 0 次重试）──
     t0 = time.time()
-    with prof.measure("llm.expand", model=os.getenv("LLM_CONCEPT_MODEL", "deepseek-v4-pro"), attempt=1):
-        raw_first = ask_deepseek(prompt, model=os.getenv("LLM_CONCEPT_MODEL", "deepseek-v4-pro"))
+    with prof.measure("llm.expand", model=os.getenv("LLM_CONCEPT_MODEL", "deepseek-v4-pro")):
+        raw = ask_deepseek(prompt, model=os.getenv("LLM_CONCEPT_MODEL", "deepseek-v4-pro"))
     if timing.ENABLE_TIMING:
-        timing.report().add_llm("expand_concept (首次)", time.time() - t0)
-    items = _parse_llm_output(raw_first)
-
-    # ── 解析失败则重试一次 ──
-    if not items:
-        # 诊断：记录首次失败原因
-        fail_reason = _diagnose_parse_failure(raw_first)
-        print(f"[WARN] expand_concept 首次解析失败: {fail_reason}")
-        t0 = time.time()
-        with prof.measure("llm.expand", model=os.getenv("LLM_CONCEPT_MODEL", "deepseek-v4-pro"), attempt=2):
-            raw_retry = ask_deepseek(prompt, model=os.getenv("LLM_CONCEPT_MODEL", "deepseek-v4-pro"))
-        if timing.ENABLE_TIMING:
-            timing.report().add_llm("expand_concept (重试)", time.time() - t0)
-        items = _parse_llm_output(raw_retry)
-        _log_retry_event(query, 1, raw_first, fail_reason,
-                         succeeded=bool(items))
+        timing.report().add_llm("expand_concept", time.time() - t0)
+    items = _parse_llm_output(raw)
 
     if not items:
-        print(f"[WARN] expand_concept 重试后仍解析失败，返回空。")
+        print(f"[WARN] expand_concept 解析失败")
         return []
 
     # ── 并发验证 ──
