@@ -591,6 +591,14 @@
     "source_files": [
       "LAWS 2908D Week 3 Jurisprudence.pdf"
     ],
+    "template": "[style_of_cause], [neutral_citation].",
+    "fields": [
+      {"key": "style_of_cause", "label": "Style of Cause", "placeholder": "e.g. R v Oakes", "required": true},
+      {"key": "neutral_citation", "label": "Neutral Citation", "placeholder": "e.g. 2022 SCC 39"},
+      {"key": "year", "label": "Year", "placeholder": "YYYY"},
+      {"key": "court", "label": "Court", "placeholder": "e.g. SCC, BCCA"},
+      {"key": "page", "label": "Page / Pinpoint", "placeholder": "e.g. p 123"}
+    ],
     "topics": [
       {
         "topic": "What is in a Citation?",
@@ -683,6 +691,14 @@
     "category": "Legislation",
     "source_files": [
       "LAWS 2908D Winter 2026 Legislation.pdf"
+    ],
+    "template": "[title], [jurisdiction], [chapter] ([year]).",
+    "fields": [
+      {"key": "title", "label": "Statute Title", "placeholder": "e.g. Criminal Code", "required": true},
+      {"key": "jurisdiction", "label": "Jurisdiction", "placeholder": "e.g. RSC", "required": true},
+      {"key": "chapter", "label": "Chapter", "placeholder": "e.g. c C-46"},
+      {"key": "year", "label": "Year", "placeholder": "YYYY"},
+      {"key": "section", "label": "Section (optional)", "placeholder": "e.g. s 718.2(e)"}
     ],
     "topics": [
       {
@@ -844,6 +860,46 @@
           "SOR": "Statutory Orders and Regulations"
         }
       }
+    ]
+  },
+  "by_law": {
+    "category": "Municipal By-laws",
+    "template": "[name], By-law No [number] ([year]).",
+    "fields": [
+      {"key": "name", "label": "By-law Name", "placeholder": "e.g. Noise Control By-law", "required": true},
+      {"key": "number", "label": "By-law Number", "placeholder": "e.g. 2024-123", "required": true},
+      {"key": "year", "label": "Year", "placeholder": "YYYY", "required": true}
+    ]
+  },
+  "treaty": {
+    "category": "Treaties / International Agreements",
+    "template": "[name], [date], [citation].",
+    "fields": [
+      {"key": "name", "label": "Treaty Name", "placeholder": "e.g. North American Free Trade Agreement", "required": true},
+      {"key": "date", "label": "Date Signed", "placeholder": "YYYY-MM-DD"},
+      {"key": "citation", "label": "Citation / Treaty Series", "placeholder": "e.g. Can TS 1994 No 2"},
+      {"key": "parties", "label": "Parties", "placeholder": "e.g. Canada, United States, Mexico"}
+    ]
+  },
+  "foreign": {
+    "category": "Foreign Law",
+    "template": "[name], [citation] ([year]), [court].",
+    "fields": [
+      {"key": "name", "label": "Case / Statute Name", "placeholder": "e.g. Miranda v Arizona", "required": true},
+      {"key": "citation", "label": "Citation", "placeholder": "e.g. 384 US 436"},
+      {"key": "year", "label": "Year", "placeholder": "YYYY"},
+      {"key": "court", "label": "Court / Jurisdiction", "placeholder": "e.g. US Supreme Court, UKSC"}
+    ]
+  },
+  "bill": {
+    "category": "Bills",
+    "template": "Bill [number], [title], [session] Sess, [parliament] Parl, [year].",
+    "fields": [
+      {"key": "number", "label": "Bill Number", "placeholder": "e.g. C-22", "required": true},
+      {"key": "title", "label": "Title", "placeholder": "e.g. An Act respecting lawful access", "required": true},
+      {"key": "session", "label": "Session", "placeholder": "e.g. 1st"},
+      {"key": "parliament", "label": "Parliament", "placeholder": "e.g. 44th"},
+      {"key": "year", "label": "Year", "placeholder": "YYYY"}
     ]
   }
 }
