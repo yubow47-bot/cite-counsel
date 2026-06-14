@@ -3,6 +3,7 @@ import re
 import json
 import requests
 from profiling import timing
+from utils.json_util import parse_llm_json
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_MODEL = os.getenv("LLM_DEFAULT_MODEL", "deepseek-v4-flash")
@@ -92,30 +93,53 @@ def fetch_url_content(url: str) -> str:
         return f"Failed to fetch URL: {e}"
 
 
+def fetch_html(url: str, timeout: int = 15) -> str | None:
+    """用 curl_cffi 伪装 Chrome TLS 指纹抓 HTML，失败返回 None。"""
+    import curl_cffi.requests as cffi_requests
+    try:
+        r = cffi_requests.get(url, impersonate="chrome", timeout=timeout)
+        r.raise_for_status()
+        return r.text
+    except Exception:
+        return None
+
+
+def extract_url(url: str) -> str | None:
+    """抓取 + 解析。任一步失败返回 None，交给上层降级。"""
+    html = fetch_html(url)
+    if not html:
+        return None
+    import trafilatura
+    return trafilatura.extract(html, include_comments=False)
+
+
 def extract_from_url(url: str) -> dict:
-    """Fetch a URL with trafilatura and extract structured citation fields.
+    """Fetch a URL with curl_cffi and extract structured citation fields.
 
     Uses trafilatura's JSON output to get title, author, date, and sitename
     directly from the page metadata, without needing DeepSeek for extraction.
+    Returns a dict with ``"error"`` key on failure so the caller can degrade
+    to the manual scaffold.
     """
     import trafilatura
 
+    html = fetch_html(url)
+    if not html:
+        return {"url": url, "error": "This website blocked automatic fetching (anti-scraping). Please fill in the citation fields manually."}
+
     try:
-        downloaded = trafilatura.fetch_url(url)
-        if downloaded is None:
-            return {"url": url, "error": "trafilatura 未能下载该 URL"}
         result = trafilatura.extract(
-            downloaded,
+            html,
             output_format="json",
             with_metadata=True,
             include_comments=False,
         )
         if result is None:
-            return {"url": url, "error": "trafilatura 未能从页面提取到内容"}
-
-        meta = json.loads(result)
+            return {"url": url, "error": "trafilatura could not extract content from this page"}
+        meta = parse_llm_json(result)
     except Exception as e:
-        return {"url": url, "error": f"trafilatura 提取失败: {e}"}
+        print(f"[JSON解析] extract_from_url 失败: {e}  len={len(result) if result else 0}  result[:300]={result[:300]!r}")
+        return {"url": url, "error": f"Content extraction failed: {e}"}
 
     # 从 hostname 推断来源名称（去掉 .com/.org 等后缀）
     hostname = meta.get("hostname", "") or ""
@@ -123,7 +147,6 @@ def extract_from_url(url: str) -> dict:
     if not sitename:
         sitename = hostname
 
-    # 映射 trafilatura 字段 → McGill 引擎字段
     fields = {
         "url": url,
         "page_title": meta.get("title") or None,
@@ -131,7 +154,6 @@ def extract_from_url(url: str) -> dict:
         "date": meta.get("date") or None,
         "newspaper": sitename or None,
         "hostname": hostname,
-        # 留空让 detect_type 自己判断类型
         "style_of_cause": None,
         "neutral_citation": None,
         "statute_title": None,
