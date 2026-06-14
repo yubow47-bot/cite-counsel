@@ -326,6 +326,36 @@ def search_citation(query: str, classification: dict | None = None) -> list:
     input_type = classified["type"]
     normalized = classified["normalized"]
 
+    # ── 宪法性法条别名预分流 ──
+    # "charter" / "the charter" → 直接走 constitutional_statutes 路由（不进 legislation）
+    CONSTITUTIONAL_ALIASES = {
+        "charter": "Canadian Charter of Rights and Freedoms",
+        "the charter": "Canadian Charter of Rights and Freedoms",
+    }
+    query_lower = query.strip().lower()
+    constitutional_title = None
+    for _alias, _full_title in CONSTITUTIONAL_ALIASES.items():
+        if query_lower == _alias or query_lower.startswith(_alias + " "):
+            constitutional_title = _full_title
+            break
+
+    if constitutional_title:
+        # 从原始输入提取 pinpoint（"Charter s 7" → "s 7"）
+        pinpoint = None
+        for _alias, _full_title in CONSTITUTIONAL_ALIASES.items():
+            if query_lower == _alias or query_lower.startswith(_alias + " "):
+                _rem = query.strip()[len(_alias):].strip().lstrip(",").strip()
+                if _rem:
+                    pinpoint = _rem
+                break
+        return [{
+            "statute_title": constitutional_title,
+            "jurisdiction": None,
+            "chapter": None,
+            "pinpoint": pinpoint,
+            "verified": True,
+        }]
+
     # 1. citation_number：按引用号精确查
     if input_type == "citation_number":
         result = fetch_by_citation(normalized)
@@ -398,6 +428,24 @@ def search_citation(query: str, classification: dict | None = None) -> list:
             normalized
         )
         base_citation = cit_match.group(0).strip() if cit_match else normalized
+
+        # 从 normalized 中提取 pinpoint（base_citation 之后的部分）
+        # 如 "Youth Criminal Justice Act, SC 2002, c 1, s 3(1)(a)(ii)" → "s 3(1)(a)(ii)"
+        pinpoint = None
+        if cit_match:
+            remainder = normalized[cit_match.end():].strip().lstrip(",").strip()
+            if remainder:
+                pinpoint = remainder
+        else:
+            # cit_match 未命中时，尝试从末尾提取 pinpoint 模式
+            pin_match = re.search(
+                r'(?:,\s*)?((?:s|ss|art|cl|para|sub)\.?\s*[\d(][\d\w().,-]*(?:\s*\([\w\d]+\))*)\s*$',
+                normalized,
+                re.IGNORECASE
+            )
+            if pin_match:
+                pinpoint = pin_match.group(1)
+
         verified = False
         jurisdiction = None
         chapter = None
@@ -429,22 +477,34 @@ def search_citation(query: str, classification: dict | None = None) -> list:
             "statute_title": statute_title,
             "jurisdiction": jurisdiction,
             "chapter": chapter,
+            "pinpoint": pinpoint,
             "verified": verified,
             "warning": "" if verified else "⚠️ 未能通过 A2AJ 验证，建议在 CanLII 手动确认",
         }]
 
     # 4. bill：LEGISinfo 联邦法案（确定性组装，不过 LLM）
     elif input_type == "bill":
-        from local_tools.legisinfo_api import find_bill, build_bill_citation, build_bill_scaffold
+        from local_tools.legisinfo_api import find_bill, build_bill_citation
+
+        # 从原始输入提取 pinpoint（normalized 只含法案编号）
+        bill_pinpoint = None
+        bill_pin_match = re.search(
+            r"(?i)(?:s|ss|cl|art|para|sub)\.?\s*[\d(][\d\w().,-]*(?:\s*\([\w\d]+\))*\s*$",
+            query.strip()
+        )
+        if bill_pin_match:
+            bill_pinpoint = bill_pin_match.group(0).strip()
+
         bill_rec = find_bill(normalized)
         if bill_rec:
-            citation = build_bill_citation(bill_rec)
+            citation = build_bill_citation(bill_rec, pinpoint=bill_pinpoint)
             return [{"_bill_citation": citation, "verified": True, "style_of_cause": f"Bill {normalized}"}]
-        scaffold = build_bill_scaffold(normalized)
+        # LEGISinfo 未命中 → 不返回 _bill_citation（避免 format_citation 输出含 [占位符] 的假引用）
         return [{
-            "_bill_citation": scaffold, "verified": False,
+            "verified": False,
             "style_of_cause": f"Bill {normalized}",
-            "warning": "⚠️ 当前会期未找到该法案，以下为格式脚手架",
+            "bill_number": normalized,
+            "warning": "⚠️ 当前会期未找到该法案",
         }]
 
     # 5. concept：概念展开

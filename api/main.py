@@ -234,8 +234,8 @@ async def citation_query(body: CitationInput, request: Request):
     if route == "concept":
         return _handle_concept(results)
 
-    # ── citation_number / legislation with unverified result → needs_input ──
-    if route in ("citation_number", "legislation") and len(results) == 1:
+    # ── citation_number / legislation / bill with unverified result → needs_input ──
+    if route in ("citation_number", "legislation", "bill") and len(results) == 1:
         item = results[0]
         if not item.get("verified"):
             prefill = build_prefill(route, query, partial=item)

@@ -29,8 +29,8 @@ def citation_query_mode():
         print("未找到匹配结果，请尝试其他关键词。")
         return
 
-    # citation_number / legislation -> 直接输出
-    if input_type in ("citation_number", "legislation"):
+    # citation_number / legislation / bill -> 直接输出
+    if input_type in ("citation_number", "legislation", "bill"):
         try:
             citation = format_citation(results[0])
             if results[0].get("warning"):
