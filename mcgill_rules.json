@@ -901,5 +901,27 @@
       {"key": "parliament", "label": "Parliament", "placeholder": "e.g. 44th"},
       {"key": "year", "label": "Year", "placeholder": "YYYY"}
     ]
+  },
+  "news_online": {
+    "category": "News / Online Sources",
+    "template": "Author, \"[title]\", [newspaper] ([date]), [page].",
+    "fields": [
+      {"key": "author", "label": "Author", "placeholder": "e.g. Bill Curry"},
+      {"key": "title", "label": "Article Title", "placeholder": "e.g. PM, Premiers Work Out Deal", "required": true},
+      {"key": "newspaper", "label": "Newspaper / Site", "placeholder": "e.g. The Globe and Mail"},
+      {"key": "date", "label": "Date", "placeholder": "e.g. 26 November 2005"},
+      {"key": "page", "label": "Page / Pinpoint", "placeholder": "e.g. A4"},
+      {"key": "url", "label": "URL", "placeholder": "https://..."}
+    ]
+  },
+  "website": {
+    "category": "Websites",
+    "template": "Author, \"[title]\", ([date]), online: <[url]>.",
+    "fields": [
+      {"key": "author", "label": "Author", "placeholder": "e.g. Richard Gold"},
+      {"key": "title", "label": "Page Title", "placeholder": "e.g. The Midas Conundrum", "required": true},
+      {"key": "date", "label": "Date", "placeholder": "e.g. 25 April 2017"},
+      {"key": "url", "label": "URL", "placeholder": "https://...", "required": true}
+    ]
   }
 }

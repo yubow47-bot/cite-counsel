@@ -5,6 +5,7 @@ import time
 
 from llm_api.deepseek_api import ask_deepseek
 from local_tools.a2aj_api import fetch_by_citation, search_cases_multi, _map_fields, _extract_year, _extract_jurisdiction
+from utils.json_util import parse_llm_json
 from local_tools import timing_util as timing
 from profiling import timing as prof
 
@@ -42,11 +43,11 @@ def classify_and_normalize(query: str) -> dict:
             content = ask_deepseek(prompt)
         if timing.ENABLE_TIMING:
             timing.report().add_llm("classify_and_normalize", time.time() - t0)
-        result = json.loads(content)
+        result = parse_llm_json(content)
         if result.get("type") in ("citation_number", "case_name", "legislation", "concept"):
             return result
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[JSON解析] classify_and_normalize 失败: {e}  len={len(content)}  前200字: {content[:200]!r}")
     return {"type": "case_name", "normalized": query, "original": query}
 
 
@@ -90,8 +91,9 @@ Rules:
         cleaned = re.sub(r'\s*```$', '', cleaned)
         cleaned = cleaned.strip()
         try:
-            obj = json.loads(cleaned)
-        except json.JSONDecodeError:
+            obj = parse_llm_json(cleaned)
+        except (ValueError, json.JSONDecodeError) as e:
+            print(f"[JSON解析] expand_concept 解析失败: {e}  len={len(content)}  前200字: {content[:200]!r}")
             return None
         candidates = obj.get("candidates") if isinstance(obj, dict) else obj
         if isinstance(candidates, list):

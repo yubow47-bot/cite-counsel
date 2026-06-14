@@ -34,25 +34,37 @@ def get_scaffold_types() -> list[str]:
 
 
 def get_type_options() -> list[dict]:
-    """Return ``[{type, label}, …]`` for every scaffoldable type."""
+    """Return ``[{value, label}, …]`` for every scaffoldable type."""
     rules = _load_rules()
     options = []
     for key in get_scaffold_types():
         config = rules[key]
         label = config.get("category", key.replace("_", " ").title())
-        options.append({"type": key, "label": label})
+        options.append({"value": key, "label": label})
     return options
 
 
 def get_field_configs() -> dict[str, dict]:
-    """Return ``{type: {template, fields}, …}`` for every scaffoldable type."""
+    """Return ``{type: {template, fields}, …}`` for every scaffoldable type.
+    Fields are normalized: 'key' → 'name' (frontend schema).
+    """
     rules = _load_rules()
     configs = {}
     for key in get_scaffold_types():
         config = rules[key]
+        raw_fields = config.get("fields", [])
+        # Normalize key → name for frontend
+        fields = []
+        for f in raw_fields:
+            entry = {"name": f["key"], "label": f.get("label", f["key"])}
+            if f.get("placeholder"):
+                entry["placeholder"] = f["placeholder"]
+            if f.get("required"):
+                entry["required"] = True
+            fields.append(entry)
         configs[key] = {
             "template": config.get("template", ""),
-            "fields": config.get("fields", []),
+            "fields": fields,
         }
     return configs
 
@@ -67,6 +79,7 @@ SCAFFOLD_ELIGIBLE_ROUTES: set[str] = {
     "legislation",
     "concept",
     "bill",
+    "url",
 }
 
 SUGGESTED_TYPE_MAP: dict[str, str] = {
@@ -75,6 +88,7 @@ SUGGESTED_TYPE_MAP: dict[str, str] = {
     "legislation": "legislation",
     "concept": "jurisprudence",
     "bill": "bill",
+    "url": "news_online",
 }
 
 
@@ -148,6 +162,8 @@ def build_prefill(
             prefill["chapter"] = partial["chapter"]
     elif route == "bill":
         prefill["bill_number"] = (partial or {}).get("bill_number") or query
+    elif route == "url":
+        prefill["url"] = query
     elif route == "citation_number":
         prefill["neutral_citation"] = query
     elif route == "concept":

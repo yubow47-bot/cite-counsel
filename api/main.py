@@ -153,7 +153,7 @@ def _candidate_display(item: dict) -> str:
         item.get("style_of_cause")
         or item.get("statute_title")
         or item.get("name")
-        or "未知"
+        or "unknown"
     )
     cit = item.get("neutral_citation") or item.get("reporter", "")
     parts = [f"{badge} {name}"]
@@ -191,7 +191,7 @@ def _collect_debug_info(route_label: str):
 async def citation_query(body: CitationInput, request: Request):
     """Search legal citations.  Routes to direct format or candidate selection."""
     if not body.input or not body.input.strip():
-        return _envelope(False, "", "error", {}, error={"reason": "输入不能为空"})
+        return _envelope(False, "", "error", {}, error={"reason": "Input cannot be empty"})
 
     query = body.input.strip()
     _check_budget()
@@ -200,7 +200,7 @@ async def citation_query(body: CitationInput, request: Request):
     try:
         classified = classify_and_normalize(query)
     except Exception as e:
-        return _envelope(False, "", "error", {}, error={"reason": f"分类失败: {e}"})
+        return _envelope(False, "", "error", {}, error={"reason": f"Classification failed: {e}"})
 
     route = classified["type"]
 
@@ -209,7 +209,7 @@ async def citation_query(body: CitationInput, request: Request):
         results = search_citation(query, classification=classified)
     except Exception as e:
         return _envelope(
-            False, route, "error", {}, error={"reason": f"搜索失败: {e}"}
+            False, route, "error", {}, error={"reason": f"Search failed: {e}"}
         )
 
     if not results:
@@ -223,11 +223,11 @@ async def citation_query(body: CitationInput, request: Request):
                     "Fill in the fields below to generate a McGill 10th citation."
                 ),
                 "prefill": prefill,
-                "suggested_type": suggested,
+                "type": suggested,
             })
         return _envelope(
             True, route, "unsupported",
-            {}, error={"reason": "未找到匹配结果，请尝试其他关键词。"},
+            {}, error={"reason": "No matching results found. Try different keywords."},
         )
 
     # ── concept: multi-result, format each ──
@@ -246,7 +246,7 @@ async def citation_query(body: CitationInput, request: Request):
                     "Fill in the fields below to generate a McGill 10th citation."
                 ),
                 "prefill": prefill,
-                "suggested_type": suggested,
+                "type": suggested,
             })
 
     # ── case_name with multiple candidates → needs_selection ──
@@ -276,7 +276,7 @@ async def citation_query(body: CitationInput, request: Request):
     except Exception as e:
         return _envelope(
             True, route, "error", {},
-            error={"reason": f"格式化失败: {e}"},
+            error={"reason": f"Formatting failed: {e}"},
         )
 
 
@@ -291,7 +291,7 @@ def _handle_concept(results: list) -> dict:
                 "Fill in the fields below to generate a McGill 10th citation."
             ),
             "prefill": {"style_of_cause": "duty to consult"},
-            "suggested_type": suggested,
+            "type": suggested,
         })
     citations = []
     for item in results:
@@ -307,7 +307,7 @@ def _handle_concept(results: list) -> dict:
         except BudgetExceeded:
             raise
         except Exception as e:
-            citations.append({"citation": f"[格式化失败: {e}]", "source_case": source})
+            citations.append({"citation": f"[Formatting failed: {e}]", "source_case": source})
     debug = _collect_debug_info("concept")
     return _envelope(True, "concept", "done", {"citations": citations}, debug=debug)
 
@@ -320,11 +320,11 @@ def _handle_concept(results: list) -> dict:
 async def citation_select(body: CitationSelectInput):
     """Format citation from a previously-returned candidate (no server state)."""
     if not body.candidates:
-        return _envelope(False, "", "error", {}, error={"reason": "candidates 不能为空"})
+        return _envelope(False, "", "error", {}, error={"reason": "candidates cannot be empty"})
     if body.selected_index < 0 or body.selected_index >= len(body.candidates):
         return _envelope(
             False, "", "error", {},
-            error={"reason": f"selected_index {body.selected_index} 超出范围 (0-{len(body.candidates)-1})"},
+            error={"reason": f"selected_index {body.selected_index} out of range (0-{len(body.candidates)-1})"},
         )
 
     _check_budget()
@@ -344,7 +344,7 @@ async def citation_select(body: CitationSelectInput):
     except Exception as e:
         return _envelope(
             True, "select", "error", {},
-            error={"reason": f"格式化失败: {e}"},
+            error={"reason": f"Formatting failed: {e}"},
         )
 
 
@@ -361,7 +361,7 @@ async def extract_file(file: UploadFile = File(...)):
     if len(contents) > MAX_BYTES:
         return _envelope(
             False, "", "error", {},
-            error={"reason": f"文件过大（{len(contents)/1024/1024:.1f} MB），上限 {MAX_UPLOAD_MB} MB"},
+            error={"reason": f"File too large ({len(contents)/1024/1024:.1f} MB). Maximum is {MAX_UPLOAD_MB} MB"},
         )
 
     # ── Save to temp file (extract_from_file reads by path) ──
@@ -390,7 +390,7 @@ async def extract_file(file: UploadFile = File(...)):
     except Exception as e:
         return _envelope(
             True, "file", "error", {},
-            error={"reason": f"文件处理失败: {e}"},
+            error={"reason": f"File processing failed: {e}"},
         )
     finally:
         try:
@@ -405,20 +405,27 @@ async def extract_file(file: UploadFile = File(...)):
 
 @app.post("/api/extract/url")
 async def extract_url(body: UrlInput):
-    """Extract citation fields from a web page via trafilatura + format."""
+    """Extract citation fields from a web page via curl_cffi + trafilatura.
+    Falls back to manual scaffold on failure (anti-scraping, timeout, etc.).
+    """
     if not body.url or not body.url.strip():
-        return _envelope(False, "", "error", {}, error={"reason": "URL 不能为空"})
+        return _envelope(False, "", "error", {}, error={"reason": "URL cannot be empty"})
 
     _check_budget()
 
-    try:
-        fields = extract_from_url(body.url.strip())
-        if "error" in fields:
-            return _envelope(
-                True, "url", "error", {},
-                error={"reason": fields["error"]},
-            )
+    url = body.url.strip()
+    fields = extract_from_url(url)
+    if "error" in fields:
+        # 抓取失败 → 路由到脚手架，让用户手填
+        error_msg = fields["error"]
+        prefill = {"url": url}
+        return _envelope(True, "url", "needs_input", {
+            "message": error_msg,
+            "prefill": prefill,
+            "type": "news_online",
+        })
 
+    try:
         citation = format_citation(fields)
         tracker.increment()
         debug = _collect_debug_info("url")
@@ -432,7 +439,7 @@ async def extract_url(body: UrlInput):
     except Exception as e:
         return _envelope(
             True, "url", "error", {},
-            error={"reason": f"URL 处理失败: {e}"},
+            error={"reason": f"URL processing failed: {e}"},
         )
 
 
@@ -444,7 +451,7 @@ async def extract_url(body: UrlInput):
 async def chat(body: ChatInput):
     """Multi-turn chat with DeepSeek (non-streaming)."""
     if not body.messages:
-        return _envelope(False, "", "error", {}, error={"reason": "messages 不能为空"})
+        return _envelope(False, "", "error", {}, error={"reason": "messages cannot be empty"})
 
     _check_budget()
 
@@ -458,7 +465,7 @@ async def chat(body: ChatInput):
     except Exception as e:
         return _envelope(
             True, "chat", "error", {},
-            error={"reason": f"对话失败: {e}"},
+            error={"reason": f"Chat failed: {e}"},
         )
 
 
@@ -478,7 +485,7 @@ async def feedback(body: FeedbackInput):
     """
     verdict = body.verdict.strip().lower()
     if verdict not in ("up", "down"):
-        return _envelope(False, "", "error", {}, error={"reason": "verdict 必须为 'up' 或 'down'"})
+        return _envelope(False, "", "error", {}, error={"reason": "verdict must be 'up' or 'down'"})
 
     record = {
         "input": body.input,
@@ -497,7 +504,7 @@ async def feedback(body: FeedbackInput):
     except Exception as e:
         return _envelope(
             True, body.route, "error", {},
-            error={"reason": f"反馈保存失败: {e}"},
+            error={"reason": f"Feedback save failed: {e}"},
         )
 
 
@@ -543,7 +550,7 @@ async def citation_assemble(body: AssemblyInput):
     if body.type not in configs:
         return _envelope(
             False, body.type, "error", {},
-            error={"reason": f"未知引用类型: {body.type}"},
+            error={"reason": f"Unknown citation type: {body.type}"},
         )
 
     try:
@@ -554,7 +561,7 @@ async def citation_assemble(body: AssemblyInput):
     except Exception as e:
         return _envelope(
             True, body.type, "error", {},
-            error={"reason": f"组装失败: {e}"},
+            error={"reason": f"Assembly failed: {e}"},
         )
 
 
@@ -578,7 +585,7 @@ async def rate_limit_middleware(request: Request, call_next):
                 "status": "error",
                 "data": {},
                 "debug": None,
-                "error": {"reason": "请求过于频繁，请稍后再试。"},
+                "error": {"reason": "Too many requests. Please try again later."},
             },
         )
     return await call_next(request)
