@@ -1,7 +1,7 @@
 """Thread-safe lightweight profiler for the citation pipeline.
 
 Usage — context manager:
-    with timing.measure("llm.classify", model="deepseek-chat"):
+    with timing.measure("llm.classify", model="deepseek-v4-flash"):
         result = ask_deepseek(prompt)
 
 Usage — decorator:
