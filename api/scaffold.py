@@ -146,6 +146,8 @@ def build_prefill(
         prefill["title"] = (partial or {}).get("statute_title") or query
         if partial and partial.get("chapter"):
             prefill["chapter"] = partial["chapter"]
+    elif route == "bill":
+        prefill["bill_number"] = (partial or {}).get("bill_number") or query
     elif route == "citation_number":
         prefill["neutral_citation"] = query
     elif route == "concept":

@@ -123,6 +123,10 @@ def tab1_search(query: str) -> tuple:
 
     # bill → LEGISinfo 确定性路径，不过 A2AJ/detect_type/LLM
     if input_type == "bill":
+        if not results[0].get("verified"):
+            return (gr.update(choices=[], value=None),
+                    f"⚠️ {results[0].get('warning', '未能在 LEGISinfo 验证该法案')}", [],
+                    route_debug, "N/A（bill 路由不走 A2AJ）", "N/A", "N/A", "N/A")
         try:
             t0 = time.time()
             citation = format_citation(results[0])

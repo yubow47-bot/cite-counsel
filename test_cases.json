@@ -1,0 +1,29 @@
+{
+  "description": "McGill citation test cases. gold_citation=TODO 表示待实际运行后填入预期值。",
+  "cases": [
+    {
+      "id": "legislation-pinpoint-001",
+      "input": "ycja s. 3(1)(a)(ii)",
+      "route": "legislation",
+      "gold_citation": "Youth Criminal Justice Act, SC 2002, c 1, s 3(1)(a)(ii).",
+      "source": "seed",
+      "covers": "legislation pinpoint 提取回归"
+    },
+    {
+      "id": "constitutional-pinpoint-001",
+      "input": "Charter s 7",
+      "route": "constitutional_statutes",
+      "gold_citation": "TODO核对",
+      "source": "seed",
+      "covers": "constitutional_statutes pinpoint fallback regex"
+    },
+    {
+      "id": "bill-pinpoint-001",
+      "input": "Bill C-22 cl 5(1)(e)",
+      "route": "bill",
+      "gold_citation": "TODO核对",
+      "source": "seed",
+      "covers": "bill pinpoint 独立提取"
+    }
+  ]
+}
