@@ -1,4 +1,5 @@
 import json
+import re
 import time
 
 from llm_api.deepseek_api import ask_deepseek
@@ -24,8 +25,6 @@ def get_last_debug() -> dict:
     }
 
 
-
-
 # 宪法性文件标题封闭集合（不依赖 A2AJ 验证）
 CONSTITUTIONAL_TITLES = {
     "canadian charter of rights and freedoms",
@@ -33,6 +32,166 @@ CONSTITUTIONAL_TITLES = {
     "constitution act, 1982",
     "canada act 1982",
 }
+
+# 编号型法规前缀（用于 leg.regulation_numbered 判别）
+_NUMBERED_REG_PATTERN = re.compile(
+    r'^(SOR|SI|CRC|O\s*Reg|Alta\s*reg|Man\s*Reg|NS\s*Reg|NB\s*Reg|'
+    r'Nfld\s*Reg|NWT\s*Reg|Nu\s*Reg|PEI\s*Reg|Sask\s*Reg|'
+    r'Yukon\s*Reg|BC\s*Reg|Ont\s*Reg|Que\s*Reg)[/\s,]',
+    re.IGNORECASE
+)
+
+
+def _is_numbered_regulation(title: str) -> bool:
+    """Check if a statute_title is a numbered-only regulation (no descriptive text)."""
+    return bool(_NUMBERED_REG_PATTERN.match(title.strip()))
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  SUBPATTERN_TEMPLATES — 子模式对应的 template + 1~2 条 examples
+#  TODO(clean-room): 回收进 mcgill_rules.json 后删此常量，改为从 JSON 加载
+# ═══════════════════════════════════════════════════════════════════
+
+SUBPATTERN_TEMPLATES: dict[str, dict] = {
+    "juris.neutral": {
+        "category": "Jurisprudence — Neutral Citation Only",
+        "topics": [
+            {
+                "topic": "Neutral Citation (no parallel)",
+                "template": "",
+                # Source: mcgill_rules.json > jurisprudence > Neutral Citation ex[0]
+                "examples": [
+                    "R v King, 2002 SCC 10."
+                ],
+            }
+        ],
+    },
+    "juris.neutral_parallel": {
+        "category": "Jurisprudence — Neutral + Parallel",
+        "topics": [
+            {
+                "topic": "Neutral Citation with Parallel Reporter",
+                "template": "",
+                # Source: mcgill_rules.json > jurisprudence > Neutral Citation ex[1]
+                "examples": [
+                    "R v King, 2002 SCC 10, [2002] 1 SCR 227."
+                ],
+            }
+        ],
+    },
+    # [REVIEW: Shixian] 待 McGill 10th 确认权威。
+    # 此格式 (StyleOfCause, Reporter) 在 mcgill_rules.json jurisprudence topics 中无归类依据，
+    # 但 "R v Gladue, [1999] 1 SCR 688." (见于 Ibid for Cases topic) 形态一致，暂保留。
+    # 例字符串不会注入 prompt；prompt 接收时以"{category}"说明替代。
+    "juris.reported_only": {
+        "category": "Jurisprudence — Reported Only (no neutral)",
+        "topics": [
+            {
+                "topic": "Reporter Only",
+                "template": "",
+                "examples": [
+                    "R v Oakes, [1986] 1 SCR 103."
+                ],
+            }
+        ],
+    },
+    "leg.statute": {
+        "category": "Legislation — Statutes (descriptive title)",
+        "topics": [
+            {
+                "topic": "Statutes – General Form",
+                "template": "Title, | statute volume | jurisdiction | year, | chapter, | other indexing elements, | (session or supplement), | pinpoint",
+                # Source: mcgill_rules.json > legislation > Statutes – General Form ex[2]
+                "examples": [
+                    "Criminal Code, RSC 1985, c C-46, s 718.2(e)."
+                ],
+            }
+        ],
+    },
+    "leg.constitutional": {
+        "category": "Legislation — Constitutional Statutes",
+        "topics": [
+            {
+                "topic": "Constitutional Statutes",
+                "template": "*Title*, | constitutional_reference | jurisdiction | year, | chapter, | other_info | pinpoint",
+                # Source: mcgill_rules.json > legislation > Constitutional Statutes ex[0]
+                "examples": [
+                    "*Constitution Act, 1982*, s 35, being Schedule B to the *Canada Act 1982* (UK), 1982, c 11."
+                ],
+            }
+        ],
+    },
+}
+
+
+def _normalize_title(title: str) -> str:
+    """Normalize title for CONSTITUTIONAL_TITLES matching: lowercase, strip, remove commas, collapse whitespace."""
+    import re as _re
+    return _re.sub(r'\s+', ' ', title.lower().strip().replace(',', ''))
+
+
+# Pre-normalized CONSTITUTIONAL_TITLES for matching (same normalization applied at definition time)
+_NORMALIZED_CONSTITUTIONAL_TITLES = {_normalize_title(t) for t in CONSTITUTIONAL_TITLES}
+
+
+def select_subpattern(detected_type: str, fields: dict) -> str | None:
+    """Deterministically select a subpattern based on detected_type and available fields.
+
+    Pure function — no LLM, no side effects, no I/O.
+    Returns a subpattern key (e.g. 'juris.neutral') or None to fall back to full-topic behavior.
+
+    Jurisprudence priority:
+        neutral + reporter       → juris.neutral_parallel
+        neutral, no reporter     → juris.neutral
+        no neutral, has reporter → juris.reported_only
+        otherwise                → None
+        (juris.unreported: intentionally None — no authoritative example in mcgill_rules.json)
+
+    Legislation priority:
+        title matches CONSTITUTIONAL_TITLES  → leg.constitutional
+        has descriptive title                → leg.statute
+        otherwise                            → None
+        (leg.regulation_numbered: intentionally None — no authoritative example in mcgill_rules.json)
+
+    Other detected_type → always returns None.
+    """
+    if detected_type == "jurisprudence":
+        has_neutral = bool(fields.get("neutral_citation"))
+        has_reporter = bool(fields.get("reporter"))
+
+        if has_neutral and has_reporter:
+            return "juris.neutral_parallel"
+        if has_neutral and not has_reporter:
+            return "juris.neutral"
+        if not has_neutral and has_reporter:
+            return "juris.reported_only"
+        # juris.unreported: not enough authoritative examples in mcgill_rules.json.
+        # Falls back to full-topic LLM behavior (return None).
+        return None
+
+    if detected_type == "legislation":
+        statute_title = (fields.get("statute_title") or fields.get("title") or "").strip()
+        if not statute_title:
+            return None
+
+        # Constitutional — check normalized title prefix
+        title_normalized = _normalize_title(statute_title)
+        if any(title_normalized.startswith(t) for t in _NORMALIZED_CONSTITUTIONAL_TITLES):
+            return "leg.constitutional"
+
+        # Numbered-only regulations (SOR/xxxx, O Reg xxx/xx, etc.):
+        # No authoritative examples in mcgill_rules.json → return None to fall back to full-topic LLM behavior.
+        if _is_numbered_regulation(statute_title):
+            return None
+
+        # Has descriptive title → statute
+        if statute_title:
+            return "leg.statute"
+
+        return None
+
+    return None
+
 
 def detect_type(extracted_fields: dict) -> str:
     """根据提取字段自动判断 McGill 引用类型。"""
@@ -47,7 +206,8 @@ def detect_type(extracted_fields: dict) -> str:
 
     # 1.5 Constitutional statutes（按标题前缀匹配，不依赖 A2AJ 字段）
     title_val = (extracted_fields.get("statute_title") or "").strip().lower()
-    if any(title_val.startswith(t) for t in CONSTITUTIONAL_TITLES):
+    title_val_norm = _normalize_title(title_val)
+    if any(title_val_norm.startswith(t) for t in _NORMALIZED_CONSTITUTIONAL_TITLES):
         return "constitutional_statutes"
 
     # 2. Legislation (statute)
@@ -93,8 +253,19 @@ def detect_type(extracted_fields: dict) -> str:
     return "general_rules"
 
 
-def get_rules(detected_type: str) -> dict:
-    """从 mcgill_rules.json 读取并返回与类型相关的规则片段。"""
+def get_rules(detected_type: str, subpattern: str | None = None) -> dict:
+    """从 mcgill_rules.json 读取并返回与类型相关的规则片段。
+
+    Args:
+        detected_type: detect_type() 或 doc_type 映射的结果。
+        subpattern: 可选。当不为 None 时，只返回该子模式对应的 template + 1~2 条 examples，
+                    不返回整个 type 的所有 topics。
+    """
+    # ── Subpattern mode: return narrow slice ──
+    if subpattern and subpattern in SUBPATTERN_TEMPLATES:
+        return dict(SUBPATTERN_TEMPLATES[subpattern])
+
+    # ── Full-topic mode (original behavior, subpattern is None) ──
     with open(RULES_PATH, "r", encoding="utf-8") as f:
         rules_db = json.load(f)
 
@@ -146,13 +317,37 @@ def get_rules(detected_type: str) -> dict:
     return {"category": "General Rules", "topics": []}
 
 
-def build_prompt(extracted_fields: dict, detected_type: str, relevant_rules: dict) -> str:
-    """将字段与规则拼成传给 DeepSeek 的 prompt。"""
-    rules_text = json.dumps(relevant_rules, ensure_ascii=False, indent=2)
-    rules_text = rules_text.replace(" | ", " ").replace("|", "")
-    fields_text = json.dumps(extracted_fields, ensure_ascii=False, indent=2)
+def _build_italic_rules(detected_type: str, subpattern: str | None = None) -> str:
+    """按 detected_type / subpattern 生成斜体规则文本。
 
-    # 按来源类型添加斜体规则（mcgill_rules.json 要求）
+    subpattern 不为 None 时优先按子模式选规则，不再让 LLM 自己判断。
+    subpattern 为 None 时维持原有的 detected_type 行为。
+    """
+    # ── Subpattern-specific italic rules ──
+    if subpattern:
+        if subpattern.startswith("juris."):
+            # All jurisprudence subpatterns italicize the case name
+            return (
+                "- YOU MUST italicize the case name using Markdown *asterisks*.\n"
+                "  Example: *R v Sharma*, 2022 SCC 39, [2022] 3 SCR 147.\n"
+            )
+
+        if subpattern == "leg.statute":
+            return (
+                "- YOU MUST italicize the title using Markdown *asterisks*, followed by a non-italicized comma.\n"
+                "  Example: *Criminal Code*, RSC 1985, c C-46.\n"
+            )
+        if subpattern == "leg.constitutional":
+            return (
+                "- YOU MUST italicize the title of the constitutional statute using Markdown *asterisks*.\n"
+                "  Example: *Constitution Act, 1982*, s 35, being Schedule B to the *Canada Act 1982* (UK), 1982, c 11.\n"
+                "  Example: *Canadian Charter of Rights and Freedoms*, s 7, Part I of the *Constitution Act, 1982*, being Schedule B to the *Canada Act 1982* (UK), 1982, c 11.\n"
+            )
+
+        # Fallback for unknown subpattern: no italic instruction
+        return ""
+
+    # ── Legacy detected_type-based italic rules (original behavior) ──
     italic_rules = ""
     if detected_type == "jurisprudence":
         italic_rules = (
@@ -161,9 +356,13 @@ def build_prompt(extracted_fields: dict, detected_type: str, relevant_rules: dic
         )
     elif detected_type == "legislation":
         italic_rules = (
-            "- YOU MUST italicize the statute title using Markdown *asterisks*,\n"
-            "  followed by a non-italicized comma.\n"
+            "- CASE A: Statutes and regulations WITH a descriptive title —\n"
+            "  italicize the title using Markdown *asterisks*, followed by a non-italicized comma.\n"
             "  Example: *Criminal Code*, RSC 1985, c C-46.\n"
+            "  Example: *Migratory Birds Regulations*, CRC, c 1035, s 4.\n"
+            "- CASE B: Regulations WITHOUT a descriptive title\n"
+            "  (identified only by a number like SOR/2000-111 or O Reg 426/00) —\n"
+            "  Do NOT italicize anything. Output the entire citation in Roman as-is.\n"
         )
     elif detected_type == "secondary_sources.journal_articles":
         italic_rules = (
@@ -189,6 +388,26 @@ def build_prompt(extracted_fields: dict, detected_type: str, relevant_rules: dic
         italic_rules = (
             "- Do NOT italicize Indigenous constitutional documents.\n"
         )
+
+    # ── EXTENSION (not implemented yet): ──
+    # 1) Short titles [Bell] — italicized for cases and statutes (McGill 10th p5).
+    # 2) ibid / supra — italicized (McGill 10th p6).
+    # These will be added as italic_rules and/or a post-processing step in the Extension phase.
+    # ── End of Extension notes ──
+
+    return italic_rules
+
+
+def build_prompt(extracted_fields: dict, detected_type: str, relevant_rules: dict, subpattern: str | None = None) -> str:
+    """将字段与规则拼成传给 DeepSeek 的 prompt。
+
+    当 subpattern 不为 None 时，斜体规则按子模式选取，不再让 LLM 做 CASE A/B 判断。
+    """
+    rules_text = json.dumps(relevant_rules, ensure_ascii=False, indent=2)
+    rules_text = rules_text.replace(" | ", " ").replace("|", "")
+    fields_text = json.dumps(extracted_fields, ensure_ascii=False, indent=2)
+
+    italic_rules = _build_italic_rules(detected_type, subpattern)
 
     return f"""You are a McGill legal citation formatter.
 Format the following information into a proper McGill citation.
@@ -266,8 +485,14 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
         detected_type = type_map.get(doc_type, "general_rules")
     else:
         detected_type = detect_type(extracted_fields)
-    relevant_rules = get_rules(detected_type)
-    prompt = build_prompt(extracted_fields, detected_type, relevant_rules)
+
+    # ── 第二层：确定性子模式路由 ──
+    subpattern = select_subpattern(detected_type, extracted_fields)
+
+    # ── 按子模式（或全 topics）取规则 ──
+    relevant_rules = get_rules(detected_type, subpattern=subpattern)
+    prompt = build_prompt(extracted_fields, detected_type, relevant_rules, subpattern=subpattern)
+
     t0 = time.time()
     with prof.measure("llm.format", model=os.getenv("LLM_DEFAULT_MODEL", "deepseek-v4-flash")):
         result = ask_deepseek(prompt)
