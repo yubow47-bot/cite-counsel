@@ -282,7 +282,11 @@ async def citation_query(body: CitationInput, request: Request):
 
 
 def _handle_concept(results: list) -> dict:
-    """Format each concept-expansion result individually."""
+    """Handle concept-expansion results with needs_selection for multiple candidates.
+
+    Mirrors the case_name branch: single result → format directly;
+    multiple results → return candidates, defer format to /api/citation/select.
+    """
     if not results:
         # Concept expansion returned nothing — offer scaffold fallback
         suggested = SUGGESTED_TYPE_MAP.get("concept", "jurisprudence")
@@ -294,23 +298,36 @@ def _handle_concept(results: list) -> dict:
             "prefill": {"style_of_cause": "duty to consult"},
             "type": suggested,
         })
-    citations = []
-    for item in results:
-        source = (
-            item.get("style_of_cause")
-            or item.get("statute_title")
-            or item.get("name", "")
+
+    # Multiple candidates → defer format to /api/citation/select
+    if len(results) > 1:
+        candidates = []
+        for item in results:
+            candidates.append({
+                "display": _candidate_display(item),
+                **item,
+            })
+        return _envelope(True, "concept", "needs_selection", {
+            "candidates": candidates,
+        })
+
+    # Single result → format directly
+    try:
+        citation = format_citation(results[0])
+        tracker.increment()
+        debug = _collect_debug_info("concept")
+        return _envelope(
+            True, "concept", "done",
+            {"citations": [{"citation": citation}]},
+            debug=debug,
         )
-        try:
-            cit = format_citation(item)
-            citations.append({"citation": cit, "source_case": source})
-            tracker.increment()  # each format may call LLM
-        except BudgetExceeded:
-            raise
-        except Exception as e:
-            citations.append({"citation": f"[Formatting failed: {e}]", "source_case": source})
-    debug = _collect_debug_info("concept")
-    return _envelope(True, "concept", "done", {"citations": citations}, debug=debug)
+    except BudgetExceeded:
+        raise
+    except Exception as e:
+        return _envelope(
+            True, "concept", "error", {},
+            error={"reason": f"Formatting failed: {e}"},
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════
