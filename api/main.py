@@ -22,8 +22,7 @@ if str(_PROJ) not in sys.path:
     sys.path.insert(0, str(_PROJ))
 
 # ── API-local modules ──
-from api.spend_tracker import tracker, BudgetExceeded
-from api.rate_limiter import RateLimiter
+from api.rate_limiter import RateLimiter, extract_client_ip
 from api.scaffold import (
     assemble,
     build_prefill,
@@ -32,6 +31,9 @@ from api.scaffold import (
     SCAFFOLD_ELIGIBLE_ROUTES,
     SUGGESTED_TYPE_MAP,
 )
+
+# ── Spend cap tracker ──
+from core.spend_tracker import spend_tracker
 
 # ── Existing pipeline imports (no changes to these modules) ──
 from local_tools.citation_search import classify_and_normalize, search_citation
@@ -163,11 +165,21 @@ def _candidate_display(item: dict) -> str:
     return " — ".join(parts)
 
 
-def _check_budget():
-    """Raise BudgetExceeded if daily DeepSeek limit reached."""
-    ok, reason = tracker.check()
-    if not ok:
-        raise BudgetExceeded(reason)
+def _check_spend_cap():
+    """Return a 503 JSONResponse if the daily spend cap is reached, else None."""
+    if spend_tracker.is_over_cap():
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "route": "",
+                "status": "error",
+                "data": {},
+                "debug": None,
+                "error": {"reason": "Daily service capacity reached. Please try again tomorrow."},
+            },
+        )
+    return None
 
 
 def _collect_debug_info(route_label: str):
@@ -194,8 +206,11 @@ async def citation_query(body: CitationInput, request: Request):
     if not body.input or not body.input.strip():
         return _envelope(False, "", "error", {}, error={"reason": "Input cannot be empty"})
 
+    cap_block = _check_spend_cap()
+    if cap_block:
+        return cap_block
+
     query = body.input.strip()
-    _check_budget()
 
     # ── Step 1: classify ──
     try:
@@ -265,15 +280,12 @@ async def citation_query(body: CitationInput, request: Request):
     # ── single result → format directly ──
     try:
         citation = format_citation(results[0])
-        tracker.increment()
         debug = _collect_debug_info(route)
         return _envelope(
             True, route, "done",
             {"citations": [{"citation": citation}]},
             debug=debug,
         )
-    except BudgetExceeded:
-        raise
     except Exception as e:
         return _envelope(
             True, route, "error", {},
@@ -314,15 +326,12 @@ def _handle_concept(results: list) -> dict:
     # Single result → format directly
     try:
         citation = format_citation(results[0])
-        tracker.increment()
         debug = _collect_debug_info("concept")
         return _envelope(
             True, "concept", "done",
             {"citations": [{"citation": citation}]},
             debug=debug,
         )
-    except BudgetExceeded:
-        raise
     except Exception as e:
         return _envelope(
             True, "concept", "error", {},
@@ -345,20 +354,20 @@ async def citation_select(body: CitationSelectInput):
             error={"reason": f"selected_index {body.selected_index} out of range (0-{len(body.candidates)-1})"},
         )
 
-    _check_budget()
+    cap_block = _check_spend_cap()
+    if cap_block:
+        return cap_block
+
     item = body.candidates[body.selected_index]
 
     try:
         citation = format_citation(item)
-        tracker.increment()
         debug = _collect_debug_info("select")
         return _envelope(
             True, "select", "done",
             {"citations": [{"citation": citation}]},
             debug=debug,
         )
-    except BudgetExceeded:
-        raise
     except Exception as e:
         return _envelope(
             True, "select", "error", {},
@@ -389,13 +398,14 @@ async def extract_file(file: UploadFile = File(...)):
         tmp_path = tmp.name
 
     try:
-        _check_budget()
+        cap_block = _check_spend_cap()
+        if cap_block:
+            return cap_block
+
         fields = extract_from_file(tmp_path)
         doc_type = classify_document_type(fields.get("raw_text", ""))
-        tracker.increment()  # classify_document_type calls DeepSeek
 
         citation = format_citation(fields, doc_type=doc_type)
-        tracker.increment()  # format_citation may call DeepSeek
         debug = _collect_debug_info("file")
 
         return _envelope(True, "file", "done", {
@@ -403,8 +413,6 @@ async def extract_file(file: UploadFile = File(...)):
             "doc_type": doc_type,
         }, debug=debug)
 
-    except BudgetExceeded:
-        raise
     except Exception as e:
         return _envelope(
             True, "file", "error", {},
@@ -426,7 +434,7 @@ async def extract_url(body: UrlInput):
     """Extract citation via DOI / ISBN (deterministic) or URL (trafilatura).
 
     Priority: doi > isbn > url.  Only URL path falls back to manual scaffold.
-    tracker.increment() only for DeepSeek calls (deterministic hits skip it).
+    Spend tracked at the chokepoint (_call_deepseek / _call_gemini), not here.
     """
     doi = (body.doi or "").strip()
     isbn = (body.isbn or "").strip()
@@ -436,22 +444,19 @@ async def extract_url(body: UrlInput):
     if not doi and not isbn and not url:
         return _envelope(False, "", "error", {}, error={"reason": "Provide a URL, DOI, or ISBN."})
 
-    _check_budget()
+    cap_block = _check_spend_cap()
+    if cap_block:
+        return cap_block
 
     # ── DOI → journal_article (CrossRef deterministic path) ──
     if doi:
         fields = {"raw_text": doi, "url": url or ""}
         try:
             citation = format_citation(fields, doc_type="journal_article")
-            src = get_last_debug().get("source", "")
-            if src in ("deepseek", "deepseek_fallback"):
-                tracker.increment()
             debug = _collect_debug_info("url")
             return _envelope(True, "url", "done", {
                 "citations": [{"citation": citation}],
             }, debug=debug)
-        except BudgetExceeded:
-            raise
         except Exception as e:
             return _envelope(
                 True, "url", "error", {},
@@ -463,15 +468,10 @@ async def extract_url(body: UrlInput):
         fields = {"raw_text": isbn}
         try:
             citation = format_citation(fields, doc_type="book")
-            src = get_last_debug().get("source", "")
-            if src in ("deepseek", "deepseek_fallback"):
-                tracker.increment()
             debug = _collect_debug_info("url")
             return _envelope(True, "url", "done", {
                 "citations": [{"citation": citation}],
             }, debug=debug)
-        except BudgetExceeded:
-            raise
         except Exception as e:
             return _envelope(
                 True, "url", "error", {},
@@ -491,17 +491,12 @@ async def extract_url(body: UrlInput):
 
     try:
         citation = format_citation(fields)
-        src = get_last_debug().get("source", "")
-        if src in ("deepseek", "deepseek_fallback"):
-            tracker.increment()
         debug = _collect_debug_info("url")
 
         return _envelope(True, "url", "done", {
             "citations": [{"citation": citation}],
         }, debug=debug)
 
-    except BudgetExceeded:
-        raise
     except Exception as e:
         return _envelope(
             True, "url", "error", {},
@@ -519,15 +514,14 @@ async def chat(body: ChatInput):
     if not body.messages:
         return _envelope(False, "", "error", {}, error={"reason": "messages cannot be empty"})
 
-    _check_budget()
+    cap_block = _check_spend_cap()
+    if cap_block:
+        return cap_block
 
     try:
         messages = [{"role": m.role, "content": m.content} for m in body.messages]
         reply = chat_deepseek(messages)
-        tracker.increment()
         return _envelope(True, "chat", "done", {"reply": reply})
-    except BudgetExceeded:
-        raise
     except Exception as e:
         return _envelope(
             True, "chat", "error", {},
@@ -544,10 +538,10 @@ FEEDBACK_FILE = _PROJ / "data" / "feedback.jsonl"
 
 @app.post("/api/feedback")
 async def feedback(body: FeedbackInput):
-    """Record user feedback (up/down) to data/feedback.jsonl.
+    """Record user feedback (up/down) to local JSONL + HF Dataset.
 
-    Verdict must be "up" or "down".  Payload appended as JSONL for later
-    upload to HF Dataset.
+    Local write is fast and always attempted first; HF Dataset write is
+    fire-and-forget (background thread) — never blocks the response.
     """
     verdict = body.verdict.strip().lower()
     if verdict not in ("up", "down"):
@@ -562,16 +556,37 @@ async def feedback(body: FeedbackInput):
         "timestamp": __import__("datetime").datetime.now().isoformat(),
     }
 
+    # ── Local write (fast, always attempted) ──
     try:
         FEEDBACK_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(FEEDBACK_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
-        return _envelope(True, body.route, "done", {})
     except Exception as e:
         return _envelope(
             True, body.route, "error", {},
             error={"reason": f"Feedback save failed: {e}"},
         )
+
+    # ── HF Dataset write (fire-and-forget; never blocks the response) ──
+    import asyncio
+    asyncio.get_event_loop().run_in_executor(
+        None, _persist_feedback_hf, record,
+    )
+
+    return _envelope(True, body.route, "done", {})
+
+
+def _persist_feedback_hf(record: dict) -> None:
+    """Write feedback to HF Dataset in background thread. Never raises."""
+    try:
+        from core.hf_store import append_record
+        ok = append_record(record, filename="feedback.jsonl")
+        if not ok:
+            logger = __import__("logging").getLogger(__name__)
+            logger.warning("Feedback HF Dataset write returned False")
+    except Exception:
+        logger = __import__("logging").getLogger(__name__)
+        logger.warning("Feedback HF Dataset write failed", exc_info=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -637,11 +652,12 @@ async def citation_assemble(body: AssemblyInput):
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    # Skip rate limiting for health check
-    if request.url.path == "/api/health":
+    # Free endpoints — no rate limiting
+    free_paths = {"/api/health", "/api/feedback", "/api/scaffold/config", "/api/citation/assemble"}
+    if request.url.path in free_paths:
         return await call_next(request)
 
-    ip = request.client.host if request.client else "unknown"
+    ip = extract_client_ip(request)
     if not rate_limiter.check(ip):
         return JSONResponse(
             status_code=429,
@@ -651,26 +667,9 @@ async def rate_limit_middleware(request: Request, call_next):
                 "status": "error",
                 "data": {},
                 "debug": None,
-                "error": {"reason": "Too many requests. Please try again later."},
+                "error": {"reason": "Too many requests. Please slow down and retry shortly."},
             },
         )
     return await call_next(request)
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  Budget-exceeded handler
-# ═══════════════════════════════════════════════════════════════════
-
-@app.exception_handler(BudgetExceeded)
-async def budget_exceeded_handler(request: Request, exc: BudgetExceeded):
-    return JSONResponse(
-        status_code=429,
-        content={
-            "ok": False,
-            "route": "",
-            "status": "error",
-            "data": {},
-            "debug": None,
-            "error": {"reason": str(exc)},
-        },
-    )
