@@ -5,6 +5,7 @@ import time
 from llm_api.deepseek_api import ask_deepseek
 from local_tools import timing_util as timing
 from local_tools.crossref_api import extract_doi, fetch_crossref, build_journal_citation
+from local_tools.openlibrary_api import extract_isbn, validate_isbn, fetch_openlibrary, build_book_citation
 from profiling import timing as prof
 
 import os
@@ -464,7 +465,21 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
                 _last_raw_response = result
                 _last_source = "crossref"
                 return result
-        # CrossRef 未命中 → 由 LLM 兜底
+        _last_source = "deepseek_fallback"
+
+    # ── Open Library 优先路径（仅 book，镜像 CrossRef 写法） ──
+    if doc_type == "book":
+        raw_text = extracted_fields.get("raw_text", "") or ""
+        isbn = extract_isbn(raw_text)
+        if isbn and validate_isbn(isbn):
+            ol_data = fetch_openlibrary(isbn)
+            if ol_data:
+                result = build_book_citation(ol_data)
+                if result:
+                    _last_prompt = f"[OpenLibrary] ISBN: {isbn}"
+                    _last_raw_response = result
+                    _last_source = "openlibrary"
+                    return result
         _last_source = "deepseek_fallback"
 
     # ── 常规 type → detect_type 映射 ──

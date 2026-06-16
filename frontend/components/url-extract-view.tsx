@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { AlertCircle, Link2, Loader2 } from "lucide-react"
+import { AlertCircle, FileText, Link2, Loader2, BookOpen } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScaffoldForm } from "@/components/scaffold-form"
@@ -13,6 +13,8 @@ import { postExtractUrl, type Envelope } from "@/lib/citation-api"
 
 export function UrlExtractView() {
   const [url, setUrl] = useState("")
+  const [doi, setDoi] = useState("")
+  const [isbn, setIsbn] = useState("")
   const [submittedUrl, setSubmittedUrl] = useState("")
   const [loading, setLoading] = useState(false)
   const [view, setView] = useState<ExtractView>({ kind: "idle" })
@@ -54,14 +56,20 @@ export function UrlExtractView() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    const trimmed = url.trim()
-    if (!trimmed || loading) return
+    const trimmedUrl = url.trim()
+    const trimmedDoi = doi.trim()
+    const trimmedIsbn = isbn.trim()
+    if ((!trimmedUrl && !trimmedDoi && !trimmedIsbn) || loading) return
 
     setLoading(true)
-    setSubmittedUrl(trimmed)
+    setSubmittedUrl(trimmedUrl || trimmedDoi || trimmedIsbn)
     setView({ kind: "idle" })
     try {
-      const env = await postExtractUrl(trimmed)
+      const env = await postExtractUrl({
+        url: trimmedUrl || undefined,
+        doi: trimmedDoi || undefined,
+        isbn: trimmedIsbn || undefined,
+      })
       applyEnvelope(env)
     } catch (err) {
       setView({
@@ -76,27 +84,65 @@ export function UrlExtractView() {
     }
   }
 
+  const hasInput = url.trim().length > 0 || doi.trim().length > 0 || isbn.trim().length > 0
+
   return (
     <div className="flex flex-col gap-6">
-      <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-        <label htmlFor="url-input" className="sr-only">
-          Enter the URL of the page to extract citations from
-        </label>
-        <Input
-          id="url-input"
-          type="url"
-          inputMode="url"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://www.canlii.org/en/ca/scc/doc/1986/..."
-          disabled={loading}
-          className="bg-card font-mono text-sm"
-        />
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        {/* URL */}
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="url-input" className="text-sm font-medium text-foreground">
+            URL
+          </label>
+          <Input
+            id="url-input"
+            type="url"
+            inputMode="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://www.canlii.org/en/ca/scc/doc/..."
+            disabled={loading}
+            className="bg-card font-mono text-sm"
+          />
+        </div>
+
+        {/* DOI */}
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="doi-input" className="text-sm font-medium text-foreground">
+            DOI
+          </label>
+          <Input
+            id="doi-input"
+            type="text"
+            value={doi}
+            onChange={(e) => setDoi(e.target.value)}
+            placeholder="10.1006/bbrc.2001.4705"
+            disabled={loading}
+            className="bg-card font-mono text-sm"
+          />
+        </div>
+
+        {/* ISBN */}
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="isbn-input" className="text-sm font-medium text-foreground">
+            ISBN
+          </label>
+          <Input
+            id="isbn-input"
+            type="text"
+            value={isbn}
+            onChange={(e) => setIsbn(e.target.value)}
+            placeholder="978-0-19-957685-7"
+            disabled={loading}
+            className="bg-card font-mono text-sm"
+          />
+        </div>
+
         <div className="flex items-center justify-between gap-3">
           <p className="text-xs text-muted-foreground">
-            Supports case law databases, legislation pages, and other public web pages
+            Enter a URL, DOI, or ISBN to extract a McGill citation
           </p>
-          <Button type="submit" disabled={loading || url.trim().length === 0} className="gap-2">
+          <Button type="submit" disabled={loading || !hasInput} className="gap-2">
             {loading ? (
               <>
                 <Loader2 className="size-4 animate-spin" aria-hidden="true" />
@@ -104,7 +150,7 @@ export function UrlExtractView() {
               </>
             ) : (
               <>
-                <Link2 className="size-4" aria-hidden="true" />
+                <FileText className="size-4" aria-hidden="true" />
                 Extract Citation
               </>
             )}
@@ -119,7 +165,7 @@ export function UrlExtractView() {
           aria-live="polite"
         >
           <Loader2 className="size-4 animate-spin text-primary" aria-hidden="true" />
-          Fetching page and extracting citations. Please wait…
+          Fetching and extracting citation. Please wait…
         </div>
       ) : scaffold ? (
         <div className="flex flex-col gap-4">

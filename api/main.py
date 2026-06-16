@@ -1,7 +1,6 @@
 """McGill Citation Tool — FastAPI HTTP wrapper.
 
-Keeps Gradio running alongside (app.py untouched).
-Adds REST API at /api/* for Next.js frontend (v0-generated) and future Chrome Extension.
+Adds REST API at /api/* for Next.js frontend and future Chrome Extension.
 
 Run:  uvicorn api.main:app --reload --port 8000
 """
@@ -81,7 +80,9 @@ class CitationSelectInput(BaseModel):
 
 
 class UrlInput(BaseModel):
-    url: str
+    url: Optional[str] = None
+    doi: Optional[str] = None
+    isbn: Optional[str] = None
 
 
 class ChatMessage(BaseModel):
@@ -405,18 +406,64 @@ async def extract_file(file: UploadFile = File(...)):
 
 @app.post("/api/extract/url")
 async def extract_url(body: UrlInput):
-    """Extract citation fields from a web page via curl_cffi + trafilatura.
-    Falls back to manual scaffold on failure (anti-scraping, timeout, etc.).
+    """Extract citation via DOI / ISBN (deterministic) or URL (trafilatura).
+
+    Priority: doi > isbn > url.  Only URL path falls back to manual scaffold.
+    tracker.increment() only for DeepSeek calls (deterministic hits skip it).
     """
-    if not body.url or not body.url.strip():
-        return _envelope(False, "", "error", {}, error={"reason": "URL cannot be empty"})
+    doi = (body.doi or "").strip()
+    isbn = (body.isbn or "").strip()
+    url = (body.url or "").strip()
+
+    # ── All empty ──
+    if not doi and not isbn and not url:
+        return _envelope(False, "", "error", {}, error={"reason": "Provide a URL, DOI, or ISBN."})
 
     _check_budget()
 
-    url = body.url.strip()
+    # ── DOI → journal_article (CrossRef deterministic path) ──
+    if doi:
+        fields = {"raw_text": doi, "url": url or ""}
+        try:
+            citation = format_citation(fields, doc_type="journal_article")
+            src = get_last_debug().get("source", "")
+            if src in ("deepseek", "deepseek_fallback"):
+                tracker.increment()
+            debug = _collect_debug_info("url")
+            return _envelope(True, "url", "done", {
+                "citations": [{"citation": citation}],
+            }, debug=debug)
+        except BudgetExceeded:
+            raise
+        except Exception as e:
+            return _envelope(
+                True, "url", "error", {},
+                error={"reason": f"DOI processing failed: {e}"},
+            )
+
+    # ── ISBN → book (Open Library deterministic path) ──
+    if isbn:
+        fields = {"raw_text": isbn}
+        try:
+            citation = format_citation(fields, doc_type="book")
+            src = get_last_debug().get("source", "")
+            if src in ("deepseek", "deepseek_fallback"):
+                tracker.increment()
+            debug = _collect_debug_info("url")
+            return _envelope(True, "url", "done", {
+                "citations": [{"citation": citation}],
+            }, debug=debug)
+        except BudgetExceeded:
+            raise
+        except Exception as e:
+            return _envelope(
+                True, "url", "error", {},
+                error={"reason": f"ISBN processing failed: {e}"},
+            )
+
+    # ── URL-only (existing behaviour, unchanged) ──
     fields = extract_from_url(url)
     if "error" in fields:
-        # 抓取失败 → 路由到脚手架，让用户手填
         error_msg = fields["error"]
         prefill = {"url": url}
         return _envelope(True, "url", "needs_input", {
@@ -427,7 +474,9 @@ async def extract_url(body: UrlInput):
 
     try:
         citation = format_citation(fields)
-        tracker.increment()
+        src = get_last_debug().get("source", "")
+        if src in ("deepseek", "deepseek_fallback"):
+            tracker.increment()
         debug = _collect_debug_info("url")
 
         return _envelope(True, "url", "done", {

@@ -89,9 +89,13 @@ export async function postExtractFile(file: File): Promise<Envelope> {
   return json as Envelope
 }
 
-/** POST /api/extract/url —— 提交 URL 提取引用 */
-export async function postExtractUrl(url: string): Promise<Envelope> {
-  return request("/api/extract/url", { url })
+/** POST /api/extract/url —— 提交 URL / DOI / ISBN 提取引用 */
+export async function postExtractUrl(args: {
+  url?: string
+  doi?: string
+  isbn?: string
+}): Promise<Envelope> {
+  return request("/api/extract/url", args)
 }
 
 /** GET /api/scaffold/config —— 获取手动填写表单的类型与字段配置 */

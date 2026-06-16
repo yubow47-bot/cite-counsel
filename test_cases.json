@@ -97,6 +97,23 @@
       "gold_citation": "*Constitution Act, 1982*, s 35, being Schedule B to the *Canada Act 1982* (UK), 1982, c 11.",
       "source": "mcgill_rules.json > legislation > Constitutional Statutes ex[0]",
       "covers": "leg.constitutional: constitutional statute, italicized"
+    },
+    {
+      "id": "book-openlibrary-001",
+      "input": "ISBN: 978-0-19-957685-7",
+      "route": "openlibrary",
+      "doc_type": "book",
+      "gold_citation": "[REVIEW: Shixian] 预期: Jane Doe, Test Book (Oxford: Oxford University Press, 2005). 需实测 Open Library 真实返回后确认",
+      "source": "mcgill_rules.json > secondary_sources > Books / Monographs",
+      "covers": "openlibrary deterministic: ISBN-13 → fetch_openlibrary → build_book_citation"
+    },
+    {
+      "id": "book-deterministic-001",
+      "input": "David Gilles Telecommunications Law",
+      "route": "secondary_sources.books",
+      "gold_citation": "[REVIEW: Shixian] 预期: David Gilles, Telecommunications Law (London, UK: Buttersworths, 2003). 来源 mcgill_rules.json Books ex[0]。非确定性 path 走 LLM，结果可能浮动",
+      "source": "mcgill_rules.json > secondary_sources > Books / Monographs ex[0]",
+      "covers": "book: LLM 兜底路径，验证 template 被正确跟随"
     }
   ]
 }
