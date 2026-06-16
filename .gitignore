@@ -11,6 +11,9 @@ config/settings.py
 # 日志
 *.log
 
+# 一次性审计传递件，不进版本控制
+REVIEW_REQUEST.md
+
 # 调试 / 临时文件
 debug_prompt.txt
 diag_result.json
