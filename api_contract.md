@@ -218,12 +218,22 @@ Max size: `MAX_UPLOAD_MB` (env, default 10 MB).  Exceeding returns
 
 ---
 
-### 4. POST `/api/extract/url` — URL citation extract
+### 4. POST `/api/extract/url` — URL / DOI / ISBN citation extract
 
 **Request:**
 ```json
 { "url": "https://..." }
 ```
+or
+```json
+{ "doi": "10.1006/bbrc.2001.4705" }
+```
+or
+```json
+{ "isbn": "978-0-19-957685-7" }
+```
+All three fields are optional; at least one must be non-empty.
+Priority: doi → isbn → url.
 
 **Response:** same shape as `/api/extract/file` (minus `doc_type`).
 
@@ -371,5 +381,3 @@ lookup.  Result is always `verified: false`.
 - **Backend**: FastAPI → HF Spaces / Render / Railway
 - Latency across Pacific (A2AJ in Canada, DeepSeek in China) — measure after
   deployment with real traffic, don't trust dev-machine numbers.
-- Gradio (`app.py`) and FastAPI coexist; Gradio keeps running at `:7860` for
-  manual testing of file / URL / chat tabs.
