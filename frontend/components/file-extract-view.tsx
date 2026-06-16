@@ -92,7 +92,7 @@ export function FileExtractView() {
               Click to select a file, or drag and drop here
             </span>
             <span className="text-xs text-muted-foreground">
-              Supports PDF, Word, TXT, and other document formats
+              Supports PDF, Word, images (screenshots / scans), and other document formats
             </span>
           </div>
         </button>
@@ -100,7 +100,7 @@ export function FileExtractView() {
           ref={inputRef}
           type="file"
           className="sr-only"
-          accept=".pdf,.doc,.docx,.txt,.rtf"
+          accept=".pdf,.doc,.docx,.txt,.rtf,.jpg,.jpeg,.png,.webp"
           onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
         />
 
