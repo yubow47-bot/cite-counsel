@@ -1,8 +1,16 @@
 import os
 
+# ── 扫描件判定阈值：文字不足此数视为扫描件 ──
+SCANNED_THRESHOLD = 50
+
 
 def extract_from_file(file_path: str) -> dict:
-    """根据文件扩展名自动选择提取方式，返回结构化字段。"""
+    """根据文件扩展名自动选择提取方式，返回结构化字段。
+
+    图片（.jpg/.jpeg/.png/.webp）→ Kimi 视觉提取。
+    PDF 文字不足 {SCANNED_THRESHOLD} 字 → 降级为 Kimi 视觉提取（前 3 页渲染）。
+    PDF 文字足够 → 现有文本管线。
+    """
     ext = os.path.splitext(file_path)[1].lower()
 
     if ext == ".docx":
@@ -13,6 +21,9 @@ def extract_from_file(file_path: str) -> dict:
         return _extract_pptx(file_path)
     elif ext in (".xlsx", ".xls"):
         return _extract_xlsx(file_path)
+    elif ext in (".jpg", ".jpeg", ".png", ".webp"):
+        from llm_api.kimi_api import extract_from_image
+        return extract_from_image(file_path)
     else:
         return {"raw_input": f"Unsupported file type: {ext}"}
 
@@ -21,7 +32,6 @@ def _extract_docx(file_path: str) -> dict:
     from docx import Document
     doc = Document(file_path)
 
-    # 提取核心属性
     props = doc.core_properties
     text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
 
@@ -39,15 +49,46 @@ def _extract_pdf(file_path: str) -> dict:
 
     text = ""
     with pdfplumber.open(file_path) as pdf:
-        for page in pdf.pages[:5]:  # 只取前5页提取关键信息
+        for page in pdf.pages[:5]:
             page_text = page.extract_text()
             if page_text:
                 text += page_text + "\n"
+
+    # ── 无文字层降级：不足阈值 → 视觉提取 ──
+    if len(text.strip()) < SCANNED_THRESHOLD:
+        return _extract_pdf_scanned(file_path)
 
     return {
         "title":    _guess_title(text),
         "raw_text": text[:3000],
     }
+
+
+def _extract_pdf_scanned(file_path: str) -> dict:
+    """Render first 3 pages of a scanned PDF as images and run Kimi vision."""
+    import fitz
+
+    image_paths = []
+    try:
+        doc = fitz.open(file_path)
+        for i in range(min(3, len(doc))):
+            page = doc.load_page(i)
+            pix = page.get_pixmap(dpi=200)
+            # Write to a temporary PNG file
+            tmp_path = f"{file_path}.page{i}.png"
+            pix.save(tmp_path)
+            image_paths.append(tmp_path)
+
+        from llm_api.kimi_api import extract_from_images
+        result = extract_from_images(image_paths)
+        return result
+    finally:
+        # Cleanup temporary files
+        for p in image_paths:
+            try:
+                os.unlink(p)
+            except Exception:
+                pass
 
 
 def _extract_pptx(file_path: str) -> dict:
