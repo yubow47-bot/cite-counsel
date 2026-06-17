@@ -11,7 +11,7 @@ import {
 } from "@/components/extract-results"
 import { postExtractUrl, type Envelope } from "@/lib/citation-api"
 
-export function UrlExtractView() {
+export function UrlExtractView({ autoFocus }: { autoFocus?: boolean }) {
   const [url, setUrl] = useState("")
   const [doi, setDoi] = useState("")
   const [isbn, setIsbn] = useState("")
@@ -96,6 +96,7 @@ export function UrlExtractView() {
           </label>
           <Input
             id="url-input"
+            autoFocus={autoFocus}
             type="url"
             inputMode="url"
             value={url}
@@ -104,6 +105,10 @@ export function UrlExtractView() {
             disabled={loading}
             className="bg-card font-mono text-sm"
           />
+          <p className="text-xs text-muted-foreground">
+            Some sites block scraping — if a link fails, upload a full-page
+            screenshot instead.
+          </p>
         </div>
 
         {/* DOI */}
