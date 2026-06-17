@@ -27,7 +27,7 @@ type View =
   | { kind: "unsupported"; reason: string }
   | { kind: "error"; reason: string }
 
-export function CitationTool() {
+export function CitationTool({ autoFocus }: { autoFocus?: boolean }) {
   const [input, setInput] = useState("")
   const [submittedInput, setSubmittedInput] = useState("")
   const [loading, setLoading] = useState(false)
@@ -126,6 +126,7 @@ export function CitationTool() {
         </label>
         <Textarea
           id="citation-input"
+          autoFocus={autoFocus}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Paste a case name, statute, or decision, e.g. R v Oakes [1986] 1 SCR 103"
