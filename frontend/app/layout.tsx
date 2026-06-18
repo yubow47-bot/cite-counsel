@@ -24,23 +24,11 @@ const lora = localFont({
 })
 
 export const metadata: Metadata = {
-  title: "McGill Citation Generator",
-  description: "McGill-formatted citations for Canadian legal writing",
-  generator: "v0.app",
+  title: "McGill Legal Citation Tool (10th ed)",
+  description: "Free McGill Guide (10th ed) legal citation tool for Canadian law students. Verified against real legal databases — A2AJ, CrossRef, Open Library. Not AI guesswork.",
   icons: {
     icon: [
-      {
-        url: "/icon-light-32x32.png",
-        media: "(prefers-color-scheme: light)",
-      },
-      {
-        url: "/icon-dark-32x32.png",
-        media: "(prefers-color-scheme: dark)",
-      },
-      {
-        url: "/icon.svg",
-        type: "image/svg+xml",
-      },
+      { url: "/icon.svg", type: "image/svg+xml" },
     ],
     apple: "/apple-icon.png",
   },
