@@ -46,6 +46,7 @@ from core.mcgill_engine import format_citation, get_last_debug, detect_type, get
 # ═══════════════════════════════════════════════════════════════════
 
 DEBUG = os.getenv("DEBUG_RESPONSES", "false").lower() in ("1", "true", "yes")
+SCAFFOLD_ENABLED = os.getenv("SCAFFOLD_ENABLED", "false").lower() in ("1", "true", "yes")
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "10"))
 ALLOWED_ORIGINS = [
     o.strip()
@@ -196,6 +197,47 @@ def _collect_debug_info(route_label: str):
     }
 
 
+# ── Scaffold gating ───────────────────────────────────────────────────
+
+_SCAFFOLD_DISABLED_MSG = (
+    "We couldn't verify this against our legal databases, so no citation was "
+    "generated. This tool currently covers sources it can verify — cases, "
+    "legislation, journals, and books."
+)
+
+_SCAFFOLD_DISABLED_MSG_URL = (
+    "We couldn't read this URL (some sites block automated access). "
+    "Try uploading a full-page screenshot instead."
+)
+
+
+def _scaffold_response(
+    route: str,
+    message: str,
+    *,
+    prefill: dict | None = None,
+    suggested_type: str | None = None,
+    disabled_message: str | None = None,
+) -> dict:
+    """Return needs_input when scaffold is enabled, unsupported when disabled.
+
+    When disabled, returns an unsupported envelope with ``disabled_message``
+    (falls back to ``message`` when no specific disabled_message given).
+    """
+    if SCAFFOLD_ENABLED:
+        data: dict = {"message": message}
+        if prefill:
+            data["prefill"] = prefill
+        if suggested_type:
+            data["type"] = suggested_type
+        return _envelope(True, route, "needs_input", data)
+
+    return _envelope(
+        True, route, "unsupported", {},
+        error={"reason": disabled_message or message},
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  1. POST /api/citation  —  Citation query (hero flow)
 # ═══════════════════════════════════════════════════════════════════
@@ -233,14 +275,13 @@ async def citation_query(body: CitationInput, request: Request):
         if route in SCAFFOLD_ELIGIBLE_ROUTES:
             prefill = build_prefill(route, query)
             suggested = SUGGESTED_TYPE_MAP.get(route, route)
-            return _envelope(True, route, "needs_input", {
-                "message": (
-                    "Could not verify against our databases. "
-                    "Fill in the fields below to generate a McGill 10th citation."
-                ),
-                "prefill": prefill,
-                "type": suggested,
-            })
+            return _scaffold_response(
+                route,
+                "Could not verify against our databases. Fill in the fields below to generate a McGill 10th citation.",
+                prefill=prefill,
+                suggested_type=suggested,
+                disabled_message=_SCAFFOLD_DISABLED_MSG,
+            )
         return _envelope(
             True, route, "unsupported",
             {}, error={"reason": "No matching results found. Try different keywords."},
@@ -250,20 +291,19 @@ async def citation_query(body: CitationInput, request: Request):
     if route == "concept":
         return _handle_concept(results)
 
-    # ── citation_number / legislation / bill with unverified result → needs_input ──
+    # ── citation_number / legislation / bill with unverified result → scaffold or unsupported ──
     if route in ("citation_number", "legislation", "bill") and len(results) == 1:
         item = results[0]
         if not item.get("verified"):
             prefill = build_prefill(route, query, partial=item)
             suggested = SUGGESTED_TYPE_MAP.get(route, route)
-            return _envelope(True, route, "needs_input", {
-                "message": (
-                    "Could not verify against our databases. "
-                    "Fill in the fields below to generate a McGill 10th citation."
-                ),
-                "prefill": prefill,
-                "type": suggested,
-            })
+            return _scaffold_response(
+                route,
+                "Could not verify against our databases. Fill in the fields below to generate a McGill 10th citation.",
+                prefill=prefill,
+                suggested_type=suggested,
+                disabled_message=_SCAFFOLD_DISABLED_MSG,
+            )
 
     # ── case_name with multiple candidates → needs_selection ──
     if route == "case_name" and len(results) > 1:
@@ -302,14 +342,13 @@ def _handle_concept(results: list) -> dict:
     if not results:
         # Concept expansion returned nothing — offer scaffold fallback
         suggested = SUGGESTED_TYPE_MAP.get("concept", "jurisprudence")
-        return _envelope(True, "concept", "needs_input", {
-            "message": (
-                "Could not verify against our databases. "
-                "Fill in the fields below to generate a McGill 10th citation."
-            ),
-            "prefill": {"style_of_cause": "duty to consult"},
-            "type": suggested,
-        })
+        return _scaffold_response(
+            "concept",
+            "Could not verify against our databases. Fill in the fields below to generate a McGill 10th citation.",
+            prefill={"style_of_cause": "duty to consult"},
+            suggested_type=suggested,
+            disabled_message=_SCAFFOLD_DISABLED_MSG,
+        )
 
     # Multiple candidates → defer format to /api/citation/select
     if len(results) > 1:
@@ -403,6 +442,12 @@ async def extract_file(file: UploadFile = File(...)):
             return cap_block
 
         fields = extract_from_file(tmp_path)
+        if "error" in fields:
+            return _envelope(
+                True, "file", "unsupported", {},
+                error={"reason": fields["error"]},
+            )
+
         doc_type = classify_document_type(fields.get("raw_text", ""))
 
         citation = format_citation(fields, doc_type=doc_type)
@@ -457,6 +502,11 @@ async def extract_url(body: UrlInput):
             return _envelope(True, "url", "done", {
                 "citations": [{"citation": citation}],
             }, debug=debug)
+        except ValueError as e:
+            return _envelope(
+                True, "url", "unsupported", {},
+                error={"reason": str(e)},
+            )
         except Exception as e:
             return _envelope(
                 True, "url", "error", {},
@@ -472,22 +522,35 @@ async def extract_url(body: UrlInput):
             return _envelope(True, "url", "done", {
                 "citations": [{"citation": citation}],
             }, debug=debug)
+        except ValueError as e:
+            msg = str(e)
+            if "invalid" in msg:
+                return _envelope(
+                    True, "url", "error", {},
+                    error={"reason": msg},
+                )
+            return _envelope(
+                True, "url", "unsupported", {},
+                error={"reason": msg},
+            )
         except Exception as e:
             return _envelope(
                 True, "url", "error", {},
                 error={"reason": f"ISBN processing failed: {e}"},
             )
 
-    # ── URL-only (existing behaviour, unchanged) ──
+    # ── URL-only — scaffold or unsupported when extraction fails ──
     fields = extract_from_url(url)
     if "error" in fields:
         error_msg = fields["error"]
         prefill = {"url": url}
-        return _envelope(True, "url", "needs_input", {
-            "message": error_msg,
-            "prefill": prefill,
-            "type": "news_online",
-        })
+        return _scaffold_response(
+            "url",
+            error_msg,
+            prefill=prefill,
+            suggested_type="news_online",
+            disabled_message=_SCAFFOLD_DISABLED_MSG_URL,
+        )
 
     try:
         citation = format_citation(fields)
@@ -626,7 +689,15 @@ async def citation_assemble(body: AssemblyInput):
 
     No LLM, no database lookup.  Pure template substitution.
     Result is always marked *verified: false*.
+
+    Returns unsupported when SCAFFOLD_ENABLED is False.
     """
+    if not SCAFFOLD_ENABLED:
+        return _envelope(
+            True, "", "unsupported", {},
+            error={"reason": "Manual citation assembly is currently disabled."},
+        )
+
     configs = get_field_configs()
     if body.type not in configs:
         return _envelope(

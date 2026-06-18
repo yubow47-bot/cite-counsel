@@ -6,10 +6,10 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, ".")
 
-# ── Patch tracker BEFORE importing api.main ──
+# ── Patch spend tracker BEFORE importing api.main ──
 _mock_tracker = MagicMock()
-_mock_tracker.check.return_value = (True, None)
-_patcher_tracker = patch("api.spend_tracker.tracker", _mock_tracker)
+_mock_tracker.is_over_cap.return_value = False
+_patcher_tracker = patch("core.spend_tracker.spend_tracker", _mock_tracker)
 _patcher_tracker.start()
 
 from fastapi.testclient import TestClient
@@ -155,7 +155,7 @@ class TestExtractUrlOnly:
         m_extract.assert_called_once_with("https://example.com/article")
 
     def test_url_extract_failure_scaffold(self):
-        """When extract_from_url returns an error → needs_input scaffold."""
+        """When extract_from_url returns an error → unsupported (scaffold disabled by default)."""
         _reset_engine_source()
         with patch("api.main.extract_from_url") as m_extract:
             m_extract.return_value = {"error": "Could not fetch page"}
@@ -164,9 +164,8 @@ class TestExtractUrlOnly:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["status"] == "needs_input"
-        assert body["data"]["type"] == "news_online"
-        assert "Could not fetch" in body["data"]["message"]
+        assert body["status"] == "unsupported"
+        assert "block" in body["error"]["reason"].lower()
 
 
 class TestExtractUrlEmpty:

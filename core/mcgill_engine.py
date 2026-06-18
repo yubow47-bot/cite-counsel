@@ -453,6 +453,7 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
         return bill_cit
 
     # ── CrossRef 优先路径（仅 journal_article） ──
+    # On failure signals via ValueError so callers never emit raw DOI as a citation.
     if doc_type == "journal_article":
         raw_text = extracted_fields.get("raw_text", "") or ""
         url = extracted_fields.get("url", "") or ""
@@ -465,13 +466,22 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
                 _last_raw_response = result
                 _last_source = "crossref"
                 return result
-        _last_source = "deepseek_fallback"
+            # DOI valid but CrossRef has no data / unreachable
+            raise ValueError(
+                "Couldn't find this publication in our databases."
+            )
+        # No DOI extracted from input — fall through to generic formatting
 
     # ── Open Library 优先路径（仅 book，镜像 CrossRef 写法） ──
+    # On failure signals via ValueError so callers never emit the raw ISBN as a citation.
     if doc_type == "book":
         raw_text = extracted_fields.get("raw_text", "") or ""
         isbn = extract_isbn(raw_text)
-        if isbn and validate_isbn(isbn):
+        if isbn:
+            if not validate_isbn(isbn):
+                raise ValueError(
+                    "This ISBN appears invalid — please check the digits."
+                )
             ol_data = fetch_openlibrary(isbn)
             if ol_data:
                 result = build_book_citation(ol_data)
@@ -480,7 +490,11 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
                     _last_raw_response = result
                     _last_source = "openlibrary"
                     return result
-        _last_source = "deepseek_fallback"
+            # Valid ISBN but Open Library has no data / unreachable
+            raise ValueError(
+                "Couldn't find this book in our databases."
+            )
+        # No valid ISBN extracted from raw_text — fall through to generic formatting
 
     # ── 常规 type → detect_type 映射 ──
     if doc_type is not None:

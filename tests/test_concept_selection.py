@@ -9,10 +9,10 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, ".")
 
-# ── Patch tracker BEFORE importing api.main ──
+# ── Patch spend tracker BEFORE importing api.main ──
 _mock_tracker = MagicMock()
-_mock_tracker.check.return_value = (True, None)
-_patcher_tracker = patch("api.spend_tracker.tracker", _mock_tracker)
+_mock_tracker.is_over_cap.return_value = False
+_patcher_tracker = patch("core.spend_tracker.spend_tracker", _mock_tracker)
 _patcher_tracker.start()
 
 from fastapi.testclient import TestClient
@@ -88,7 +88,7 @@ class TestConceptNeedsSelection:
         m_fmt.assert_called_once()
 
     def test_empty_results_returns_needs_input(self):
-        """0 concept results → status=needs_input (scaffold)."""
+        """0 concept results → status=unsupported (scaffold disabled by default)."""
         with (
             patch("api.main.classify_and_normalize") as m_cls,
             patch("api.main.search_citation") as m_search,
@@ -100,9 +100,9 @@ class TestConceptNeedsSelection:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["status"] == "needs_input"
+        assert body["status"] == "unsupported"
         assert body["route"] == "concept"
-        assert "type" in body["data"]
+        assert "couldn't verify" in body["error"]["reason"].lower()
 
 
 # ── Cleanup ──
