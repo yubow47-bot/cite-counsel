@@ -129,11 +129,16 @@ export function CitationTool({ autoFocus }: { autoFocus?: boolean }) {
           autoFocus={autoFocus}
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Paste a case name, statute, or decision, e.g. R v Oakes [1986] 1 SCR 103"
+          placeholder="Enter a case, statute, bill, legal principle, or any legal topic.
+
+Examples: r v ..., bill ..., ccc, gladue principle, charter s.7"
           rows={4}
           disabled={loading}
           className="resize-y bg-card font-mono text-sm leading-relaxed"
         />
+        <p className="text-xs text-muted-foreground">
+          AI searches legal databases, verifies sources, and generates citations. Just type naturally, no special format required.
+        </p>
         <div className="flex items-center justify-between gap-3">
           <p className="text-xs text-muted-foreground">
             Formatted to the Canadian Guide to Uniform Legal Citation (McGill)
