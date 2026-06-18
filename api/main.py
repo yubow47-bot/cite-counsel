@@ -38,6 +38,7 @@ from core.spend_tracker import spend_tracker
 # ── Existing pipeline imports (no changes to these modules) ──
 from local_tools.citation_search import classify_and_normalize, search_citation
 from local_tools.file_extractor import extract_from_file, classify_document_type
+from local_tools.openlibrary_api import extract_isbn
 from llm_api.deepseek_api import extract_from_url, chat_deepseek
 from core.mcgill_engine import format_citation, get_last_debug, detect_type, get_rules
 
@@ -503,10 +504,15 @@ async def extract_url(body: UrlInput):
                 "citations": [{"citation": citation}],
             }, debug=debug)
         except ValueError as e:
-            return _envelope(
-                True, "url", "unsupported", {},
-                error={"reason": str(e)},
-            )
+            msg = str(e)
+            # Auto-detect ISBN entered in the DOI field
+            if "valid DOI" in msg and extract_isbn(doi):
+                isbn = doi  # fall through to ISBN block below
+            else:
+                return _envelope(
+                    True, "url", "unsupported", {},
+                    error={"reason": msg},
+                )
         except Exception as e:
             return _envelope(
                 True, "url", "error", {},

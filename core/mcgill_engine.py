@@ -470,7 +470,10 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
             raise ValueError(
                 "Couldn't find this publication in our databases."
             )
-        # No DOI extracted from input — fall through to generic formatting
+        # No DOI extracted from input — signal failure instead of falling through to LLM
+        raise ValueError(
+            "This doesn't look like a valid DOI — please check the identifier."
+        )
 
     # ── Open Library 优先路径（仅 book，镜像 CrossRef 写法） ──
     # On failure signals via ValueError so callers never emit the raw ISBN as a citation.

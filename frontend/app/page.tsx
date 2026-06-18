@@ -51,12 +51,13 @@ export default function Page() {
             McGill Citation Guide
           </p>
           <h1 className="mt-2 text-balance font-serif text-3xl font-semibold leading-tight text-foreground sm:text-4xl">
-            McGill Citation Generator
+            McGill Legal Citation Tool (10th ed)
           </h1>
           <p className="mt-3 text-pretty text-sm leading-relaxed text-muted-foreground">
-            Generate properly formatted citations according to the Canadian Guide
-            to Uniform Legal Citation (McGill). Enter a case name, statute, or
-            decision to get started.
+            Verified McGill citations (10th ed), grounded in real legal databases — A2AJ, CrossRef, Open Library. Not a fill-in-the-blanks form, not AI guesswork.
+          </p>
+          <p className="mt-1 text-pretty text-sm leading-relaxed text-muted-foreground">
+            Enter a case, statute, gov doc, or just a legal concept to get started.
           </p>
         </header>
 
@@ -160,16 +161,20 @@ export default function Page() {
             official McGill Guide before submission. Your feedback helps
             improve accuracy.
           </p>
-          <p className="mt-2">
+          <div className="mt-3 flex items-center gap-3">
             <a
               href="https://ko-fi.com/wwwyyyy0"
               target="_blank"
               rel="noopener"
-              className="hover:underline"
+              aria-label="Support"
+              className="inline-flex items-center gap-1 rounded-full border border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
             >
-              Runs on real API, help cover the running costs!
+              ☕ Support
             </a>
-          </p>
+            <span className="text-xs text-muted-foreground">
+              This tool runs on paid APIs, support keeps it running.
+            </span>
+          </div>
         </footer>
       </div>
 
