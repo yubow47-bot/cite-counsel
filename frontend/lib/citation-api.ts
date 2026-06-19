@@ -132,6 +132,19 @@ export async function postFeedback(payload: {
   }
 }
 
+/** POST /api/feedback —— 提交自由反馈消息 (kind=message) */
+export async function postFeedbackMessage(note: string): Promise<void> {
+  try {
+    await fetch(`${API_BASE_URL}/api/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "message", note }),
+    })
+  } catch {
+    // 反馈失败不阻塞主流程，静默处理
+  }
+}
+
 async function request(path: string, body: unknown): Promise<Envelope> {
   const res = await fetch(`${API_BASE_URL}${path}`, {
     method: "POST",

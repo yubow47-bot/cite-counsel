@@ -4,6 +4,7 @@ import { useState } from "react"
 import { FileText, Link2, Search } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { CitationTool } from "@/components/citation-tool"
+import { FeedbackBox } from "@/components/feedback-box"
 import { FileExtractView } from "@/components/file-extract-view"
 import { UrlExtractView } from "@/components/url-extract-view"
 
@@ -154,12 +155,16 @@ export default function Page() {
           </div>
         )}
 
+        {/* ---------- feedback box (always visible) ---------- */}
+        <div className="mt-10">
+          <FeedbackBox />
+        </div>
+
         {/* ---------- footer ---------- */}
-        <footer className="mt-12 border-t border-border pt-6 text-xs leading-relaxed text-muted-foreground">
+        <footer className="mt-6 border-t border-border pt-6 text-xs leading-relaxed text-muted-foreground">
           <p>
             Citations are provided for reference. Always verify against the
-            official McGill Guide before submission. Your feedback helps
-            improve accuracy.
+            official McGill Guide before submission.
           </p>
           <div className="mt-3 flex items-center gap-3">
             <a
@@ -175,6 +180,9 @@ export default function Page() {
               This tool runs on paid APIs, support keeps it running.
             </span>
           </div>
+          <p className="mt-3 text-xs text-muted-foreground">
+            This tool is actively being developed and may occasionally make mistakes. Please review citations before use.
+          </p>
         </footer>
       </div>
 

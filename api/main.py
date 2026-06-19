@@ -99,10 +99,11 @@ class ChatInput(BaseModel):
 
 
 class FeedbackInput(BaseModel):
-    input: str
-    output: str
-    route: str
-    verdict: str  # "up" or "down"
+    kind: str = "rating"  # "rating" | "message"
+    input: Optional[str] = None
+    output: Optional[str] = None
+    route: Optional[str] = None
+    verdict: Optional[str] = None  # "up" or "down" for ratings
     note: Optional[str] = None
 
 
@@ -607,23 +608,40 @@ FEEDBACK_FILE = _PROJ / "data" / "feedback.jsonl"
 
 @app.post("/api/feedback")
 async def feedback(body: FeedbackInput):
-    """Record user feedback (up/down) to local JSONL + HF Dataset.
+    """Record feedback (rating or message) to local JSONL + HF Dataset + Discord.
 
-    Local write is fast and always attempted first; HF Dataset write is
-    fire-and-forget (background thread) — never blocks the response.
+    Two delivery paths run in a background executor, each independent:
+      1. HF Dataset append (``_persist_feedback_hf``)
+      2. Discord webhook notification (``_notify_discord``)
+    Neither blocks the HTTP response; each swallows its own exceptions.
+    The local JSONL write runs inline for speed — failure there is visible.
     """
-    verdict = body.verdict.strip().lower()
-    if verdict not in ("up", "down"):
-        return _envelope(False, "", "error", {}, error={"reason": "verdict must be 'up' or 'down'"})
+    kind = body.kind.strip().lower()
+    if kind not in ("rating", "message"):
+        return _envelope(False, "", "error", {}, error={"reason": "kind must be 'rating' or 'message'"})
 
-    record = {
-        "input": body.input,
-        "output": body.output,
-        "route": body.route,
-        "verdict": verdict,
-        "note": body.note or "",
-        "timestamp": __import__("datetime").datetime.now().isoformat(),
-    }
+    if kind == "message":
+        note = (body.note or "").strip()
+        if not note:
+            return _envelope(False, "", "error", {}, error={"reason": "note cannot be empty for kind=message"})
+        record = {
+            "kind": "message",
+            "note": note,
+            "timestamp": __import__("datetime").datetime.now().isoformat(),
+        }
+    else:
+        verdict = (body.verdict or "").strip().lower()
+        if verdict not in ("up", "down"):
+            return _envelope(False, "", "error", {}, error={"reason": "verdict must be 'up' or 'down'"})
+        record = {
+            "kind": "rating",
+            "input": body.input or "",
+            "output": body.output or "",
+            "route": body.route or "",
+            "verdict": verdict,
+            "note": body.note or "",
+            "timestamp": __import__("datetime").datetime.now().isoformat(),
+        }
 
     # ── Local write (fast, always attempted) ──
     try:
@@ -632,17 +650,23 @@ async def feedback(body: FeedbackInput):
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception as e:
         return _envelope(
-            True, body.route, "error", {},
+            True, body.route or "", "error", {},
             error={"reason": f"Feedback save failed: {e}"},
         )
 
-    # ── HF Dataset write (fire-and-forget; never blocks the response) ──
+    # ── Background delivery (HF Dataset + Discord) ──
     import asyncio
     asyncio.get_event_loop().run_in_executor(
-        None, _persist_feedback_hf, record,
+        None, _deliver_feedback, record,
     )
 
-    return _envelope(True, body.route, "done", {})
+    return _envelope(True, body.route or "", "done", {})
+
+
+def _deliver_feedback(record: dict) -> None:
+    """Fire-and-forget both delivery paths. Never raises."""
+    _persist_feedback_hf(record)
+    _notify_discord(record)
 
 
 def _persist_feedback_hf(record: dict) -> None:
@@ -656,6 +680,17 @@ def _persist_feedback_hf(record: dict) -> None:
     except Exception:
         logger = __import__("logging").getLogger(__name__)
         logger.warning("Feedback HF Dataset write failed", exc_info=True)
+
+
+def _notify_discord(record: dict) -> None:
+    """Post feedback to Discord webhook in background. Never raises."""
+    try:
+        from core.discord_notify import notify
+
+        notify(record)
+    except Exception:
+        logger = __import__("logging").getLogger(__name__)
+        logger.warning("Discord notification failed", exc_info=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
