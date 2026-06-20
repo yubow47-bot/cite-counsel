@@ -2,6 +2,10 @@
 
 FROM python:3.11-slim
 
+# --- bust HF Spaces build cache ---
+# Previous build cached a stale BuildKit ref for profiling/; this comment
+# invalidates the COPY layer chain without changing any actual instruction.
+
 # System deps for pdfplumber (pdfminer.six), pymupdf, trafilatura
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
