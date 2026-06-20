@@ -21,7 +21,6 @@ jobs:
             docs/ \
             eval/ \
             tests/ \
-            profiling/ \
             frontend/ \
             .claude/ \
             .vscode/ \
@@ -35,6 +34,10 @@ jobs:
             test_cases.json \
             test_italic_manual.py \
             main.py
+
+          # Strip data/ contents but keep the directory for runtime writes
+          rm -f data/*.json data/*.docx
+          touch data/.gitkeep
 
       - name: Sync to HF Space
         uses: huggingface/hub-sync@v1
