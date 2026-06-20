@@ -13,5 +13,4 @@ __pycache__
 out
 tests
 eval
-profiling
 *.md
