@@ -40,29 +40,13 @@ jobs:
           touch data/.gitkeep
 
       # Upload the stripped local tree to HF Space via huggingface_hub Python API.
-      # Using the Python API directly (not the deprecated huggingface-cli) ensures
-      # reliable execution on all runner images regardless of PATH/console-script setup.
-      # delete_patterns="*" makes this a true mirror (removes stale files on HF).
-      # ignore_patterns prevents .git/ from being uploaded — the strip step removes
-      # sensitive content from the working tree but does NOT remove .git/, and git
-      # history would expose past-committed strategy/governance docs to the public Space.
+      # Script lives in .github/scripts/ — kept out of the public Space because
+      # .github/* is in ignore_patterns below. The inline heredoc approach broke
+      # YAML parsing (block-scalar indentation conflict).
       - name: Upload stripped tree to HF Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_SPACE_ID: ${{ vars.HF_SPACE_ID }}
         run: |
           pip install -U huggingface_hub
-          python - <<'PY'
-import os
-from huggingface_hub import upload_folder
-
-upload_folder(
-    folder_path=".",
-    repo_id=os.environ["HF_SPACE_ID"],
-    repo_type="space",
-    token=os.environ["HF_TOKEN"],
-    commit_message="Sync from GitHub main",
-    ignore_patterns=[".git/*", ".github/*"],
-    delete_patterns="*",
-)
-PY
+          python .github/scripts/sync_upload.py
