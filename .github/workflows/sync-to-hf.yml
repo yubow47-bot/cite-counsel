@@ -39,9 +39,15 @@ jobs:
           rm -f data/*.json data/*.docx
           touch data/.gitkeep
 
-      - name: Sync to HF Space
-        uses: huggingface/hub-sync@v1
-        with:
-          hf_token: ${{ secrets.HF_TOKEN }}
-          huggingface_repo_id: ${{ vars.HF_SPACE_ID }}
-          github_repo_id: ${{ github.repository }}
+      # Upload the stripped local tree to HF Space.
+      # Uses huggingface-cli upload (part of huggingface_hub pip package),
+      # which uploads from the local filesystem — NOT re-fetching from GitHub.
+      # This ensures the rm -rf strip above is honored.
+      - name: Upload stripped tree to HF Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          pip install -q huggingface-hub
+          huggingface-cli upload "${{ vars.HF_SPACE_ID }}" . \
+            --repo-type=space \
+            --token="$HF_TOKEN"
