@@ -8,5 +8,4 @@ upload_folder(
     token=os.environ["HF_TOKEN"],
     commit_message="Sync from GitHub main",
     ignore_patterns=[".git/*", ".github/*"],
-    delete_patterns="*",
 )
