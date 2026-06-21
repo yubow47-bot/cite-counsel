@@ -58,7 +58,7 @@ export default function Page() {
             10th Edition
           </p>
           <p className="mt-4 max-w-prose text-pretty text-sm leading-relaxed text-muted-foreground">
-            Verified McGill citations grounded in real legal databases — A2AJ, CrossRef, Open Library. Not a fill-in-the-blanks form, not AI guesswork.
+            Verified McGill citations grounded in real legal databases — A2AJ, CrossRef, Open Library, LEGISinfo. Not a fill-in-the-blanks form, not AI guesswork.
           </p>
         </header>
 
