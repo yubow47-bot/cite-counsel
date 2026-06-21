@@ -25,7 +25,7 @@ const lora = localFont({
 
 export const metadata: Metadata = {
   title: "McGill Legal Citation Tool (10th ed)",
-  description: "Free McGill Guide (10th ed) legal citation tool for Canadian law students. Verified against real legal databases — A2AJ, CrossRef, Open Library. Not AI guesswork.",
+  description: "Free McGill Guide (10th ed) legal citation tool for Canadian law students. Verified against real legal databases — A2AJ, CrossRef, Open Library, LEGISinfo. Not AI guesswork.",
   icons: {
     icon: [
       { url: "/icon.svg", type: "image/svg+xml" },
