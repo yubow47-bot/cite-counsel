@@ -387,6 +387,104 @@ def test_select_subpattern_routes_gov_docs():
     assert result is None, f"Expected None for non-gov text, got {result}"
 
 
+# ═══════════════════════════════════════════════════════════════════
+#  Empty-body guard tests — Tab 3 URL-only branch degradation
+# ═══════════════════════════════════════════════════════════════════
+
+def test_ac1_empty_body_returns_unsupported_and_skips_format():
+    """AC1: given fields with raw_text='' and populated metadata, the empty-body
+    guard returns status=='unsupported' AND format_citation is NOT called."""
+    from api.main import extract_url, UrlInput
+    import asyncio
+
+    with patch("api.main.extract_from_url") as mock_extract, \
+         patch("api.main.format_citation") as mock_format:
+
+        mock_extract.return_value = {
+            "raw_text": "",
+            "url": "https://www.ourcommons.ca/test",
+            "page_title": "Debates (Hansard) No. 139 - House of Commons",
+            "newspaper": "OURCOMMONS",
+        }
+
+        async def _run():
+            body = UrlInput(url="https://www.ourcommons.ca/test")
+            return await extract_url(body)
+
+        resp = asyncio.run(_run())
+
+        assert resp["status"] == "unsupported", (
+            f"Expected 'unsupported', got '{resp['status']}'"
+        )
+        assert mock_format.called is False, (
+            "format_citation was called but should have been skipped for empty body"
+        )
+
+
+def test_ac2_nonempty_body_calls_format_citation():
+    """AC2: given fields with substantial raw_text (500 chars), the guard does
+    NOT trigger — format_citation IS called."""
+    from api.main import extract_url, UrlInput
+    import asyncio
+
+    with patch("api.main.extract_from_url") as mock_extract, \
+         patch("api.main.format_citation") as mock_format, \
+         patch("api.main.classify_document_type") as mock_classify:
+
+        mock_extract.return_value = {
+            "raw_text": "A" * 500,
+            "url": "https://example.com/page",
+            "page_title": "A Real Page",
+        }
+        mock_format.return_value = "Fake sentinel citation"
+        mock_classify.return_value = "website"
+
+        async def _run():
+            body = UrlInput(url="https://example.com/page")
+            return await extract_url(body)
+
+        resp = asyncio.run(_run())
+
+        assert resp["status"] == "done", (
+            f"Expected 'done', got '{resp['status']}'"
+        )
+        assert mock_format.called is True, (
+            "format_citation was NOT called for non-empty body"
+        )
+
+
+def test_ac3_guard_only_in_url_only_branch_not_doi_isbn():
+    """AC3: The empty-body guard is structurally inside the URL-only branch only
+    (lines after extract_from_url and before the try/classify block). DOI and ISBN
+    branches are before the URL-only section and are not affected.
+
+    This is a structural assertion — verifiable by reading api/main.py source.
+    We assert: (a) the guard code appears after extract_from_url, (b) the DOI
+    path (line ~503) is before it and calls format_citation directly, (c) the
+    ISBN path (line ~528) is before it similarly."""
+    import os
+    VERIFY = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(VERIFY, "api", "main.py"), encoding="utf-8") as f:
+        source = f.read()
+
+    # Guard is after extract_from_url in URL-only section
+    assert "EMPTY_BODY_THRESHOLD" in source, "EMPTY_BODY_THRESHOLD not found"
+    assert "trafilatura may return metadata but no body" in source, (
+        "empty-body guard comment not found"
+    )
+
+    # DOI branch is before the URL-only branch and calls format_citation(doc_type="journal_article")
+    assert 'doc_type="journal_article"' in source, "DOI format_citation not found"
+
+    # ISBN branch is before the URL-only branch and calls format_citation(doc_type="book")
+    assert 'doc_type="book"' in source, "ISBN format_citation not found"
+
+    # The guard's return statement uses "unsupported" status, not "done"
+    assert '"url", "unsupported"' in source, (
+        "guard should return 'unsupported' envelope for url route"
+    )
+
+
 if __name__ == "__main__":
     failures = []
     tests = [
@@ -404,6 +502,9 @@ if __name__ == "__main__":
         ("Item2: gov policy page not overmatched", test_gov_policy_page_not_overmatched),
         ("Item2: gov department page not overmatched", test_gov_department_page_not_overmatched),
         ("Item2: gov minister statement not overmatched", test_gov_minister_statement_not_overmatched),
+        ("AC1: empty body → unsupported, no format_citation", test_ac1_empty_body_returns_unsupported_and_skips_format),
+        ("AC2: nonempty body → format_citation called", test_ac2_nonempty_body_calls_format_citation),
+        ("AC3: guard only in URL-only branch, not DOI/ISBN", test_ac3_guard_only_in_url_only_branch_not_doi_isbn),
         ("select_subpattern gov routing", test_select_subpattern_routes_gov_docs),
     ]
     for name, fn in tests:

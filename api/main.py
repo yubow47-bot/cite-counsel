@@ -49,6 +49,7 @@ from core.mcgill_engine import format_citation, get_last_debug, detect_type, get
 DEBUG = os.getenv("DEBUG_RESPONSES", "false").lower() in ("1", "true", "yes")
 SCAFFOLD_ENABLED = os.getenv("SCAFFOLD_ENABLED", "false").lower() in ("1", "true", "yes")
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "10"))
+EMPTY_BODY_THRESHOLD = 50  # chars — below this, treat the extracted body as unusable
 ALLOWED_ORIGINS = [
     o.strip()
     for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
@@ -565,8 +566,26 @@ async def extract_url(body: UrlInput):
             disabled_message=_SCAFFOLD_DISABLED_MSG_URL,
         )
 
+    # ── Empty-body guard: trafilatura may return metadata but no body
+    #     for JS-rendered pages (ourcommons.ca, etc.).  Under 50 chars
+    #     the extracted body is unusable — degrade gracefully to the
+    #     screenshot / manual path instead of emitting a wrong citation.
+    raw_text = fields.get("raw_text", "") or ""
+    if len(raw_text.strip()) < EMPTY_BODY_THRESHOLD:
+        return _envelope(
+            True, "url", "unsupported", {},
+            error={"reason": (
+                "We couldn't read the main content of this page. "
+                "Some sites (especially government sites) load their "
+                "content with JavaScript, which our URL reader can't "
+                "capture. Try uploading a screenshot of the page instead "
+                "(use the File Extraction tab), or enter the details "
+                "manually."
+            )},
+        )
+
     try:
-        doc_type = classify_document_type(fields.get("raw_text", ""))
+        doc_type = classify_document_type(raw_text)
         citation = format_citation(fields, doc_type=doc_type)
         debug = _collect_debug_info("url")
 
