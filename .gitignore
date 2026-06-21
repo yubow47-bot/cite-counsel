@@ -23,3 +23,5 @@ data/current_session.json
 data/test.docx
 data/*.jsonl
 data/deepseek_usage.json
+frontend/tsconfig.tsbuildinfo
+frontend/public/icon-32x32.png
