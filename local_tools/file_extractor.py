@@ -7,8 +7,8 @@ SCANNED_THRESHOLD = 50
 def extract_from_file(file_path: str) -> dict:
     """根据文件扩展名自动选择提取方式，返回结构化字段。
 
-    图片（.jpg/.jpeg/.png/.webp）→ Kimi 视觉提取。
-    PDF 文字不足 {SCANNED_THRESHOLD} 字 → 降级为 Kimi 视觉提取（前 3 页渲染）。
+    图片（.jpg/.jpeg/.png/.webp）→ Gemini 视觉提取。
+    PDF 文字不足 {SCANNED_THRESHOLD} 字 → 降级为 Gemini 视觉提取（前 3 页渲染）。
     PDF 文字足够 → 现有文本管线。
     """
     ext = os.path.splitext(file_path)[1].lower()
@@ -22,7 +22,7 @@ def extract_from_file(file_path: str) -> dict:
     elif ext in (".xlsx", ".xls"):
         return _extract_xlsx(file_path)
     elif ext in (".jpg", ".jpeg", ".png", ".webp"):
-        from llm_api.kimi_api import extract_from_image
+        from llm_api.gemini_api import extract_from_image
         return extract_from_image(file_path)
     else:
         return {"raw_input": f"Unsupported file type: {ext}"}
@@ -65,7 +65,7 @@ def _extract_pdf(file_path: str) -> dict:
 
 
 def _extract_pdf_scanned(file_path: str) -> dict:
-    """Render first 3 pages of a scanned PDF as images and run Kimi vision."""
+    """Render first 3 pages of a scanned PDF as images and run Gemini vision."""
     import fitz
 
     image_paths = []
@@ -79,7 +79,7 @@ def _extract_pdf_scanned(file_path: str) -> dict:
             pix.save(tmp_path)
             image_paths.append(tmp_path)
 
-        from llm_api.kimi_api import extract_from_images
+        from llm_api.gemini_api import extract_from_images
         result = extract_from_images(image_paths)
         return result
     finally:
