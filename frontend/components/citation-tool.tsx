@@ -24,7 +24,7 @@ type View =
       initialType?: string
       prefill?: Record<string, string>
     }
-  | { kind: "unsupported"; reason: string }
+  | { kind: "unsupported"; reason: string; suggestedType?: string }
   | { kind: "error"; reason: string }
 
 export function CitationTool({ autoFocus }: { autoFocus?: boolean }) {
@@ -60,6 +60,7 @@ export function CitationTool({ autoFocus }: { autoFocus?: boolean }) {
           kind: "unsupported",
           reason:
             env.data.reason ?? "This type of citation isn't supported yet.",
+          suggestedType: env.data.type,
         })
         break
       case "error":
@@ -249,7 +250,10 @@ Examples: r v ..., bill ..., ccc, gladue principle, charter s.7"
       (view.kind === "done" ||
         view.kind === "needs_selection" ||
         view.kind === "unsupported") ? (
-        <ScaffoldForm onClose={() => setManualOpen(false)} />
+        <ScaffoldForm
+          onClose={() => setManualOpen(false)}
+          initialType={view.kind === "unsupported" ? view.suggestedType : undefined}
+        />
       ) : null}
 
       {!loading && view.kind === "error" ? (
