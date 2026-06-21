@@ -122,6 +122,61 @@ SUBPATTERN_TEMPLATES: dict[str, dict] = {
             }
         ],
     },
+    "gov.parliamentary_documents": {
+        "category": "Government Documents — Parliamentary Documents (Hansard)",
+        "topics": [
+            {
+                "topic": "Parliamentary Documents",
+                "template": "Jurisdiction, | legislative body, | name of session, | volume | (date) | pinpoint | (speaker), | online: | <URL>.",
+                "rules": [
+                    "Include the jurisdiction unless it is mentioned in another element of the citation.",
+                    "Include the legislative body (House of Commons, Senate, Legislative Assembly).",
+                    "Provide the date of the debate in parentheses.",
+                    "Indicate the speaker and pinpoint reference where applicable."
+                ],
+                "examples": [
+                    "House of Commons Debates, 43rd Parl, 2nd Sess, vol 151, No 56 (25 January 2021) at 1100 (Hon Erin O'Toole).",
+                    "Canada, House of Commons Debates, 42nd Parl, 1st Sess, vol 148, No 45 (3 October 2016) at 1830."
+                ],
+            }
+        ],
+    },
+    "gov.committee_reports": {
+        "category": "Government Documents — Committee Reports",
+        "topics": [
+            {
+                "topic": "Committee Reports",
+                "template": "Jurisdiction, | legislative body, | committee name, | *title*, | report number | (date) | pinpoint, | online: | <URL>.",
+                "rules": [
+                    "Include the jurisdiction and legislative body.",
+                    "Provide the full committee name.",
+                    "Italicize the report title using Markdown asterisks.",
+                    "Indicate the report number (e.g. 4th Report).",
+                    "Provide the parliamentary session and date."
+                ],
+                "examples": [
+                    "House of Commons, Standing Committee on Access to Information, Privacy and Ethics, *Report on the Protection of Personal Information in the Digital Age*, 4th Report, 44th Parl, 1st Sess (December 2025).",
+                ],
+            }
+        ],
+    },
+    "gov.inquiry_reports": {
+        "category": "Government Documents — Reports on Inquiries and Commissions",
+        "topics": [
+            {
+                "topic": "Reports on Inquiries and Commissions",
+                "template": "Jurisdiction, | issuing body, | title, | volume | (publication information) | (Chair) | pinpoint.",
+                "rules": [
+                    "Include the jurisdiction unless it is mentioned in another element of the citation.",
+                    "Include the issuing body unless it is mentioned in the title of the report.",
+                    "To distinguish between volumes, indicate vol or any other appellation used in the report.",
+                ],
+                "examples": [
+                    "Commission of Inquiry on the Blood System in Canada: Final Report, vol 1 (Ottawa: Public Works and Governmental Services Canada, 1997) at 100.",
+                ],
+            }
+        ],
+    },
 }
 
 
@@ -189,6 +244,18 @@ def select_subpattern(detected_type: str, fields: dict) -> str | None:
         if statute_title:
             return "leg.statute"
 
+        return None
+
+    if detected_type == "government_docs":
+        raw_text = fields.get("raw_text", "") or ""
+        from local_tools.file_extractor import classify_gov_doc_subtype
+        subtype = classify_gov_doc_subtype(raw_text)
+        if subtype == "parliamentary_documents":
+            return "gov.parliamentary_documents"
+        if subtype == "committee_reports":
+            return "gov.committee_reports"
+        if subtype == "inquiry_reports":
+            return "gov.inquiry_reports"
         return None
 
     return None
@@ -343,6 +410,24 @@ def _build_italic_rules(detected_type: str, subpattern: str | None = None) -> st
                 "- YOU MUST italicize the title of the constitutional statute using Markdown *asterisks*.\n"
                 "  Example: *Constitution Act, 1982*, s 35, being Schedule B to the *Canada Act 1982* (UK), 1982, c 11.\n"
                 "  Example: *Canadian Charter of Rights and Freedoms*, s 7, Part I of the *Constitution Act, 1982*, being Schedule B to the *Canada Act 1982* (UK), 1982, c 11.\n"
+            )
+
+        if subpattern == "gov.committee_reports":
+            return (
+                "- YOU MUST italicize the report title using Markdown *asterisks*.\n"
+                "  Example: Standing Committee on Access to Information, Privacy and Ethics, *Report on the Protection of Personal Information in the Digital Age*, 4th Report, 44th Parl, 1st Sess (December 2025).\n"
+            )
+
+        if subpattern == "gov.inquiry_reports":
+            return (
+                "- Do NOT italicize Indigenous constitutional documents.\n"
+                "- Follow the template: Jurisdiction, issuing body, title, volume (publication information) (Chair) pinpoint.\n"
+            )
+
+        if subpattern == "gov.parliamentary_documents":
+            return (
+                "- Do NOT italicize the legislative body or session name.\n"
+                "- Follow the template: Jurisdiction, legislative body, session, volume (date) pinpoint (speaker), online: <URL>.\n"
             )
 
         # Fallback for unknown subpattern: no italic instruction

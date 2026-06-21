@@ -178,6 +178,37 @@
     ],
     "topics": [
       {
+        "topic": "Parliamentary Documents",
+        "template": "Jurisdiction, | legislative body, | name of session, | volume | (date) | pinpoint | (speaker), | online: | <URL>.",
+        "rules": [
+          "Include the jurisdiction unless it is mentioned in another element of the citation.",
+          "Include the legislative body (House of Commons, Senate, Legislative Assembly).",
+          "Indicate the parliamentary session and volume number.",
+          "Provide the date of the debate in parentheses.",
+          "Indicate the speaker and pinpoint reference where applicable."
+        ],
+        "examples": [
+          "House of Commons Debates, 43rd Parl, 2nd Sess, vol 151, No 56 (25 January 2021) at 1100 (Hon Erin O'Toole).",
+          "Senate Debates, 44th Parl, 1st Sess, vol 153, No 12 (15 March 2022) at 1430 (Senator Denise Batters).",
+          "Canada, House of Commons Debates, 42nd Parl, 1st Sess, vol 148, No 45 (3 October 2016) at 1830."
+        ]
+      },
+      {
+        "topic": "Committee Reports",
+        "template": "Jurisdiction, | legislative body, | committee name, | title, | report number | (date) | pinpoint, | online: | <URL>.",
+        "rules": [
+          "Include the jurisdiction and legislative body.",
+          "Provide the full committee name.",
+          "Italicize the report title using Markdown asterisks.",
+          "Indicate the report number (e.g. 4th Report).",
+          "Provide the parliamentary session and date."
+        ],
+        "examples": [
+          "House of Commons, Standing Committee on Access to Information, Privacy and Ethics, *Report on the Protection of Personal Information in the Digital Age*, 4th Report, 44th Parl, 1st Sess (December 2025).",
+          "Senate, Standing Committee on Legal and Constitutional Affairs, *Report on the Reform of the Criminal Code*, 12th Report, 43rd Parl, 2nd Sess (June 2021)."
+        ]
+      },
+      {
         "topic": "Reports on Inquiries and Commissions",
         "template": "Jurisdiction, | issuing body, | title, | volume | (publication information) | (Chair) | pinpoint",
         "rules": [
