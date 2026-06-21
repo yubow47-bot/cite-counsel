@@ -142,14 +142,16 @@ _SAMPLE_OL_DATA_NO_PLACE = {
 
 
 def test_build_book_citation_basic():
+    """Book title must be italicized per McGill 10th ed (da2943c)."""
     result = build_book_citation(_SAMPLE_OL_DATA)
-    assert result == "David Gilles, Telecommunications Law (London, UK: Butterworths, 2003)."
+    assert result == "David Gilles, *Telecommunications Law* (London, UK: Butterworths, 2003)."
 
 
 def test_build_book_citation_no_place_degrades():
-    """Missing place should degrade gracefully (not return None)."""
+    """Missing place should degrade gracefully (not return None).
+    Title must still be italicized."""
     result = build_book_citation(_SAMPLE_OL_DATA_NO_PLACE)
-    assert result == "David Gilles, Telecommunications Law (Butterworths, 2003)."
+    assert result == "David Gilles, *Telecommunications Law* (Butterworths, 2003)."
 
 
 def test_build_book_citation_missing_author():

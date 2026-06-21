@@ -1,0 +1,13 @@
+Canadian Privacy Law Blog
+
+A regularly updated discussion of privacy law developments in Canada, written by legal practitioners and academics interested in the intersection of technology, privacy, and the law.
+
+Recent Developments in Federal Privacy Reform: What Bill C-27 Means for Businesses
+
+Posted on June 15, 2025 by Professor Michael Andrews
+
+The introduction of Bill C-27, the Digital Charter Implementation Act, represents the most significant reform of Canada's private sector privacy law in over two decades. If passed, the legislation would replace the Personal Information Protection and Electronic Documents Act (PIPEDA) with three new statutes: the Consumer Privacy Protection Act, the Personal Information and Data Protection Tribunal Act, and the Artificial Intelligence and Data Act.
+
+This blog post examines the key provisions of the proposed legislation and their implications for businesses operating in Canada. We focus particularly on the enhanced consent requirements, the new private right of action for individuals, and the significant administrative monetary penalties that could be imposed for non-compliance.
+
+The proposed framework represents a fundamental shift from the ombudsman model that has characterized Canadian privacy regulation since PIPEDA came into force in 2004. Businesses should begin preparing now for a more rigorous enforcement environment, including reviewing their data collection practices, updating their privacy policies, and ensuring that their consent mechanisms meet the higher standard contemplated by the new legislation. Early compliance preparation will be essential to managing the transition risks associated with what promises to be the most consequential privacy law reform in Canadian history.

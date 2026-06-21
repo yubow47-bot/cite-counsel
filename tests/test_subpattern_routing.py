@@ -251,9 +251,41 @@ def test_leg_empty_title():
 #  select_subpattern — Other types (should always return None)
 # ═══════════════════════════════════════════════════════════════════
 
-def test_other_type_government_docs():
-    result = select_subpattern("government_docs", {"title": "Some Report"})
-    assert result is None
+def test_gov_docs_subtype_parliamentary():
+    """government_docs with Hansard/parliamentary text → gov.parliamentary_documents"""
+    result = select_subpattern("government_docs", {
+        "raw_text": "House of Commons Debates Hansard Official Report",
+    })
+    assert result == "gov.parliamentary_documents", (
+        f"Expected gov.parliamentary_documents, got {result}"
+    )
+
+def test_gov_docs_subtype_committee():
+    """government_docs with committee text → gov.committee_reports"""
+    result = select_subpattern("government_docs", {
+        "raw_text": "Standing Committee on Access to Information report on privacy",
+    })
+    assert result == "gov.committee_reports", (
+        f"Expected gov.committee_reports, got {result}"
+    )
+
+def test_gov_docs_subtype_inquiry():
+    """government_docs with inquiry text → gov.inquiry_reports"""
+    result = select_subpattern("government_docs", {
+        "raw_text": "Royal Commission of Inquiry into digital platforms final report",
+    })
+    assert result == "gov.inquiry_reports", (
+        f"Expected gov.inquiry_reports, got {result}"
+    )
+
+def test_gov_docs_subtype_no_match():
+    """government_docs with no matching keywords → None (fall back to full-topic)"""
+    result = select_subpattern("government_docs", {
+        "raw_text": "Some generic government publication about fisheries management",
+    })
+    assert result is None, (
+        f"Expected None for non-matching gov doc, got {result}"
+    )
 
 def test_other_type_secondary_sources():
     result = select_subpattern("secondary_sources.journal_articles", {"author": "Test"})

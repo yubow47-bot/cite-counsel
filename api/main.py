@@ -566,7 +566,8 @@ async def extract_url(body: UrlInput):
         )
 
     try:
-        citation = format_citation(fields)
+        doc_type = classify_document_type(fields.get("raw_text", ""))
+        citation = format_citation(fields, doc_type=doc_type)
         debug = _collect_debug_info("url")
 
         return _envelope(True, "url", "done", {

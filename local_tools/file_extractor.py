@@ -185,3 +185,46 @@ Text:
     except Exception:
         pass
     return "other"
+
+
+def classify_gov_doc_subtype(raw_text: str) -> str | None:
+    """Classify a government_document into a subtype via keyword matching.
+
+    Deterministic — no LLM call. Returns one of:
+      - "parliamentary_documents"  (Hansard debates, parliamentary records)
+      - "committee_reports"        (standing/select committee reports)
+      - "inquiry_reports"          (royal commissions, commissions of inquiry)
+      - None                       (no subtype detected)
+
+    Only call this when classify_document_type already returned
+    "government_document".  Non-government text will return None.
+    """
+    if not raw_text:
+        return None
+
+    text = raw_text.lower()
+
+    # ── Parliamentary debates (Hansard) — check FIRST (strong signal) ──
+    if any(phrase in text for phrase in [
+        "hansard", "parliamentary debates", "house of commons",
+        "official report of debates", "debates of the",
+        "senate debates", "legislative assembly debates",
+    ]):
+        return "parliamentary_documents"
+
+    # ── Inquiry / Royal Commission ──
+    if any(phrase in text for phrase in [
+        "royal commission", "commission of inquiry", "inquiry into",
+        "commission on", "public inquiry",
+    ]):
+        return "inquiry_reports"
+
+    # ── Committee reports (check LAST — word "committee" appears in Hansard too) ──
+    if any(phrase in text for phrase in [
+        "standing committee", "select committee", "committee on",
+        "report of the committee", "committee report",
+        "special committee",
+    ]):
+        return "committee_reports"
+
+    return None
