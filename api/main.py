@@ -226,6 +226,8 @@ def _scaffold_response(
 
     When disabled, returns an unsupported envelope with ``disabled_message``
     (falls back to ``message`` when no specific disabled_message given).
+    Always includes ``suggested_type`` in data so the frontend can default the
+    manual scaffold form to the correct source type.
     """
     if SCAFFOLD_ENABLED:
         data: dict = {"message": message}
@@ -235,8 +237,11 @@ def _scaffold_response(
             data["type"] = suggested_type
         return _envelope(True, route, "needs_input", data)
 
+    data: dict = {}
+    if suggested_type:
+        data["type"] = suggested_type
     return _envelope(
-        True, route, "unsupported", {},
+        True, route, "unsupported", data,
         error={"reason": disabled_message or message},
     )
 

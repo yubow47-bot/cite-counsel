@@ -13,16 +13,20 @@ from profiling import timing as prof
 def classify_and_normalize(query: str) -> dict:
     """判断输入类型并标准化。"""
 
-    # Bill 快速检测（"Bill C-22" / "bill s-2"），不调 LLM
-    bill_match = re.match(r"(?i)^bill\s+([A-Za-z]+-\d+)", query.strip())
+    # Bill 快速检测（"Bill C-22" / "bill s-2" / "bill c34" / "bill C34"），不调 LLM
+    # 接受有/无横杠，捕获字母+数字，统一归一到 L-DDDD 格式
+    bill_match = re.match(r"(?i)^bill\s+([A-Za-z]+)-?(\d+)", query.strip())
     if bill_match:
-        return {"type": "bill", "normalized": bill_match.group(1).upper(), "original": query.strip()}
+        letter = bill_match.group(1).upper()
+        digits = bill_match.group(2)
+        return {"type": "bill", "normalized": f"{letter}-{digits}", "original": query.strip()}
 
     prompt = f"""你是加拿大法律引用专家。分析以下用户输入，完成两件事：
-1. 判断输入类型（只能是以下四种之一）：
+1. 判断输入类型（只能是以下五种之一）：
    - citation_number：已知的引用号，如 "2022 SCC 39"、"[1999] 1 SCR 688"、"RSC 1985, c C-46"
    - case_name：案件名，如 "R v Gladue"、"R. v. Sharma"、"Regina v Jordan"
    - legislation：法条名或法条缩写，如 "Criminal Code"、"CCC"、"Charter"、"CCC s.718.2(e)"
+   - bill：联邦法案编号，如 "bill c-22"、"bill c34"、"Bill S-2"、"Bill C 34"
    - concept：法律概念或原则，如 "gladue principle"、"right to housing"、"duty to consult"
 
 2. 标准化输入：
@@ -30,6 +34,7 @@ def classify_and_normalize(query: str) -> dict:
    - 法条缩写：展开成完整引用（CCC → Criminal Code, RSC 1985, c C-46）
    - 法条+条款混合：展开法条名，保留条款（CCC s.718.2(e) → Criminal Code, RSC 1985, c C-46, s 718.2(e)）
    - 条款格式：s.718 → s 718（去掉句号）
+   - 法案编号：统一归一为 L-DDDD 格式（去掉 Bill 前缀，大写字母，插入横杠 → C-34）
    - 法语输入同样处理（R. c. → R c）
 
 只返回 JSON，不要任何解释：
@@ -44,7 +49,7 @@ def classify_and_normalize(query: str) -> dict:
         if timing.ENABLE_TIMING:
             timing.report().add_llm("classify_and_normalize", time.time() - t0)
         result = parse_llm_json(content)
-        if result.get("type") in ("citation_number", "case_name", "legislation", "concept"):
+        if result.get("type") in ("citation_number", "case_name", "legislation", "bill", "concept"):
             return result
     except Exception as e:
         print(f"[JSON解析] classify_and_normalize 失败: {e}  len={len(content)}  前200字: {content[:200]!r}")
