@@ -14,7 +14,7 @@ export function CandidateList({
   selectingIndex: number | null
 }) {
   return (
-    <div className="rounded-lg border border-border bg-card p-4">
+    <div className="rounded-xl border border-border/60 bg-card p-5 shadow-[0_1px_4px_0_rgb(0_0_0_/_0.04)]">
       <h2 className="font-serif text-lg font-semibold text-card-foreground">
         Multiple matches found
       </h2>

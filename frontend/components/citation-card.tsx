@@ -35,7 +35,7 @@ export function CitationCard({
   }
 
   return (
-    <div className="rounded-lg border border-border bg-card p-4">
+    <div className="rounded-xl border border-border/60 bg-card p-5 shadow-[0_1px_4px_0_rgb(0_0_0_/_0.04)]">
       <div className="flex items-start justify-between gap-3">
         <p
           className="flex-1 font-mono text-sm leading-relaxed text-card-foreground break-words [&_em]:italic"
@@ -76,7 +76,7 @@ export function CitationCard({
         </p>
       ) : null}
 
-      <div className="mt-3 flex items-center gap-2 border-t border-border pt-3">
+      <div className="mt-4 flex items-center gap-2 border-t border-border/60 pt-4">
         <span className="text-xs text-muted-foreground">Is this citation accurate?</span>
         <Button
           type="button"

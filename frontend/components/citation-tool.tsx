@@ -134,7 +134,7 @@ export function CitationTool({ autoFocus }: { autoFocus?: boolean }) {
 Examples: r v ..., bill ..., ccc, gladue principle, charter s.7"
           rows={4}
           disabled={loading}
-          className="resize-y bg-card font-mono text-sm leading-relaxed"
+          className="resize-y bg-card font-mono text-sm leading-relaxed border-border/60 shadow-[0_1px_3px_0_rgb(0_0_0_/_0.03)]"
         />
         <p className="text-xs text-muted-foreground">
           AI searches legal databases, verifies sources, and generates citations. Just type naturally, no special format required.
@@ -165,7 +165,7 @@ Examples: r v ..., bill ..., ccc, gladue principle, charter s.7"
 
       {loading ? (
         <div
-          className="flex items-center gap-3 rounded-lg border border-border bg-muted/40 px-4 py-6 text-sm text-muted-foreground"
+          className="flex items-center gap-3 rounded-xl border border-border/60 bg-muted/50 px-5 py-6 text-sm text-muted-foreground"
           role="status"
           aria-live="polite"
         >
@@ -175,9 +175,9 @@ Examples: r v ..., bill ..., ccc, gladue principle, charter s.7"
       ) : null}
 
       {!loading && view.kind === "done" ? (
-        <section aria-label="Generated results" className="flex flex-col gap-3">
+        <section aria-label="Generated results" className="flex flex-col gap-4">
           {view.citations.length === 0 ? (
-            <div className="rounded-lg border border-border bg-muted/40 px-4 py-6 text-sm text-muted-foreground">
+            <div className="rounded-xl border border-border/60 bg-muted/50 px-5 py-6 text-sm text-muted-foreground">
               No citations were generated. Try providing more complete information.
             </div>
           ) : (
@@ -222,7 +222,7 @@ Examples: r v ..., bill ..., ccc, gladue principle, charter s.7"
 
       {!loading && view.kind === "unsupported" ? (
         <div className="flex flex-col gap-3">
-          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 px-4 py-4 text-sm text-foreground">
+          <div className="flex items-start gap-3 rounded-xl border border-border/60 bg-muted/50 px-5 py-4 text-sm text-foreground">
             <Info className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
             <div>
               <p className="font-medium">This type of citation isn&apos;t supported</p>
@@ -253,7 +253,7 @@ Examples: r v ..., bill ..., ccc, gladue principle, charter s.7"
       ) : null}
 
       {!loading && view.kind === "error" ? (
-        <div className="flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-4 text-sm">
+        <div className="flex items-start gap-3 rounded-xl border border-destructive/30 bg-destructive/[0.04] px-5 py-4 text-sm">
           <AlertCircle
             className="mt-0.5 size-4 shrink-0 text-destructive"
             aria-hidden="true"

@@ -46,19 +46,19 @@ export default function Page() {
 
   return (
     <main className="min-h-svh bg-background">
-      <div className="mx-auto w-full max-w-[960px] px-4 py-12 sm:py-16">
-        <header className="border-b border-border pb-6">
-          <p className="text-xs font-medium uppercase tracking-widest text-primary">
+      <div className="mx-auto w-full max-w-[960px] px-4 py-16 sm:py-20">
+        <header className="border-b border-border/60 pb-8">
+          <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
             McGill Citation Guide
           </p>
-          <h1 className="mt-2 text-balance font-serif text-3xl font-semibold leading-tight text-foreground sm:text-4xl">
-            McGill Legal Citation Tool (10th ed)
+          <h1 className="mt-3 text-balance font-serif text-4xl font-semibold leading-tight text-foreground sm:text-5xl">
+            McGill Legal Citation Tool
           </h1>
-          <p className="mt-3 text-pretty text-sm leading-relaxed text-muted-foreground">
-            Verified McGill citations (10th ed), grounded in real legal databases — A2AJ, CrossRef, Open Library. Not a fill-in-the-blanks form, not AI guesswork.
+          <p className="mt-1 font-serif text-xl text-muted-foreground sm:text-2xl">
+            10th Edition
           </p>
-          <p className="mt-1 text-pretty text-sm leading-relaxed text-muted-foreground">
-            Enter a case, statute, gov doc, or just a legal concept to get started.
+          <p className="mt-4 max-w-prose text-pretty text-sm leading-relaxed text-muted-foreground">
+            Verified McGill citations grounded in real legal databases — A2AJ, CrossRef, Open Library. Not a fill-in-the-blanks form, not AI guesswork.
           </p>
         </header>
 
@@ -66,7 +66,7 @@ export default function Page() {
         {!entered && (
           <section
             aria-label="Choose input method"
-            className="mt-8 flex flex-col gap-4 sm:flex-row"
+            className="mt-10 flex flex-col gap-4 sm:flex-row"
           >
             {BOXES.map((box, i) => {
               const Icon = box.icon
@@ -98,11 +98,9 @@ export default function Page() {
                   key={box.tab}
                   type="button"
                   onClick={() => handleBoxClick(box.tab)}
-                  className={`flex flex-1 flex-col items-center gap-3 rounded-xl border-2 border-border bg-card p-6 text-center transition-all duration-200 hover:border-primary/50 hover:bg-accent/30 cursor-pointer ${animClass}`}
+                  className={`flex flex-1 flex-col items-center gap-4 rounded-xl border border-border/60 bg-card p-7 text-center shadow-[0_1px_4px_0_rgb(0_0_0_/_0.04)] transition-all duration-200 hover:border-border hover:shadow-[0_2px_8px_0_rgb(0_0_0_/_0.06)] cursor-pointer ${animClass}`}
                 >
-                  <div className="rounded-full bg-primary/10 p-3">
-                    <Icon className="size-6 text-primary" aria-hidden="true" />
-                  </div>
+                  <Icon className="size-6 text-primary" aria-hidden="true" />
                   <div>
                     <p className="text-sm font-medium text-foreground">
                       {box.heading}
@@ -120,8 +118,8 @@ export default function Page() {
         {/* ---------- main tabs (visible after entry) ---------- */}
         {entered && (
           <div
-            className="mt-8"
-            style={{ animation: "tabFadeIn 250ms ease-out both" }}
+            className="mt-10"
+            style={{ animation: "tabFadeIn 200ms ease-out both" }}
           >
             <Tabs
               value={activeTab}
@@ -161,26 +159,26 @@ export default function Page() {
         </div>
 
         {/* ---------- footer ---------- */}
-        <footer className="mt-6 border-t border-border pt-6 text-xs leading-relaxed text-muted-foreground">
+        <footer className="mt-10 border-t border-border/60 pt-8 text-xs leading-relaxed text-muted-foreground">
           <p>
             Citations are provided for reference. Always verify against the
             official McGill Guide before submission.
           </p>
-          <div className="mt-3 flex items-center gap-3">
+          <div className="mt-4 flex items-center gap-3">
             <a
               href="https://ko-fi.com/wwwyyyy0"
               target="_blank"
               rel="noopener"
-              aria-label="Support"
-              className="inline-flex items-center gap-1 rounded-full border border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
+              aria-label="Support this project"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-border hover:text-foreground"
             >
               ☕ Support
             </a>
             <span className="text-xs text-muted-foreground">
-              This tool runs on paid APIs, support keeps it running.
+              This tool runs on paid APIs — support keeps it running.
             </span>
           </div>
-          <p className="mt-3 text-xs text-muted-foreground">
+          <p className="mt-4 text-xs text-muted-foreground">
             This tool is actively being developed and may occasionally make mistakes. Please review citations before use.
           </p>
         </footer>
