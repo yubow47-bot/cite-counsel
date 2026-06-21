@@ -151,7 +151,7 @@ def build_book_citation(ol_data: dict) -> str | None:
     if not year:
         return None
 
-    return f"{author_str}{title}{edition_str} ({place_str}{publisher}, {year})."
+    return f"{author_str}*{title}*{edition_str} ({place_str}{publisher}, {year})."
 
 
 def _extract_year(date_str: str) -> str | None:
