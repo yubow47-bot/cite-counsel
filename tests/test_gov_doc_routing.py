@@ -83,6 +83,53 @@ def test_ac3_get_rules_parliamentary_documents():
     )
 
 
+def test_gov_examples_use_compact_mcgill_10th_form():
+    """Cross-check: gov.* subpattern examples must use compact McGill 10th form
+    (NN-N session, 'No' not 'vol', no 'Canada,' prefix for federal, no 'Parl,'
+    or 'Sess,'). Fully deterministic — asserts on static template data."""
+    from core.mcgill_engine import get_rules
+
+    # ── Parliamentary Documents ──
+    parl = get_rules("government_docs", subpattern="gov.parliamentary_documents")
+    parl_ex = parl["topics"][0]["examples"]
+    parl_text = " ".join(parl_ex)
+    # Must contain compact session form
+    assert any(m in e for e in parl_ex for m in ["37-1", "42-1"]), (
+        f"parliamentary examples missing compact NN-N session: {parl_ex}"
+    )
+    # Must NOT contain long-form markers
+    assert "Parl," not in parl_text, f"parliamentary examples contain 'Parl,': {parl_text[:200]}"
+    assert "Sess," not in parl_text, f"parliamentary examples contain 'Sess,': {parl_text[:200]}"
+    assert "vol " not in parl_text, f"parliamentary examples contain 'vol ': {parl_text[:200]}"
+    # Federal examples must NOT have "Canada," prefix
+    for ex in parl_ex:
+        if "House of Commons" in ex:
+            assert not ex.startswith("Canada,"), (
+                f"federal example has 'Canada,' prefix: {ex}"
+            )
+
+    # ── Committee Reports ──
+    cmte = get_rules("government_docs", subpattern="gov.committee_reports")
+    cmte_ex = cmte["topics"][0]["examples"]
+    cmte_text = " ".join(cmte_ex)
+    # Must contain compact session form
+    assert any(m in e for e in cmte_ex for m in ["39-2", "43-2"]), (
+        f"committee examples missing compact NN-N session: {cmte_ex}"
+    )
+    assert "Parl," not in cmte_text, f"committee examples contain 'Parl,': {cmte_text[:200]}"
+    assert "Sess," not in cmte_text, f"committee examples contain 'Sess,': {cmte_text[:200]}"
+
+    # ── Inquiry Reports ──
+    inq = get_rules("government_docs", subpattern="gov.inquiry_reports")
+    inq_ex = inq["topics"][0]["examples"]
+    inq_text = " ".join(inq_ex)
+    # Must contain the Blood System inquiry (authoritative example)
+    assert any("Commission of Inquiry on the Blood System" in e for e in inq_ex), (
+        f"inquiry examples missing authoritative Blood System example: {inq_ex}"
+    )
+    assert "vol " in inq_text, f"inquiry examples missing 'vol ' (inquiry reports use vol): {inq_text[:200]}"
+
+
 def test_ac4_committee_report_routing():
     """AC4: Given classify returns 'government_document' for committee text,
     subtype picker → 'committee_reports', get_rules → exactly 1 topic
@@ -346,6 +393,7 @@ if __name__ == "__main__":
         ("AC1: hansard→parliamentary routing (mocked)", test_ac1_hansard_to_parliamentary_routing),
         ("AC2: hansard subtype picker", test_ac2_hansard_subtype_is_parliamentary_documents),
         ("AC3: get_rules parliamentary 1 topic", test_ac3_get_rules_parliamentary_documents),
+        ("compact: gov examples use McGill 10th form", test_gov_examples_use_compact_mcgill_10th_form),
         ("AC4: committee→committee_reports (mocked)", test_ac4_committee_report_routing),
         ("AC5: inquiry→inquiry_reports (mocked)", test_ac5_inquiry_report_routing),
         ("AC6: extract_url passes doc_type (mocked)", test_ac6_extract_url_passes_doc_type_to_format_citation),
