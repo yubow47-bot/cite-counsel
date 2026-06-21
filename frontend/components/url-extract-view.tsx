@@ -27,7 +27,8 @@ export function UrlExtractView({ autoFocus }: { autoFocus?: boolean }) {
   const [loading, setLoading] = useState(false)
   const [view, setView] = useState<ExtractView>({ kind: "idle" })
 
-  function applyEnvelope(env: Envelope) {
+  function applyEnvelope(env: Envelope, kind: InputKind) {
+    setSubmittedKind(kind)
     switch (env.status) {
       case "done":
         setView({ kind: "done", citations: env.data.citations ?? [] })
@@ -35,7 +36,7 @@ export function UrlExtractView({ autoFocus }: { autoFocus?: boolean }) {
       case "unsupported":
         setView({
           kind: "unsupported",
-          reason: FAIL_MESSAGES[submittedKind] ?? FAIL_MESSAGES.url,
+          reason: FAIL_MESSAGES[kind] ?? FAIL_MESSAGES.url,
         })
         break
       case "error":
@@ -48,44 +49,35 @@ export function UrlExtractView({ autoFocus }: { autoFocus?: boolean }) {
     }
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    const trimmedUrl = url.trim()
-    const trimmedDoi = doi.trim()
-    const trimmedIsbn = isbn.trim()
-    if ((!trimmedUrl && !trimmedDoi && !trimmedIsbn) || loading) return
-
-    const kind: InputKind = trimmedDoi ? "doi" : trimmedIsbn ? "isbn" : "url"
+  async function submitKind(kind: InputKind, value: string) {
+    if (!value.trim() || loading) return
 
     setLoading(true)
-    setSubmittedUrl(trimmedUrl || trimmedDoi || trimmedIsbn)
-    setSubmittedKind(kind)
+    setSubmittedUrl(value.trim())
     setView({ kind: "idle" })
     try {
       const env = await postExtractUrl({
-        url: trimmedUrl || undefined,
-        doi: trimmedDoi || undefined,
-        isbn: trimmedIsbn || undefined,
+        url:   kind === "url"  ? value.trim() : undefined,
+        doi:   kind === "doi"  ? value.trim() : undefined,
+        isbn:  kind === "isbn" ? value.trim() : undefined,
       })
-      applyEnvelope(env)
+      applyEnvelope(env, kind)
     } catch (err) {
       setView({
         kind: "error",
         reason:
           err instanceof Error
             ? err.message
-            : "Could not access this URL. Please check the link and try again.",
+            : "Could not access this source. Please check your input and try again.",
       })
     } finally {
       setLoading(false)
     }
   }
 
-  const hasInput = url.trim().length > 0 || doi.trim().length > 0 || isbn.trim().length > 0
-
   return (
     <div className="flex flex-col gap-6">
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+      <div className="flex flex-col gap-4">
         {/* URL */}
         <div className="flex flex-col gap-1.5">
           <label htmlFor="url-input" className="text-sm font-medium text-foreground">
@@ -106,6 +98,26 @@ export function UrlExtractView({ autoFocus }: { autoFocus?: boolean }) {
             Some sites block scraping — if a link fails, upload a full-page
             screenshot instead.
           </p>
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              onClick={() => submitKind("url", url)}
+              disabled={loading || url.trim().length === 0}
+              className="gap-2"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                  Extracting…
+                </>
+              ) : (
+                <>
+                  <FileText className="size-4" aria-hidden="true" />
+                  Generate citation
+                </>
+              )}
+            </Button>
+          </div>
         </div>
 
         {/* DOI */}
@@ -122,6 +134,26 @@ export function UrlExtractView({ autoFocus }: { autoFocus?: boolean }) {
             disabled={loading}
             className="bg-card font-mono text-sm border-border/60 shadow-[0_1px_3px_0_rgb(0_0_0_/_0.03)]"
           />
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              onClick={() => submitKind("doi", doi)}
+              disabled={loading || doi.trim().length === 0}
+              className="gap-2"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                  Extracting…
+                </>
+              ) : (
+                <>
+                  <FileText className="size-4" aria-hidden="true" />
+                  Generate citation
+                </>
+              )}
+            </Button>
+          </div>
         </div>
 
         {/* ISBN */}
@@ -138,27 +170,28 @@ export function UrlExtractView({ autoFocus }: { autoFocus?: boolean }) {
             disabled={loading}
             className="bg-card font-mono text-sm border-border/60 shadow-[0_1px_3px_0_rgb(0_0_0_/_0.03)]"
           />
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              onClick={() => submitKind("isbn", isbn)}
+              disabled={loading || isbn.trim().length === 0}
+              className="gap-2"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                  Extracting…
+                </>
+              ) : (
+                <>
+                  <FileText className="size-4" aria-hidden="true" />
+                  Generate citation
+                </>
+              )}
+            </Button>
+          </div>
         </div>
-
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-xs text-muted-foreground">
-            Enter a URL, DOI, or ISBN to extract a McGill citation
-          </p>
-          <Button type="submit" disabled={loading || !hasInput} className="gap-2">
-            {loading ? (
-              <>
-                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                Extracting…
-              </>
-            ) : (
-              <>
-                <FileText className="size-4" aria-hidden="true" />
-                Extract Citation
-              </>
-            )}
-          </Button>
-        </div>
-      </form>
+      </div>
 
       {loading ? (
         <div
