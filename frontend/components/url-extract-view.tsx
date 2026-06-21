@@ -103,7 +103,7 @@ export function UrlExtractView({ autoFocus }: { autoFocus?: boolean }) {
             onChange={(e) => setUrl(e.target.value)}
             placeholder="https://www.canlii.org/en/ca/scc/doc/..."
             disabled={loading}
-            className="bg-card font-mono text-sm"
+            className="bg-card font-mono text-sm border-border/60 shadow-[0_1px_3px_0_rgb(0_0_0_/_0.03)]"
           />
           <p className="text-xs text-muted-foreground">
             Some sites block scraping — if a link fails, upload a full-page
@@ -123,7 +123,7 @@ export function UrlExtractView({ autoFocus }: { autoFocus?: boolean }) {
             onChange={(e) => setDoi(e.target.value)}
             placeholder="10.1006/bbrc.2001.4705"
             disabled={loading}
-            className="bg-card font-mono text-sm"
+            className="bg-card font-mono text-sm border-border/60 shadow-[0_1px_3px_0_rgb(0_0_0_/_0.03)]"
           />
         </div>
 
@@ -139,7 +139,7 @@ export function UrlExtractView({ autoFocus }: { autoFocus?: boolean }) {
             onChange={(e) => setIsbn(e.target.value)}
             placeholder="978-0-19-957685-7"
             disabled={loading}
-            className="bg-card font-mono text-sm"
+            className="bg-card font-mono text-sm border-border/60 shadow-[0_1px_3px_0_rgb(0_0_0_/_0.03)]"
           />
         </div>
 
@@ -165,7 +165,7 @@ export function UrlExtractView({ autoFocus }: { autoFocus?: boolean }) {
 
       {loading ? (
         <div
-          className="flex items-center gap-3 rounded-lg border border-border bg-muted/40 px-4 py-6 text-sm text-muted-foreground"
+          className="flex items-center gap-3 rounded-xl border border-border/60 bg-muted/50 px-5 py-6 text-sm text-muted-foreground"
           role="status"
           aria-live="polite"
         >
@@ -175,7 +175,7 @@ export function UrlExtractView({ autoFocus }: { autoFocus?: boolean }) {
       ) : scaffold ? (
         <div className="flex flex-col gap-4">
           {scaffold.message ? (
-            <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 px-4 py-4 text-sm">
+            <div className="flex items-start gap-3 rounded-xl border border-border/60 bg-muted/50 px-5 py-4 text-sm">
               <AlertCircle className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
               <p className="text-muted-foreground">{scaffold.message}</p>
             </div>

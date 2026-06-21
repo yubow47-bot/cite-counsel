@@ -80,10 +80,10 @@ export function FileExtractView() {
             pickFile(e.dataTransfer.files?.[0] ?? null)
           }}
           disabled={loading}
-          className={`flex flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed px-4 py-10 text-center transition-colors ${
+          className={`flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-4 py-10 text-center transition-all duration-150 ${
             dragOver
-              ? "border-primary bg-accent"
-              : "border-border bg-card hover:bg-muted/40"
+              ? "border-primary/70 bg-primary/[0.04]"
+              : "border-border/60 bg-card hover:border-border hover:bg-muted/30"
           } disabled:cursor-not-allowed disabled:opacity-60`}
         >
           <Upload className="size-6 text-primary" aria-hidden="true" />
@@ -105,7 +105,7 @@ export function FileExtractView() {
         />
 
         {file ? (
-          <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm">
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-card px-3 py-2 text-sm shadow-[0_1px_3px_0_rgb(0_0_0_/_0.03)]">
             <span className="flex min-w-0 items-center gap-2">
               <FileText className="size-4 shrink-0 text-primary" aria-hidden="true" />
               <span className="truncate text-foreground">{file.name}</span>
@@ -153,7 +153,7 @@ export function FileExtractView() {
 
       {loading ? (
         <div
-          className="flex items-center gap-3 rounded-lg border border-border bg-muted/40 px-4 py-6 text-sm text-muted-foreground"
+          className="flex items-center gap-3 rounded-xl border border-border/60 bg-muted/50 px-5 py-6 text-sm text-muted-foreground"
           role="status"
           aria-live="polite"
         >

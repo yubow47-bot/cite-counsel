@@ -110,7 +110,7 @@ export function ScaffoldForm({
   }
 
   return (
-    <div className="rounded-lg border border-border bg-card p-4 sm:p-5">
+    <div className="rounded-xl border border-border/60 bg-card p-5 sm:p-6 shadow-[0_1px_4px_0_rgb(0_0_0_/_0.04)]">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="font-serif text-lg font-semibold text-card-foreground">
@@ -136,7 +136,7 @@ export function ScaffoldForm({
 
       {configLoading ? (
         <div
-          className="mt-4 flex items-center gap-3 rounded-md border border-border bg-muted/40 px-4 py-6 text-sm text-muted-foreground"
+          className="mt-4 flex items-center gap-3 rounded-lg border border-border/60 bg-muted/50 px-5 py-6 text-sm text-muted-foreground"
           role="status"
           aria-live="polite"
         >
@@ -146,7 +146,7 @@ export function ScaffoldForm({
       ) : null}
 
       {configError ? (
-        <div className="mt-4 flex items-start gap-3 rounded-md border border-destructive/40 bg-destructive/5 px-4 py-4 text-sm">
+        <div className="mt-4 flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/[0.04] px-5 py-4 text-sm">
           <AlertCircle
             className="mt-0.5 size-4 shrink-0 text-destructive"
             aria-hidden="true"
@@ -160,7 +160,7 @@ export function ScaffoldForm({
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="scaffold-type">Source type</Label>
             <Select value={type} onValueChange={setType}>
-              <SelectTrigger id="scaffold-type" className="bg-background">
+              <SelectTrigger id="scaffold-type" className="bg-background border-border/60">
                 <SelectValue placeholder="Select a source type" />
               </SelectTrigger>
               <SelectContent>
@@ -194,7 +194,7 @@ export function ScaffoldForm({
                     [field.name]: e.target.value,
                   }))
                 }
-                className="bg-background font-mono text-sm"
+                className="bg-background font-mono text-sm border-border/60"
               />
             </div>
           ))}
@@ -224,7 +224,7 @@ export function ScaffoldForm({
           className="mt-5 flex flex-col gap-3 border-t border-border pt-5"
         >
           {result.citations.length === 0 ? (
-            <div className="flex items-start gap-3 rounded-md border border-border bg-muted/40 px-4 py-4 text-sm text-muted-foreground">
+            <div className="flex items-start gap-3 rounded-lg border border-border/60 bg-muted/50 px-5 py-4 text-sm text-muted-foreground">
               <Info className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
               No citation was produced. Please check the fields and try again.
             </div>
@@ -237,7 +237,7 @@ export function ScaffoldForm({
       ) : null}
 
       {result.kind === "error" ? (
-        <div className="mt-5 flex items-start gap-3 rounded-md border border-destructive/40 bg-destructive/5 px-4 py-4 text-sm">
+        <div className="mt-5 flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/[0.04] px-5 py-4 text-sm">
           <AlertCircle
             className="mt-0.5 size-4 shrink-0 text-destructive"
             aria-hidden="true"
