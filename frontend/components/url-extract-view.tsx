@@ -10,13 +10,20 @@ import {
 } from "@/components/extract-results"
 import { postExtractUrl, type Envelope } from "@/lib/citation-api"
 
-const URL_FAIL_MESSAGE = "URL extraction failed. Please upload a file or screenshot instead."
+const FAIL_MESSAGES: Record<string, string> = {
+  url:  "URL extraction failed. Please upload a file or screenshot instead.",
+  doi:  "DOI extraction failed. Please upload a file or screenshot instead.",
+  isbn: "ISBN extraction failed. Please upload a file or screenshot instead.",
+}
+
+type InputKind = "url" | "doi" | "isbn"
 
 export function UrlExtractView({ autoFocus }: { autoFocus?: boolean }) {
   const [url, setUrl] = useState("")
   const [doi, setDoi] = useState("")
   const [isbn, setIsbn] = useState("")
   const [submittedUrl, setSubmittedUrl] = useState("")
+  const [submittedKind, setSubmittedKind] = useState<InputKind>("url")
   const [loading, setLoading] = useState(false)
   const [view, setView] = useState<ExtractView>({ kind: "idle" })
 
@@ -28,7 +35,7 @@ export function UrlExtractView({ autoFocus }: { autoFocus?: boolean }) {
       case "unsupported":
         setView({
           kind: "unsupported",
-          reason: URL_FAIL_MESSAGE,
+          reason: FAIL_MESSAGES[submittedKind] ?? FAIL_MESSAGES.url,
         })
         break
       case "error":
@@ -48,8 +55,11 @@ export function UrlExtractView({ autoFocus }: { autoFocus?: boolean }) {
     const trimmedIsbn = isbn.trim()
     if ((!trimmedUrl && !trimmedDoi && !trimmedIsbn) || loading) return
 
+    const kind: InputKind = trimmedDoi ? "doi" : trimmedIsbn ? "isbn" : "url"
+
     setLoading(true)
     setSubmittedUrl(trimmedUrl || trimmedDoi || trimmedIsbn)
+    setSubmittedKind(kind)
     setView({ kind: "idle" })
     try {
       const env = await postExtractUrl({
