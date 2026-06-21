@@ -1,15 +1,16 @@
 "use client"
 
 import { useState } from "react"
-import { AlertCircle, FileText, Link2, Loader2, BookOpen } from "lucide-react"
+import { AlertCircle, FileText, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { ScaffoldForm } from "@/components/scaffold-form"
 import {
   ExtractResults,
   type ExtractView,
 } from "@/components/extract-results"
 import { postExtractUrl, type Envelope } from "@/lib/citation-api"
+
+const URL_FAIL_MESSAGE = "URL extraction failed. Please upload a file or screenshot instead."
 
 export function UrlExtractView({ autoFocus }: { autoFocus?: boolean }) {
   const [url, setUrl] = useState("")
@@ -18,30 +19,16 @@ export function UrlExtractView({ autoFocus }: { autoFocus?: boolean }) {
   const [submittedUrl, setSubmittedUrl] = useState("")
   const [loading, setLoading] = useState(false)
   const [view, setView] = useState<ExtractView>({ kind: "idle" })
-  const [scaffold, setScaffold] = useState<{
-    initialType?: string
-    prefill?: Record<string, string>
-    message?: string
-  } | null>(null)
 
   function applyEnvelope(env: Envelope) {
-    setScaffold(null)
     switch (env.status) {
       case "done":
         setView({ kind: "done", citations: env.data.citations ?? [] })
         break
-      case "needs_input":
-        setView({ kind: "idle" })
-        setScaffold({
-          initialType: env.data.type,
-          prefill: env.data.prefill,
-          message: env.data.message ?? env.data.reason,
-        })
-        break
       case "unsupported":
         setView({
           kind: "unsupported",
-          reason: env.data.reason ?? "This URL source is not yet supported.",
+          reason: URL_FAIL_MESSAGE,
         })
         break
       case "error":
@@ -172,18 +159,10 @@ export function UrlExtractView({ autoFocus }: { autoFocus?: boolean }) {
           <Loader2 className="size-4 animate-spin text-primary" aria-hidden="true" />
           Fetching and extracting citation. Please wait…
         </div>
-      ) : scaffold ? (
-        <div className="flex flex-col gap-4">
-          {scaffold.message ? (
-            <div className="flex items-start gap-3 rounded-xl border border-border/60 bg-muted/50 px-5 py-4 text-sm">
-              <AlertCircle className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
-              <p className="text-muted-foreground">{scaffold.message}</p>
-            </div>
-          ) : null}
-          <ScaffoldForm
-            initialType={scaffold.initialType}
-            prefill={scaffold.prefill}
-          />
+      ) : view.kind === "unsupported" ? (
+        <div className="flex items-start gap-3 rounded-xl border border-border/60 bg-muted/50 px-5 py-4 text-sm text-foreground">
+          <AlertCircle className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
+          <p className="text-muted-foreground">{view.reason}</p>
         </div>
       ) : (
         <ExtractResults view={view} sourceInput={submittedUrl} />

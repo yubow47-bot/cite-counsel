@@ -485,6 +485,34 @@ def test_ac3_guard_only_in_url_only_branch_not_doi_isbn():
     )
 
 
+def test_scaffold_disabled_blocks_needs_input():
+    """Prove: SCAFFOLD_ENABLED=false → _scaffold_response never returns
+    status='needs_input'. This is a deterministic code-path assertion,
+    no network/LLM call."""
+    import os
+
+    # Force SCAFFOLD_ENABLED off
+    os.environ["SCAFFOLD_ENABLED"] = "false"
+
+    # Re-import to pick up the env override (module-level constant)
+    import importlib
+    import api.main as main_mod
+    importlib.reload(main_mod)
+
+    # Directly test _scaffold_response — it must return unsupported, not needs_input
+    resp = main_mod._scaffold_response(
+        "url",
+        "test message",
+        suggested_type="news_online",
+    )
+    assert resp["status"] == "unsupported", (
+        f"SCAFFOLD_ENABLED=false but status={resp['status']!r}, expected 'unsupported'"
+    )
+    assert resp["status"] != "needs_input", (
+        "SCAFFOLD_ENABLED=false but _scaffold_response returned 'needs_input'"
+    )
+
+
 if __name__ == "__main__":
     failures = []
     tests = [
@@ -505,6 +533,7 @@ if __name__ == "__main__":
         ("AC1: empty body → unsupported, no format_citation", test_ac1_empty_body_returns_unsupported_and_skips_format),
         ("AC2: nonempty body → format_citation called", test_ac2_nonempty_body_calls_format_citation),
         ("AC3: guard only in URL-only branch, not DOI/ISBN", test_ac3_guard_only_in_url_only_branch_not_doi_isbn),
+        ("scaffold disabled → blocks needs_input", test_scaffold_disabled_blocks_needs_input),
         ("select_subpattern gov routing", test_select_subpattern_routes_gov_docs),
     ]
     for name, fn in tests:
