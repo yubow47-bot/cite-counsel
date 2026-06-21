@@ -12,8 +12,8 @@ const BOXES = [
   {
     tab: "query" as const,
     icon: Search,
-    heading: "Case, statute, gov doc…",
-    blurb: <>or just a <strong>legal concept</strong></>,
+    heading: "Case, statute, bill…",
+    blurb: <>or just a legal concept</>,
   },
   {
     tab: "file" as const,
