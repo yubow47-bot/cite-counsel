@@ -164,6 +164,51 @@ def find_bill(bill_number: str, year: int | None = None) -> dict | None:
     return None
 
 
+def find_bills(bill_number: str, year: int | None = None) -> list[dict]:
+    """Find ALL bills matching the number across sessions.
+
+    When year is given, collects every match from every year-matched session.
+    When no year given, searches only the current session (returns at most 1).
+    Never falls back to current session for years outside coverage.
+
+    Args:
+        bill_number: e.g. "C-22", "S-2"
+        year: optional 4-digit year for historical session resolution.
+
+    Returns list of bill record dicts (may be empty).
+    """
+    target = _normalize_bill_number(bill_number)
+    results: list[dict] = []
+    seen_bill_ids: set[int] = set()
+
+    if year is not None:
+        sessions = _year_to_sessions(year)
+    else:
+        sessions = []
+
+    if not sessions:
+        # No year (or year before coverage) — only search if no year specified
+        if year is None:
+            bills = fetch_legisinfo_bills()
+            for b in bills:
+                if _normalize_bill_number(b.get("BillNumberFormatted", "")) == target:
+                    bid = b.get("BillId", 0)
+                    if bid and bid not in seen_bill_ids:
+                        seen_bill_ids.add(bid)
+                        results.append(b)
+        return results
+
+    for sess in sessions:
+        bills = fetch_legisinfo_bills(session=sess)
+        for b in bills:
+            if _normalize_bill_number(b.get("BillNumberFormatted", "")) == target:
+                bid = b.get("BillId", 0)
+                if bid and bid not in seen_bill_ids:
+                    seen_bill_ids.add(bid)
+                    results.append(b)
+    return results
+
+
 def build_bill_citation(record: dict, pinpoint: str | None = None) -> str:
     """Assemble a McGill-format bill citation from LEGISinfo data (no LLM).
 

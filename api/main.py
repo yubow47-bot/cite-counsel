@@ -164,8 +164,15 @@ def _candidate_display(item: dict) -> str:
         or "unknown"
     )
     cit = item.get("neutral_citation") or item.get("reporter", "")
+    # Bill candidates carry session and title for disambiguation
+    bill_session = item.get("bill_session", "")
+    bill_title = item.get("bill_title", "")
     parts = [f"{badge} {name}"]
-    if cit:
+    if bill_session:
+        parts.append(f"Session {bill_session}")
+    if bill_title:
+        parts.append(bill_title[:80])
+    elif cit:
         parts.append(cit)
     return " — ".join(parts)
 
@@ -314,8 +321,8 @@ async def citation_query(body: CitationInput, request: Request):
                 disabled_message=_SCAFFOLD_DISABLED_MSG,
             )
 
-    # ── case_name with multiple candidates → needs_selection ──
-    if route == "case_name" and len(results) > 1:
+    # ── bill / case_name with multiple candidates → needs_selection ──
+    if route in ("bill", "case_name") and len(results) > 1:
         candidates = []
         for item in results:
             candidates.append({
