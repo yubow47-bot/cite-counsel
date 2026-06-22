@@ -416,6 +416,12 @@ def search_citation(query: str, classification: dict | None = None) -> list:
     elif input_type == "bill":
         from local_tools.legisinfo_api import find_bill, build_bill_citation
 
+        # 从原始输入提取年份（照抄 case_name 分支的 _extract_year 用法）
+        _, bill_year_str = _extract_year(classified.get("original", ""))
+        bill_year = int(bill_year_str) if bill_year_str else None
+        if bill_year:
+            print(f"[DEBUG] 从 bill 原始输入提取到年份: {bill_year}")
+
         # 从原始输入提取 pinpoint（normalized 只含法案编号）
         bill_pinpoint = None
         bill_pin_match = re.search(
@@ -425,16 +431,17 @@ def search_citation(query: str, classification: dict | None = None) -> list:
         if bill_pin_match:
             bill_pinpoint = bill_pin_match.group(0).strip()
 
-        bill_rec = find_bill(normalized)
+        bill_rec = find_bill(normalized, year=bill_year)
         if bill_rec:
             citation = build_bill_citation(bill_rec, pinpoint=bill_pinpoint)
             return [{"_bill_citation": citation, "verified": True, "style_of_cause": f"Bill {normalized}"}]
-        # LEGISinfo 未命中 → 不返回 _bill_citation（避免 format_citation 输出含 [占位符] 的假引用）
+        # LEGISinfo 未命中 → 不返回 _bill_citation
+        not_found_msg = f"⚠️ 在{'指定年份' if bill_year else '当前会期'}中未找到该法案"
         return [{
             "verified": False,
             "style_of_cause": f"Bill {normalized}",
             "bill_number": normalized,
-            "warning": "⚠️ 当前会期未找到该法案",
+            "warning": not_found_msg,
         }]
 
     # 5. concept：概念展开
