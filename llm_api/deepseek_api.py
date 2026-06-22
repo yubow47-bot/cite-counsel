@@ -154,6 +154,7 @@ def extract_from_url(url: str) -> dict:
         "date": meta.get("date") or None,
         "newspaper": sitename or None,
         "hostname": hostname,
+        "raw_text": meta.get("raw_text") or "",
         "style_of_cause": None,
         "neutral_citation": None,
         "statute_title": None,
