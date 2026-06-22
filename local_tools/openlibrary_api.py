@@ -133,11 +133,14 @@ def build_book_citation(ol_data: dict) -> str | None:
     edition_str = f", {edition}" if edition else ""
 
     # ── Place of publication (optional — degrade gracefully) ──
-    # Open Library wraps uncertain places like [United States?]; strip brackets/?.
+    # Open Library wraps uncertain / missing places like [United States?]
+    # or [S.l.] (sine loco). Strip brackets and ?, then omit S.l. / empty.
     places = ol_data.get("publish_places", [])
     place = places[0].get("name", "").strip() if places else ""
     if place:
-        place = re.sub(r'^\[(.+)\]$', r'\1', place).replace('?', '')
+        place = re.sub(r'^\[(.+)\]$', r'\1', place).replace('?', '').strip()
+        if place.lower() in ("s.l.", "s.l", ""):
+            place = ""
     place_str = f"{place}: " if place else ""
 
     # ── Publisher ──
