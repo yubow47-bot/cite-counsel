@@ -15,6 +15,8 @@ export interface Citation {
   source_case?: string
   /** false 表示由用户手动填写、未经数据库核验 */
   verified?: boolean
+  /** 后端透传的来源类型，用于前端 placeholder 选择 */
+  source_type?: string
 }
 
 export interface Candidate {
