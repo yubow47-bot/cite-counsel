@@ -386,6 +386,37 @@ def get_rules(detected_type: str, subpattern: str | None = None) -> dict:
     return {"category": "General Rules", "topics": []}
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+#  A0 — Type-name mapping table
+#  Three namespaces refer to the same citation types:
+#    (a) keys/paths in mcgill_rules.json
+#    (b) type strings passed to _build_italic_rules()
+#    (c) deterministic builder functions in local_tools/
+#
+#  canonical    | rules-JSON key/path              | _build_italic_rules type    | builder function
+#  -------------|----------------------------------|-----------------------------|--------------------
+#  jurisprudence | jurisprudence (top-level)        | jurisprudence                | — (LLM only)
+#  legislation   | legislation (top-level)          | legislation                  | — (LLM only)
+#    statute     | legislation > Statutes           | (handled by subpattern)      | — (LLM only)
+#    constitutional | legislation > Constitutional  | constitutional_statutes      | — (LLM only)
+#    bill        | legislation > Bills              | — (gap: italic via builder)  | build_bill_citation
+#    regulation  | legislation > (by-law, securities)|— (gap: no dedicated rule)  | — (LLM only)
+#  government    | government_docs (top-level)      | government_docs              | — (LLM only)
+#  journal       | secondary_sources > Journal      | secondary_sources.journal_articles | build_journal_citation
+#  book          | secondary_sources > Books        | secondary_sources.books      | build_book_citation
+#  by_law        | by_law (top-level scaffold key)  | — (gap)                     | — (scaffold only)
+#  treaty        | treaty (top-level scaffold key)  | — (gap)                     | — (scaffold only)
+#  foreign       | foreign (top-level scaffold key) | — (gap)                     | — (scaffold only)
+#  news_online   | news_online (top-level scaffold) | — (gap)                     | — (scaffold only)
+#  website       | website (top-level scaffold key) | secondary_sources.websites   | — (LLM only)
+#  general       | general_rules (top-level)        | general_rules (fallback)     | — (LLM only)
+#
+#  Key: "gap" = the type appears in one namespace but has no equivalent in
+#  another — e.g. bill has a builder but no _build_italic_rules entry (italic
+#  is applied directly in the builder).  Do NOT treat "key not found" as
+#  "no italic rule" — it may simply be handled elsewhere.
+# ═════════════════════════════════════════════════════════════════════════════
+
 def _build_italic_rules(detected_type: str, subpattern: str | None = None) -> str:
     """按 detected_type / subpattern 生成斜体规则文本。
 

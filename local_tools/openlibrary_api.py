@@ -93,6 +93,16 @@ def fetch_openlibrary(isbn: str) -> dict | None:
         return None
 
 
+def _wrap_italic(s: str) -> str:
+    """Wrap in *...* if not already wrapped. Only manage outer wrapping."""
+    if not s:
+        return s
+    s = s.strip()
+    if s.startswith("*") and s.endswith("*"):
+        return s
+    return f"*{s}*"
+
+
 def build_book_citation(ol_data: dict) -> str | None:
     """Assemble a McGill-format book citation from Open Library data (no LLM).
 
@@ -157,7 +167,7 @@ def build_book_citation(ol_data: dict) -> str | None:
     if not year:
         return None
 
-    return f"{author_str}*{title}*{edition_str} ({place_str}{publisher}, {year})."
+    return f"{author_str}{_wrap_italic(title)}{edition_str} ({place_str}{publisher}, {year})."
 
 
 def _extract_year(date_str: str) -> str | None:
