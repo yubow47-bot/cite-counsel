@@ -517,6 +517,7 @@ STRICT OUTPUT RULES:
 - If a field is null or missing, omit it entirely
 - For websites: Author (if any), "Title", (Date), online: Site Name <URL>.
 - Output must end with a period
+- NEVER add a pinpoint (e.g. "at para 42", "s 7(2)", "at 100") that is not explicitly present in the input fields above. Only include a pinpoint if the input fields contain a non-null value for it.
 {italic_rules}"""
 
 

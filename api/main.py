@@ -332,7 +332,7 @@ async def citation_query(body: CitationInput, request: Request):
         debug = _collect_debug_info(route)
         return _envelope(
             True, route, "done",
-            {"citations": [{"citation": citation}]},
+            {"citations": [{"citation": citation, "source_type": route}]},
             debug=debug,
         )
     except Exception as e:
@@ -377,7 +377,7 @@ def _handle_concept(results: list) -> dict:
         debug = _collect_debug_info("concept")
         return _envelope(
             True, "concept", "done",
-            {"citations": [{"citation": citation}]},
+            {"citations": [{"citation": citation, "source_type": "concept"}]},
             debug=debug,
         )
     except Exception as e:
@@ -410,10 +410,11 @@ async def citation_select(body: CitationSelectInput):
 
     try:
         citation = format_citation(item)
+        item_source_type = detect_type(item)
         debug = _collect_debug_info("select")
         return _envelope(
             True, "select", "done",
-            {"citations": [{"citation": citation}]},
+            {"citations": [{"citation": citation, "source_type": item_source_type}]},
             debug=debug,
         )
     except Exception as e:
@@ -463,7 +464,7 @@ async def extract_file(file: UploadFile = File(...)):
         debug = _collect_debug_info("file")
 
         return _envelope(True, "file", "done", {
-            "citations": [{"citation": citation}],
+            "citations": [{"citation": citation, "source_type": doc_type}],
             "doc_type": doc_type,
         }, debug=debug)
 
@@ -509,7 +510,7 @@ async def extract_url(body: UrlInput):
             citation = format_citation(fields, doc_type="journal_article")
             debug = _collect_debug_info("url")
             return _envelope(True, "url", "done", {
-                "citations": [{"citation": citation}],
+                "citations": [{"citation": citation, "source_type": "journal_article"}],
             }, debug=debug)
         except ValueError as e:
             msg = str(e)
@@ -534,7 +535,7 @@ async def extract_url(body: UrlInput):
             citation = format_citation(fields, doc_type="book")
             debug = _collect_debug_info("url")
             return _envelope(True, "url", "done", {
-                "citations": [{"citation": citation}],
+                "citations": [{"citation": citation, "source_type": "book"}],
             }, debug=debug)
         except ValueError as e:
             msg = str(e)
@@ -590,7 +591,7 @@ async def extract_url(body: UrlInput):
         debug = _collect_debug_info("url")
 
         return _envelope(True, "url", "done", {
-            "citations": [{"citation": citation}],
+            "citations": [{"citation": citation, "source_type": doc_type}],
         }, debug=debug)
 
     except Exception as e:
@@ -775,7 +776,7 @@ async def citation_assemble(body: AssemblyInput):
     try:
         citation = assemble(body.type, body.fields)
         return _envelope(True, body.type, "done", {
-            "citations": [{"citation": citation, "verified": False}],
+            "citations": [{"citation": citation, "verified": False, "source_type": body.type}],
         })
     except Exception as e:
         return _envelope(
