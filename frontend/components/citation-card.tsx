@@ -51,10 +51,14 @@ function getPinpointPlaceholder(sourceType?: string): string {
     return "e.g. at para 47 or at paras 47–49"
   }
 
+  // bill — e.g. cl 15(1)(a) or cl 5
+  if (st === "bill") {
+    return "e.g. cl 15(1)(a) or cl 5"
+  }
+
   // statute / regulation — e.g. s 7(2)(c) or ss 1–3
   if (
     st === "legislation" ||
-    st === "bill" ||
     st === "statute" ||
     st === "regulation" ||
     st.startsWith("leg.")
