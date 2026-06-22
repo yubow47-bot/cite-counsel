@@ -417,7 +417,9 @@ async def citation_select(body: CitationSelectInput):
 
     try:
         citation = format_citation(item)
-        item_source_type = detect_type(item)
+        # Bill candidates carry bill_session → use "bill" directly;
+        # detect_type cannot classify LEGISinfo record keys.
+        item_source_type = "bill" if item.get("bill_session") else detect_type(item)
         debug = _collect_debug_info("select")
         return _envelope(
             True, "select", "done",
