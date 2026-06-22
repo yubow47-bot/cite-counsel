@@ -212,6 +212,16 @@ describe('CitationCard — placeholder by source type', () => {
       .toHaveProperty('placeholder', 'e.g. s 7(2)(c) or ss 1–3')
   })
 
+  it('shows bill placeholder for bill', async () => {
+    const user = userEvent.setup()
+    render(
+      <CitationCard item={{ ...BASE_CITATION, source_type: "bill" }} sourceInput="" />
+    )
+    await user.click(screen.getByText(/add pinpoint/i))
+    expect(screen.getByRole('textbox', { name: /pinpoint reference/i }))
+      .toHaveProperty('placeholder', 'e.g. cl 15(1)(a) or cl 5')
+  })
+
   it('shows treaty placeholder for treaty', async () => {
     const user = userEvent.setup()
     render(
