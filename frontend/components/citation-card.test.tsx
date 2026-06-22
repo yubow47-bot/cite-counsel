@@ -199,7 +199,7 @@ describe('CitationCard — placeholder by source type', () => {
     )
     await user.click(screen.getByText(/add pinpoint/i))
     expect(screen.getByRole('textbox', { name: /pinpoint reference/i }))
-      .toHaveProperty('placeholder', 'e.g. para 47 or paras 47–49')
+      .toHaveProperty('placeholder', 'e.g. at para 47 or at paras 47–49')
   })
 
   it('shows statute placeholder for legislation', async () => {
@@ -229,7 +229,7 @@ describe('CitationCard — placeholder by source type', () => {
     )
     await user.click(screen.getByText(/add pinpoint/i))
     expect(screen.getByRole('textbox', { name: /pinpoint reference/i }))
-      .toHaveProperty('placeholder', 'e.g. 47 or ch 7')
+      .toHaveProperty('placeholder', 'e.g. at 47 or at ch 7')
   })
 
   it('shows webpage placeholder for website', async () => {
@@ -239,7 +239,7 @@ describe('CitationCard — placeholder by source type', () => {
     )
     await user.click(screen.getByText(/add pinpoint/i))
     expect(screen.getByRole('textbox', { name: /pinpoint reference/i }))
-      .toHaveProperty('placeholder', 'e.g. heading or para 6 (not official)')
+      .toHaveProperty('placeholder', 'e.g. at para 6 or heading (not official)')
   })
 
   it('shows unknown placeholder for unrecognised source type', async () => {
@@ -249,7 +249,7 @@ describe('CitationCard — placeholder by source type', () => {
     )
     await user.click(screen.getByText(/add pinpoint/i))
     expect(screen.getByRole('textbox', { name: /pinpoint reference/i }))
-      .toHaveProperty('placeholder', 'e.g. para / s / art / page')
+      .toHaveProperty('placeholder', 'e.g. at para / s / art / at page')
   })
 
   it('falls back to unknown placeholder when source_type is undefined', async () => {
@@ -257,7 +257,7 @@ describe('CitationCard — placeholder by source type', () => {
     render(<CitationCard item={BASE_CITATION} sourceInput="" />)
     await user.click(screen.getByText(/add pinpoint/i))
     expect(screen.getByRole('textbox', { name: /pinpoint reference/i }))
-      .toHaveProperty('placeholder', 'e.g. para / s / art / page')
+      .toHaveProperty('placeholder', 'e.g. at para / s / art / at page')
   })
 })
 
