@@ -13,6 +13,7 @@ from local_tools.legisinfo_api import (
     _year_to_sessions,
     _session_end_year,
     find_bill,
+    find_bills,
     build_bill_citation,
     fetch_legisinfo_bills,
     _normalize_bill_number,
@@ -66,34 +67,54 @@ class TestYearToSession:
 
 class TestFindBillHistorical:
 
-    def test_c32_1997_finds_historical(self):
-        """Bill C-32, 1997 should find either 35-2 or 36-1."""
-        rec = find_bill("C-32", year=1997)
-        assert rec is not None
-        ps = rec.get("ParlSessionCode", "")
-        assert ps in ("35-2", "36-1"), f"Unexpected session: {ps}"
+    def test_c32_1997_returns_multiple_candidates(self):
+        """Bill C-32, 1997 must return >1 candidate (35-2 and 36-1 both have C-32)."""
+        results = find_bills("C-32", year=1997)
+        assert len(results) >= 2, f"Expected >=2 candidates for C-32 in 1997, got {len(results)}"
+        sessions = {r.get("ParlSessionCode") for r in results}
+        assert "35-2" in sessions, f"35-2 missing from {sessions}"
+        assert "36-1" in sessions, f"36-1 missing from {sessions}"
 
-    def test_c32_1994_finds_35_1(self):
-        """Bill C-32, 1994 should find 35-1."""
-        rec = find_bill("C-32", year=1994)
-        assert rec is not None
-        assert rec.get("ParlSessionCode") == "35-1"
+    def test_c32_1994_single_result(self):
+        """Bill C-32, 1994 — only 35-1 has C-32."""
+        results = find_bills("C-32", year=1994)
+        assert len(results) == 1
+        assert results[0].get("ParlSessionCode") == "35-1"
 
-    def test_c32_current_session(self):
-        """Bill C-32 (no year) — current session only."""
-        rec = find_bill("C-32")
-        if rec:
-            ps = rec.get("ParlSessionCode", "")
+    def test_c32_current_session_single(self):
+        """Bill C-32 (no year) — current session only, at most 1 result."""
+        results = find_bills("C-32")
+        assert len(results) <= 1
+        if results:
+            ps = results[0].get("ParlSessionCode", "")
             assert ps != "35-2", "Should not return historical session for no-year lookup"
 
-    def test_nonexistent_with_year_returns_none(self):
+    def test_nonexistent_with_year_returns_empty(self):
         """Non-existent bill with year must not fall back to current session."""
-        rec = find_bill("ZZTOP-999", year=1997)
-        assert rec is None
+        results = find_bills("ZZTOP-999", year=1997)
+        assert results == []
 
-    def test_year_before_coverage_returns_none(self):
-        rec = find_bill("C-32", year=1990)
-        assert rec is None
+    def test_year_before_coverage_returns_empty(self):
+        results = find_bills("C-32", year=1990)
+        assert results == []
+
+    def test_ambiguous_year_bill_has_session_info(self):
+        """Multi-candidate results carry session and parliament info."""
+        results = find_bills("C-32", year=1997)
+        assert len(results) >= 2
+        for r in results:
+            assert r.get("ParlSessionCode") in ("35-2", "36-1")
+            assert r.get("ParliamentNumber", 0) > 0
+            assert r.get("SessionNumber", 0) > 0
+
+
+class TestFindBillsDedup:
+
+    def test_dedup_by_bill_id(self):
+        """find_bills deduplicates by BillId even if same bill appears in edge cases."""
+        results = find_bills("C-32", year=2000)
+        ids = [r.get("BillId") for r in results]
+        assert len(ids) == len(set(ids)), "Duplicate BillId in results"
 
 
 class TestBuildBillCitation:
@@ -121,6 +142,22 @@ class TestBuildBillCitation:
         assert rec is not None
         cit = build_bill_citation(rec)
         assert "1994" in cit, f"Year 1994 missing from: {cit}"
+
+    def test_italic_format_matches_json_example(self):
+        """build output italic format matches mcgill_rules.json Bills example."""
+        import json, os
+        rules_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcgill_rules.json")
+        with open(rules_path, encoding="utf-8") as f:
+            rules = json.load(f)
+        bill_examples = []
+        for t in rules.get("legislation", {}).get("topics", []):
+            if t.get("topic") == "Bills":
+                bill_examples = t.get("examples", [])
+                break
+        assert len(bill_examples) >= 1
+        for ex in bill_examples[:3]:
+            assert ", *" in ex
+            assert "*," in ex
 
 
 class TestCache:

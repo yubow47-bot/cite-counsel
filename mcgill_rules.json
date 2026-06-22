@@ -813,10 +813,10 @@
           "For provinces/territories, include jurisdiction."
         ],
         "examples": [
-          "Bill C-26, An Act to establish the Canadian Border Services Agency, 1st Sess, 38th Parl, 2005, cl 5(1)(e) (as passed by the House of Commons 13 June 2005).",
-          "Bill 59, An Act to amend the Civil Code as regards marriage, 1st Sess, 37th Leg, Quebec, 2004 (assented to 10 November 2004), SQ 2004, c 23",
-          "Bill S-3, An Act to amend the Energy Efficiency Act, 2nd Sess, 40th Parl, 2009, cl 5, (first reading 29 January 2009).",
-          "Bill C-26, An Act to establish the Canadian Border Services Agency, 1st Sess, 38th Parl, cl 5(1)(e) (as passed by the House of Commons 13 June 2005)"
+          "Bill C-26, *An Act to establish the Canadian Border Services Agency*, 1st Sess, 38th Parl, 2005, cl 5(1)(e) (as passed by the House of Commons 13 June 2005).",
+          "Bill 59, *An Act to amend the Civil Code as regards marriage*, 1st Sess, 37th Leg, Quebec, 2004 (assented to 10 November 2004), SQ 2004, c 23",
+          "Bill S-3, *An Act to amend the Energy Efficiency Act*, 2nd Sess, 40th Parl, 2009, cl 5, (first reading 29 January 2009).",
+          "Bill C-26, *An Act to establish the Canadian Border Services Agency*, 1st Sess, 38th Parl, cl 5(1)(e) (as passed by the House of Commons 13 June 2005)"
         ]
       },
       {
