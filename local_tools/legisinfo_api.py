@@ -14,13 +14,10 @@ CACHE_TTL = 3600  # 1 hour — bills change throughout session
 
 BILLS_URL = "https://www.parl.ca/legisinfo/en/bills/json"
 
-# Session-keyed cache: dict[session_code] -> list[dict] | None
 _CACHE: dict[str, list | None] = {}
 _CACHE_TIME: dict[str, float] = {}
 
 # ── Parliamentary session date ranges (hardcoded, 1994–present) ──
-# Each entry: (start_year, end_year) — used for year→session resolution.
-# end_year is None for the current ongoing session.
 SESSION_MAP: dict[str, tuple[int | None, int | None]] = {
     "45-1": (2025, None),
     "44-1": (2021, 2025),
@@ -45,18 +42,20 @@ SESSION_MAP: dict[str, tuple[int | None, int | None]] = {
 }
 
 
-def _year_to_sessions(year: int) -> list[str]:
-    """Return session codes whose date range covers the given year.
+def _get_current_session() -> str:
+    """Return the current parliamentary session code (the one with end_year=None)."""
+    for code, (start, end) in SESSION_MAP.items():
+        if end is None:
+            return code
+    return "45-1"
 
-    Matches if start_year <= year <= end_year.
-    For the current session (end_year=None), matches if year >= start_year.
-    Multiple sessions can match the same year (e.g. 1997 → 35-2, 36-1).
-    """
+
+def _year_to_sessions(year: int) -> list[str]:
+    """Return session codes whose date range covers the given year."""
     candidates = []
     for code, (start, end) in SESSION_MAP.items():
         if start is not None and start <= year:
             if end is None:
-                # Current ongoing session — matches any year >= start
                 if year >= start:
                     candidates.append(code)
             elif end is not None and year <= end:
@@ -73,13 +72,7 @@ def _session_end_year(session_code: str) -> int | None:
 
 
 def _fetch_json(session: str | None = None) -> list | None:
-    """Download the LEGISinfo bill list for an optional session.
-
-    Args:
-        session: ParlSessionCode e.g. "35-2". None = current session.
-
-    Returns list of bill dicts, or None on failure.
-    """
+    """Download the LEGISinfo bill list. Returns list of bill dicts, or None on failure."""
     try:
         url = BILLS_URL
         if session:
@@ -116,10 +109,7 @@ def fetch_legisinfo_bills(force_refresh: bool = False, session: str | None = Non
 
 
 def _normalize_bill_number(raw: str) -> str:
-    """Normalize bill number: strip 'Bill' prefix, normalize case/whitespace.
-
-    Bill C-22 → C-22, C-22 → C-22, bill s-2 → S-2
-    """
+    """Normalize bill number: strip 'Bill' prefix, normalize case/whitespace."""
     s = raw.strip()
     s = re.sub(r"(?i)^bill\s+", "", s)
     s = s.upper().replace(" ", "-").replace("--", "-").strip("-")
@@ -135,29 +125,30 @@ def _ordinal(n: int) -> str:
 def find_bill(bill_number: str, year: int | None = None) -> dict | None:
     """Find a bill in LEGISinfo, optionally by year for historical session lookup.
 
+    Returns the FIRST bill record dict matching the number, or None.
+    When multiple sessions match the same year, this returns the first hit
+    across sessions. Use find_bills() for full multi-session disambiguation.
+
     Args:
         bill_number: e.g. "C-22", "Bill C-22", "S-2"
         year: 4-digit year. If given, resolves to candidate session(s)
               via SESSION_MAP and searches only those sessions.
               Never falls back to current session.
-              If None, searches only the current session (original behaviour).
 
     Returns the bill record dict, or None if not found.
     """
     target = _normalize_bill_number(bill_number)
 
     if year is not None:
-        # Year-based lookup: resolve sessions, search only those
         sessions = _year_to_sessions(year)
         for sess in sessions:
             bills = fetch_legisinfo_bills(session=sess)
             for b in bills:
                 if _normalize_bill_number(b.get("BillNumberFormatted", "")) == target:
                     return b
-        return None  # No fallback — never return wrong-session bill
+        return None
 
-    # No year: current session only (original behaviour)
-    bills = fetch_legisinfo_bills()
+    bills = fetch_legisinfo_bills(session=_get_current_session())
     for b in bills:
         if _normalize_bill_number(b.get("BillNumberFormatted", "")) == target:
             return b
@@ -165,64 +156,61 @@ def find_bill(bill_number: str, year: int | None = None) -> dict | None:
 
 
 def find_bills(bill_number: str, year: int | None = None) -> list[dict]:
-    """Find ALL bills matching the number across sessions.
+    """Find ALL bills matching the number across year-matched sessions.
 
-    When year is given, collects every match from every year-matched session.
-    When no year given, searches only the current session (returns at most 1).
-    Never falls back to current session for years outside coverage.
+    Per-session fault tolerance: each session fetch is wrapped independently.
+    A failing session is logged and skipped; results from successful sessions
+    are preserved. Not-found is returned ONLY when every candidate session fails.
 
     Args:
         bill_number: e.g. "C-22", "S-2"
-        year: optional 4-digit year for historical session resolution.
+        year: optional 4-digit year. None = current session only.
 
     Returns list of bill record dicts (may be empty).
     """
     target = _normalize_bill_number(bill_number)
     results: list[dict] = []
     seen_bill_ids: set[int] = set()
+    failed_sessions: list[str] = []
 
     if year is not None:
         sessions = _year_to_sessions(year)
     else:
-        sessions = []
+        sessions = [_get_current_session()]
 
     if not sessions:
-        # No year (or year before coverage) — only search if no year specified
-        if year is None:
-            bills = fetch_legisinfo_bills()
-            for b in bills:
-                if _normalize_bill_number(b.get("BillNumberFormatted", "")) == target:
-                    bid = b.get("BillId", 0)
-                    if bid and bid not in seen_bill_ids:
-                        seen_bill_ids.add(bid)
-                        results.append(b)
-        return results
+        return []
 
     for sess in sessions:
-        bills = fetch_legisinfo_bills(session=sess)
-        for b in bills:
+        raw = _fetch_json(session=sess)
+        if raw is None:
+            failed_sessions.append(sess)
+            continue
+        for b in raw:
             if _normalize_bill_number(b.get("BillNumberFormatted", "")) == target:
                 bid = b.get("BillId", 0)
                 if bid and bid not in seen_bill_ids:
                     seen_bill_ids.add(bid)
                     results.append(b)
+
+    if failed_sessions:
+        print(f"[LEGISinfo] failed sessions for bill {bill_number}: {failed_sessions}")
+
     return results
 
 
 def build_bill_citation(record: dict, pinpoint: str | None = None) -> str:
     """Assemble a McGill-format bill citation from LEGISinfo data (no LLM).
 
-    Format: Bill {number}, *{long_title}*, {session_ordinal} Sess, {parl_ordinal} Parl, {year}{, cl {pinpoint}}.
+    Format: Bill {number}, *{title}*, {session_ordinal} Sess,
+            {parl_ordinal} Parl, {year}{, cl {pinpoint}}.
 
-    Title is wrapped in Markdown *italic* (frontend renders *x* → <em>).
+    Title is wrapped in Markdown *italic* (frontend renderCitation converts *x* → <em>).
     Year is derived from structured date fields first, falling back to
     the session's end year from SESSION_MAP if no date field is available.
-
-    Example: Bill C-22, *An Act respecting lawful access*, 1st Sess, 45th Parl, 2026.
     """
     number = record.get("BillNumberFormatted", "?")
 
-    # Title — italicised with Markdown asterisks
     title = record.get("LongTitleEn", "").strip() or record.get("ShortTitleEn", "").strip() or "?"
     if title != "?":
         title = f"*{title}*"
@@ -230,7 +218,6 @@ def build_bill_citation(record: dict, pinpoint: str | None = None) -> str:
     parl = record.get("ParliamentNumber", 0) or 0
     sess = record.get("SessionNumber", 0) or 0
 
-    # Year: prefer structured date fields, fall back to session end year
     year = ""
     for date_field in [
         "PassedHouseFirstReadingDateTime", "PassedSenateFirstReadingDateTime",
@@ -248,7 +235,6 @@ def build_bill_citation(record: dict, pinpoint: str | None = None) -> str:
         if end_yr is not None:
             year = str(end_yr)
         elif ps_code:
-            # Current session with no end date yet — use current year
             year = str(datetime.now().year)
 
     citation = f"Bill {number}, {title}, {_ordinal(sess)} Sess, {_ordinal(parl)} Parl"
@@ -262,8 +248,6 @@ def build_bill_citation(record: dict, pinpoint: str | None = None) -> str:
 
 
 def build_bill_scaffold(bill_number: str) -> str:
-    """Return a scaffold McGill citation for a bill number not found in any session.
-    User can fill in the blanks.
-    """
+    """Return a scaffold McGill citation for a bill number not found in any session."""
     num = _normalize_bill_number(bill_number)
     return f"Bill {num}, [Full Title], [Session Ordinal] Sess, [Parliament Ordinal] Parl, [Year]."

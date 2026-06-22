@@ -435,8 +435,18 @@ def search_citation(query: str, classification: dict | None = None) -> list:
             # Year-based: collect ALL matches across all candidate sessions
             matches = find_bills(normalized, year=bill_year)
             if len(matches) == 1:
-                citation = build_bill_citation(matches[0], pinpoint=bill_pinpoint)
-                return [{"_bill_citation": citation, "verified": True, "style_of_cause": f"Bill {normalized}"}]
+                rec = matches[0]
+                parl = rec.get("ParliamentNumber", 0) or 0
+                sess = rec.get("SessionNumber", 0) or 0
+                title_raw = rec.get("LongTitleEn", "").strip() or "?"
+                citation = build_bill_citation(rec, pinpoint=bill_pinpoint)
+                return [{
+                    "_bill_citation": citation,
+                    "verified": True,
+                    "style_of_cause": f"Bill {normalized}",
+                    "bill_session": f"{parl}-{sess}",
+                    "bill_title": title_raw[:120],
+                }]
             elif len(matches) > 1:
                 # Multiple candidates across sessions → needs_selection
                 candidates = []
@@ -458,8 +468,17 @@ def search_citation(query: str, classification: dict | None = None) -> list:
             # No year: current session only (original behaviour)
             bill_rec = find_bill(normalized)
             if bill_rec:
+                parl = bill_rec.get("ParliamentNumber", 0) or 0
+                sess = bill_rec.get("SessionNumber", 0) or 0
+                title_raw = bill_rec.get("LongTitleEn", "").strip() or "?"
                 citation = build_bill_citation(bill_rec, pinpoint=bill_pinpoint)
-                return [{"_bill_citation": citation, "verified": True, "style_of_cause": f"Bill {normalized}"}]
+                return [{
+                    "_bill_citation": citation,
+                    "verified": True,
+                    "style_of_cause": f"Bill {normalized}",
+                    "bill_session": f"{parl}-{sess}",
+                    "bill_title": title_raw[:120],
+                }]
 
         # LEGISinfo 未命中 → 不返回 _bill_citation
         not_found_msg = f"⚠️ 在{'指定年份' if bill_year else '当前会期'}中未找到该法案"
