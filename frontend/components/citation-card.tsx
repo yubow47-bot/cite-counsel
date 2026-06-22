@@ -48,7 +48,7 @@ function getPinpointPlaceholder(sourceType?: string): string {
     st === "concept" ||
     st.startsWith("juris")
   ) {
-    return "e.g. para 47 or paras 47–49"
+    return "e.g. at para 47 or at paras 47–49"
   }
 
   // statute / regulation — e.g. s 7(2)(c) or ss 1–3
@@ -75,7 +75,7 @@ function getPinpointPlaceholder(sourceType?: string): string {
     st === "thesis" ||
     st.startsWith("secondary_sources.")
   ) {
-    return "e.g. 47 or ch 7"
+    return "e.g. at 47 or at ch 7"
   }
 
   // webpage — e.g. heading or para 6 (not official)
@@ -89,11 +89,11 @@ function getPinpointPlaceholder(sourceType?: string): string {
     st === "government_docs" ||
     st.startsWith("gov.")
   ) {
-    return "e.g. heading or para 6 (not official)"
+    return "e.g. at para 6 or heading (not official)"
   }
 
   // unknown / low confidence
-  return "e.g. para / s / art / page"
+  return "e.g. at para / s / art / at page"
 }
 
 export function CitationCard({
