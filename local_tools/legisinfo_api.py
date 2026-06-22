@@ -199,6 +199,17 @@ def find_bills(bill_number: str, year: int | None = None) -> list[dict]:
     return results
 
 
+def _wrap_italic(s: str) -> str:
+    """Wrap s in *...* if not already wrapped. Only manage outer wrapping;
+    never touch formatting markers inside the value."""
+    if not s:
+        return s
+    s = s.strip()
+    if s.startswith("*") and s.endswith("*"):
+        return s
+    return f"*{s}*"
+
+
 def build_bill_citation(record: dict, pinpoint: str | None = None) -> str:
     """Assemble a McGill-format bill citation from LEGISinfo data (no LLM).
 
@@ -213,7 +224,7 @@ def build_bill_citation(record: dict, pinpoint: str | None = None) -> str:
 
     title = record.get("LongTitleEn", "").strip() or record.get("ShortTitleEn", "").strip() or "?"
     if title != "?":
-        title = f"*{title}*"
+        title = _wrap_italic(title)
 
     parl = record.get("ParliamentNumber", 0) or 0
     sess = record.get("SessionNumber", 0) or 0
