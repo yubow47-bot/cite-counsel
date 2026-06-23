@@ -14,6 +14,7 @@ import {
   type Citation,
   type Envelope,
 } from "@/lib/citation-api"
+import { SCAFFOLD_ENABLED } from "@/lib/scaffold"
 
 type View =
   | { kind: "idle" }
@@ -186,7 +187,7 @@ Examples: r v ..., bill ..., ccc, gladue principle, charter s.7"
               <CitationCard key={i} item={item} sourceInput={submittedInput} />
             ))
           )}
-          {!manualOpen ? (
+          {SCAFFOLD_ENABLED && !manualOpen ? (
             <button
               type="button"
               onClick={() => setManualOpen(true)}
@@ -205,7 +206,7 @@ Examples: r v ..., bill ..., ccc, gladue principle, charter s.7"
             onSelect={handleSelect}
             selectingIndex={selectingIndex}
           />
-          {!manualOpen ? (
+          {SCAFFOLD_ENABLED && !manualOpen ? (
             <button
               type="button"
               onClick={() => setManualOpen(true)}
@@ -217,7 +218,7 @@ Examples: r v ..., bill ..., ccc, gladue principle, charter s.7"
         </div>
       ) : null}
 
-      {!loading && view.kind === "needs_input" ? (
+      {SCAFFOLD_ENABLED && !loading && view.kind === "needs_input" ? (
         <ScaffoldForm initialType={view.initialType} prefill={view.prefill} />
       ) : null}
 
@@ -230,7 +231,7 @@ Examples: r v ..., bill ..., ccc, gladue principle, charter s.7"
               <p className="mt-1 text-muted-foreground">{view.reason}</p>
             </div>
           </div>
-          {!manualOpen ? (
+          {SCAFFOLD_ENABLED && !manualOpen ? (
             <Button
               type="button"
               variant="outline"
@@ -244,8 +245,7 @@ Examples: r v ..., bill ..., ccc, gladue principle, charter s.7"
         </div>
       ) : null}
 
-      {/* Manual override: scaffold form opened from done / needs_selection / unsupported */}
-      {!loading &&
+      {SCAFFOLD_ENABLED && !loading &&
       manualOpen &&
       (view.kind === "done" ||
         view.kind === "needs_selection" ||

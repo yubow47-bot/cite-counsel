@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { CitationCard } from "@/components/citation-card"
+import { SCAFFOLD_ENABLED } from "@/lib/scaffold"
 import { useScaffoldConfig } from "@/lib/use-scaffold-config"
 import {
   postCitationAssemble,
@@ -37,6 +38,7 @@ export function ScaffoldForm({
   /** Hide/close the form (manual override scenario). */
   onClose?: () => void
 }) {
+  if (!SCAFFOLD_ENABLED) return null
   const { config, loading: configLoading, error: configError } =
     useScaffoldConfig()
 
