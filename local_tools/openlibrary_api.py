@@ -4,6 +4,8 @@ import re
 import requests
 from profiling import timing as prof
 
+from local_tools.format_util import _wrap_italic
+
 
 def extract_isbn(text: str) -> str | None:
     """Extract ISBN-10 or ISBN-13 from text.
@@ -91,16 +93,6 @@ def fetch_openlibrary(isbn: str) -> dict | None:
         return data.get(key)
     except Exception:
         return None
-
-
-def _wrap_italic(s: str) -> str:
-    """Wrap in *...* if not already wrapped. Only manage outer wrapping."""
-    if not s:
-        return s
-    s = s.strip()
-    if s.startswith("*") and s.endswith("*"):
-        return s
-    return f"*{s}*"
 
 
 def build_book_citation(ol_data: dict) -> str | None:
