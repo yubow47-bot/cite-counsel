@@ -70,7 +70,7 @@ def _map_fields(result: dict) -> dict:
             "url": result.get("url_en", ""),
         }
     else:
-        reporter = result.get("citation2_en", "") or citation
+        reporter = result.get("citation2_en", "")
         return {
             "style_of_cause": name,
             "neutral_citation": citation,
