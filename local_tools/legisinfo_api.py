@@ -10,6 +10,8 @@ import time
 import requests
 from datetime import datetime
 
+from local_tools.format_util import _wrap_italic
+
 CACHE_TTL = 3600  # 1 hour — bills change throughout session
 
 BILLS_URL = "https://www.parl.ca/legisinfo/en/bills/json"
@@ -197,18 +199,6 @@ def find_bills(bill_number: str, year: int | None = None) -> list[dict]:
         print(f"[LEGISinfo] failed sessions for bill {bill_number}: {failed_sessions}")
 
     return results
-
-
-def _wrap_italic(s: str) -> str:
-    """Wrap s in *...* if not already wrapped. Only manage outer wrapping;
-    never touch formatting markers inside the value."""
-    if not s:
-        return s
-    s = s.strip()
-    if s.startswith("*") and s.endswith("*"):
-        return s
-    return f"*{s}*"
-
 
 def build_bill_citation(record: dict, pinpoint: str | None = None) -> str:
     """Assemble a McGill-format bill citation from LEGISinfo data (no LLM).
