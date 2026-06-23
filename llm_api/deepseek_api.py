@@ -1,9 +1,12 @@
 import os
 import re
 import json
+import logging
 import requests
 from profiling import timing
 from utils.json_util import parse_llm_json
+
+logger = logging.getLogger(__name__)
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_MODEL = os.getenv("LLM_DEFAULT_MODEL", "deepseek-v4-flash")
@@ -61,7 +64,20 @@ def _call_deepseek(messages: list, temperature: float = 0, model: str | None = N
             timeout=30,
         )
     response.raise_for_status()
-    return response.json()["choices"][0]["message"]["content"]
+    data = response.json()
+
+    # ── Track token spend ──
+    try:
+        usage = data.get("usage", {})
+        in_tokens = usage.get("prompt_tokens", 0)
+        out_tokens = usage.get("completion_tokens", 0)
+        if in_tokens or out_tokens:
+            from core.spend_tracker import spend_tracker
+            spend_tracker.record_cost("deepseek", actual_model, in_tokens, out_tokens)
+    except Exception as e:
+        logger.warning("DeepSeek spend tracking failed: %s", e)
+
+    return data["choices"][0]["message"]["content"]
 
 
 def ask_deepseek(prompt: str, model: str | None = None) -> str:
