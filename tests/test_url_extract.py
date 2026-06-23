@@ -46,6 +46,7 @@ FAKE_URL_FIELDS = {
     "author": "Test Author",
     "website": "Example Site",
     "date": "2023-06-01",
+    "raw_text": "This is a sample article body text with enough content to pass the empty-body guard threshold of fifty characters. It describes legal principles.",
 }
 
 

@@ -16,8 +16,8 @@ from api.main import app
 client = TestClient(app)
 
 
-def test_assemble_response_contains_source_type():
-    """POST /api/citation/assemble returns source_type on citation objects."""
+def test_assemble_scaffold_disabled_returns_unsupported():
+    """POST /api/citation/assemble returns unsupported when SCAFFOLD_ENABLED=false."""
     payload = {
         "type": "jurisprudence",
         "fields": {
@@ -28,20 +28,12 @@ def test_assemble_response_contains_source_type():
     resp = client.post("/api/citation/assemble", json=payload)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] == "done"
-    citations = body.get("data", {}).get("citations", [])
-    assert len(citations) >= 1
-    for cit in citations:
-        assert "source_type" in cit, (
-            f"Each citation must carry source_type; missing in {cit}"
-        )
-        assert cit["source_type"] == "jurisprudence", (
-            f"Expected source_type='jurisprudence', got '{cit.get('source_type')}'"
-        )
+    assert body["status"] == "unsupported"
+    assert body["error"]["reason"] == "Manual citation assembly is currently disabled."
 
 
-def test_assemble_response_verified_false_and_source_type():
-    """Assembled citations carry both verified=False and source_type."""
+def test_assemble_scaffold_disabled_no_verified_citation():
+    """Assembled citations are not produced when SCAFFOLD_ENABLED=false."""
     payload = {
         "type": "legislation",
         "fields": {
@@ -52,8 +44,6 @@ def test_assemble_response_verified_false_and_source_type():
     resp = client.post("/api/citation/assemble", json=payload)
     assert resp.status_code == 200
     body = resp.json()
+    assert body["status"] == "unsupported"
     citations = body.get("data", {}).get("citations", [])
-    assert len(citations) >= 1
-    cit = citations[0]
-    assert cit.get("verified") is False
-    assert cit.get("source_type") == "legislation"
+    assert len(citations) == 0
