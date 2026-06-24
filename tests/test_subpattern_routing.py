@@ -7,7 +7,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.mcgill_engine import select_subpattern, _is_numbered_regulation
+from core.mcgill_engine import select_subpattern, _is_numbered_regulation, detect_type
 from core.mcgill_engine import SUBPATTERN_TEMPLATES, _normalize_title
 
 
@@ -350,3 +350,37 @@ def test_regression_original_italic_test_fields():
         "chapter": "c 1035",
     })
     assert r4 == "leg.statute", f"Migratory Birds Regulations should route to leg.statute, got {r4}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  detect_type — role-trust early return
+# ═══════════════════════════════════════════════════════════════════
+
+def test_detect_type_role_legislation_overrides_jurisprudence():
+    """Fields with role='legislation' and a neutral_citation that would
+    otherwise trip the any()-based jurisprudence check MUST return
+    'legislation'.  This is the role-trust contract (detect_type early return).
+    """
+    result = detect_type({
+        "name": "Criminal Code, RSC 1985, c C-46, s 718.2(e)",
+        "neutral_citation": "RSC 1985, c C-46",
+        "role": "legislation",
+        "verified": True,
+        "statute_title": "Criminal Code",
+    })
+    assert result == "legislation", (
+        f"Expected 'legislation', got {result!r}. "
+        "The role-trust early return is missing or broken."
+    )
+
+
+def test_detect_type_role_absent_still_jurisprudence():
+    """Without role='legislation', a fields dict with neutral_citation
+    and no style_of_cause/reporter still returns 'jurisprudence'
+    (the any()-based heuristic unchanged for non-role entries)."""
+    result = detect_type({
+        "style_of_cause": "R v King",
+        "neutral_citation": "2002 SCC 10",
+        "reporter": "[2002] 1 SCR 227",
+    })
+    assert result == "jurisprudence", f"Expected 'jurisprudence', got {result!r}"

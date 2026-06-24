@@ -3,6 +3,7 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from local_tools.format_util import _wrap_italic
+from local_tools.utils import extract_pinpoint
 
 
 class TestWrapItalic:
@@ -34,3 +35,36 @@ def test_shared_singleton():
     from local_tools.format_util import _wrap_italic as wi_src
     assert wi_bill is wi_src
     assert wi_book is wi_src
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  extract_pinpoint — shared helper for pinpoint extraction
+# ═══════════════════════════════════════════════════════════════════
+
+class TestExtractPinpoint:
+    """extract_pinpoint: deterministic string parsing, no I/O."""
+
+    def test_pinpoint_present(self):
+        assert extract_pinpoint("Criminal Code, RSC 1985, c C-46, s 718.2(e)") == "s 718.2(e)"
+
+    def test_no_pinpoint(self):
+        assert extract_pinpoint("Criminal Code, RSC 1985, c C-46") == ""
+
+    def test_act_level_only(self):
+        assert extract_pinpoint("RSC 1985, c C-46") == ""
+
+    def test_sc_regulation(self):
+        assert extract_pinpoint("Youth Criminal Justice Act, SC 2002, c 1, s 3(1)(a)(ii)") == "s 3(1)(a)(ii)"
+
+    def test_sor_regulation(self):
+        # CRC is not in the citation regex; returns "" (known boundary, not broadened)
+        assert extract_pinpoint("Migratory Birds Regulations, CRC, c 1035, s 4") == ""
+
+    def test_bc_regulation(self):
+        assert extract_pinpoint("Some Act, BC Reg 123/2020, s 7(2)") == "s 7(2)"
+
+    def test_empty_string(self):
+        assert extract_pinpoint("") == ""
+
+    def test_no_citation_match(self):
+        assert extract_pinpoint("Some random text without a citation") == ""

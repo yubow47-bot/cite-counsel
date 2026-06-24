@@ -5,6 +5,7 @@ import time
 
 from llm_api.deepseek_api import ask_deepseek
 from local_tools.a2aj_api import fetch_by_citation, search_cases_multi, _map_fields, _extract_year, _extract_jurisdiction
+from local_tools.utils import extract_pinpoint
 from utils.json_util import parse_llm_json
 from local_tools import timing_util as timing
 from profiling import timing as prof
@@ -180,6 +181,11 @@ Rules:
             normalized
         )
         base_citation = cit_match.group(0).strip() if cit_match else normalized
+
+        # 从剩余部分提取 pinpoint（共享 helper，与 search_citation() legislation 分支一致）
+        _pin = extract_pinpoint(normalized)
+        if _pin:
+            entry["pinpoint"] = _pin
 
         # 3. A2AJ /fetch(doc_type="laws")
         try:
@@ -359,14 +365,9 @@ def search_citation(query: str, classification: dict | None = None) -> list:
         )
         base_citation = cit_match.group(0).strip() if cit_match else normalized
 
-        # 从 normalized 中提取 pinpoint（base_citation 之后的部分）
-        # 如 "Youth Criminal Justice Act, SC 2002, c 1, s 3(1)(a)(ii)" → "s 3(1)(a)(ii)"
-        pinpoint = None
-        if cit_match:
-            remainder = normalized[cit_match.end():].strip().lstrip(",").strip()
-            if remainder:
-                pinpoint = remainder
-        else:
+        # 从 normalized 中提取 pinpoint（共享 helper，与 _verify_legislation() 一致）
+        pinpoint = extract_pinpoint(normalized) or None
+        if not cit_match:
             # cit_match 未命中时，尝试从末尾提取 pinpoint 模式
             pin_match = re.search(
                 r'(?:,\s*)?((?:s|ss|art|cl|para|sub)\.?\s*[\d(][\d\w().,-]*(?:\s*\([\w\d]+\))*)\s*$',

@@ -269,6 +269,15 @@ def detect_type(extracted_fields: dict) -> str:
     def has(*candidates):
         return any(c in keys for c in candidates)
 
+    # 0. Role-trust early return: concept-route legislation items carry explicit
+    #    "role": "legislation" set by verify_one / _verify_legislation.
+    #    The any()-based jurisprudence check below would match on neutral_citation
+    #    alone and misclassify them.  This contract must be preserved if detect_type
+    #    or a unified composer is refactored — removing it regresses concept-route
+    #    legislation classification (past Charter-class bug SCC 2020-001).
+    if extracted_fields.get("role") == "legislation":
+        return "legislation"
+
     # 1. Jurisprudence
     if has("style_of_cause", "neutral_citation", "reporter"):
         return "jurisprudence"
