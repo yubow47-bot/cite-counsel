@@ -118,7 +118,7 @@ export function CitationCard({
    * Advisory check: does the base citation look like it already has a pinpoint?
    * If yes, warn — but still let the user choose to add one.
    */
-  const citationHasPinpoint = hasExistingPinpoint(item.citation)
+  const citationHasPinpoint = item.pinpoint ? false : hasExistingPinpoint(item.citation)
 
   /**
    * Build the full citation text with pinpoint concatenated (if any).

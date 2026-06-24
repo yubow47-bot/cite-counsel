@@ -164,6 +164,7 @@ def _candidate_display(item: dict) -> str:
         or "unknown"
     )
     cit = item.get("neutral_citation") or item.get("reporter", "")
+    pin = item.get("pinpoint")
     # Bill candidates carry session and title for disambiguation
     bill_session = item.get("bill_session", "")
     bill_title = item.get("bill_title", "")
@@ -173,7 +174,9 @@ def _candidate_display(item: dict) -> str:
     if bill_title:
         parts.append(bill_title[:80])
     elif cit:
-        parts.append(cit)
+        parts.append(f"{cit}, {pin}" if pin else cit)
+    elif pin:
+        parts.append(pin)
     return " — ".join(parts)
 
 
@@ -336,10 +339,14 @@ async def citation_query(body: CitationInput, request: Request):
     # ── single result → format directly ──
     try:
         citation = format_citation(results[0])
+        _cit_data: dict = {"citation": citation, "source_type": route}
+        _pin = results[0].get("pinpoint")
+        if _pin:
+            _cit_data["pinpoint"] = _pin
         debug = _collect_debug_info(route)
         return _envelope(
             True, route, "done",
-            {"citations": [{"citation": citation, "source_type": route}]},
+            {"citations": [_cit_data]},
             debug=debug,
         )
     except Exception as e:
@@ -381,10 +388,14 @@ def _handle_concept(results: list) -> dict:
     # Single result → format directly
     try:
         citation = format_citation(results[0])
+        _cit_data: dict = {"citation": citation, "source_type": "concept"}
+        _pin = results[0].get("pinpoint")
+        if _pin:
+            _cit_data["pinpoint"] = _pin
         debug = _collect_debug_info("concept")
         return _envelope(
             True, "concept", "done",
-            {"citations": [{"citation": citation, "source_type": "concept"}]},
+            {"citations": [_cit_data]},
             debug=debug,
         )
     except Exception as e:
@@ -420,10 +431,14 @@ async def citation_select(body: CitationSelectInput):
         # Bill candidates carry bill_session → use "bill" directly;
         # detect_type cannot classify LEGISinfo record keys.
         item_source_type = "bill" if item.get("bill_session") else detect_type(item)
+        _cit_data: dict = {"citation": citation, "source_type": item_source_type}
+        _pin = item.get("pinpoint")
+        if _pin:
+            _cit_data["pinpoint"] = _pin
         debug = _collect_debug_info("select")
         return _envelope(
             True, "select", "done",
-            {"citations": [{"citation": citation, "source_type": item_source_type}]},
+            {"citations": [_cit_data]},
             debug=debug,
         )
     except Exception as e:

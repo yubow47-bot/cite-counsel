@@ -17,6 +17,8 @@ export interface Citation {
   verified?: boolean
   /** 后端透传的来源类型，用于前端 placeholder 选择 */
   source_type?: string
+  /** 结构化 pinpoint（如 "s 718.2(e)"），由后端 _verify_legislation 填入 */
+  pinpoint?: string
 }
 
 export interface Candidate {
