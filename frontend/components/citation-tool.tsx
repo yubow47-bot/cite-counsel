@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { AlertCircle, Info, Loader2, PencilLine, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -36,6 +36,7 @@ export function CitationTool({ autoFocus }: { autoFocus?: boolean }) {
   const [view, setView] = useState<View>({ kind: "idle" })
   // Manual override: scaffold form opened by user from a result state
   const [manualOpen, setManualOpen] = useState(false)
+  const isComposingRef = useRef(false)
 
   function applyEnvelope(env: Envelope) {
     setManualOpen(false)
@@ -78,6 +79,10 @@ export function CitationTool({ autoFocus }: { autoFocus?: boolean }) {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    await submit()
+  }
+
+  async function submit() {
     const trimmed = input.trim()
     if (!trimmed || loading) return
 
@@ -99,6 +104,19 @@ export function CitationTool({ autoFocus }: { autoFocus?: boolean }) {
     } finally {
       setLoading(false)
     }
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key !== "Enter" || e.shiftKey) return
+    // IME composition guard: Enter used to confirm a CJK candidate must never submit
+    if (
+      isComposingRef.current ||
+      (e.nativeEvent as KeyboardEvent).isComposing ||
+      e.keyCode === 229
+    )
+      return
+    e.preventDefault()
+    submit()
   }
 
   async function handleSelect(index: number) {
@@ -131,12 +149,15 @@ export function CitationTool({ autoFocus }: { autoFocus?: boolean }) {
           autoFocus={autoFocus}
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onCompositionStart={() => { isComposingRef.current = true }}
+          onCompositionEnd={() => { isComposingRef.current = false }}
           placeholder="Enter a case, statute, bill, legal principle, or any legal topic.
 
 Examples: r v ..., bill ..., ccc, gladue principle, charter s.7"
           rows={4}
           disabled={loading}
-          className="resize-y bg-card font-mono text-sm leading-relaxed border-border/60 shadow-[0_1px_3px_0_rgb(0_0_0_/_0.03)]"
+          className="resize-y bg-card text-sm leading-relaxed border-border/60 focus-visible:border-border focus-visible:ring-2 focus-visible:ring-border/40 shadow-[0_1px_3px_0_rgb(0_0_0_/_0.03)]"
         />
         <p className="text-xs text-muted-foreground">
           AI searches legal databases, verifies sources, and generates citations. Just type naturally, no special format required.
