@@ -30,9 +30,18 @@ export const metadata: Metadata = {
   alternates: {
     canonical: "/",
   },
+  openGraph: {
+    type: "website",
+    siteName: "Cite Counsel",
+    url: "https://citecounsel.com",
+    title: "McGill Legal Citation Tool (10th ed)",
+    description:
+      "Free McGill Guide (10th ed) legal citation tool for Canadian law students. Verified against real legal databases — A2AJ, CrossRef, Open Library, LEGISinfo. Not AI guesswork.",
+  },
   icons: {
     icon: [
       { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/icon-96.png", type: "image/png", sizes: "96x96" },
     ],
     apple: "/apple-icon.png",
   },

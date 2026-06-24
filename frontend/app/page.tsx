@@ -48,6 +48,10 @@ export default function Page() {
     <main className="min-h-svh bg-background">
       <div className="mx-auto w-full max-w-[960px] px-4 py-16 sm:py-20">
         <header className="border-b border-border/60 pb-8">
+          <div className="mb-4 flex items-center gap-2">
+            <img src="/icon.svg" alt="" width={24} height={24} className="size-6" />
+            <span className="font-serif text-sm font-medium text-foreground">Cite Counsel</span>
+          </div>
           <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
             McGill Citation Guide
           </p>
@@ -189,6 +193,30 @@ export default function Page() {
         Needs to live inside the component so it's only injected once.
       */}
       <style>{`@keyframes tabFadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }`}</style>
+
+      {/* ---------- structured data (homepage only) ---------- */}
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify({
+            "@context": "https://schema.org",
+            "@graph": [
+              {
+                "@type": "WebSite",
+                name: "Cite Counsel",
+                alternateName: ["CiteCounsel", "citecounsel.com"],
+                url: "https://citecounsel.com/",
+              },
+              {
+                "@type": "Organization",
+                name: "Cite Counsel",
+                url: "https://citecounsel.com/",
+                logo: "https://citecounsel.com/icon-96.png",
+              },
+            ],
+          }),
+        }}
+      />
     </main>
   )
 }
