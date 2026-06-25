@@ -1,7 +1,7 @@
 "use client"
 
 import { useRef, useState } from "react"
-import { FileText, Loader2, Upload, X } from "lucide-react"
+import { Camera, File, FileImage, FileText, Image as ImageIcon, Loader2, Upload, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   ExtractResults,
@@ -94,6 +94,27 @@ export function FileExtractView() {
             <span className="text-xs text-muted-foreground">
               Supports PDF, Word, images (screenshots / scans), and other document formats
             </span>
+            <span className="mt-1 text-xs text-muted-foreground/80">
+              We read the text and format the citation using only what you provide.
+            </span>
+            <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+              <span className="inline-flex items-center gap-1 rounded-full border border-border/60 px-2.5 py-0.5 text-xs text-muted-foreground">
+                <File className="size-3" aria-hidden="true" />
+                PDF
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full border border-border/60 px-2.5 py-0.5 text-xs text-muted-foreground">
+                <FileText className="size-3" aria-hidden="true" />
+                Word
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full border border-border/60 px-2.5 py-0.5 text-xs text-muted-foreground">
+                <Camera className="size-3" aria-hidden="true" />
+                Screenshot
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full border border-border/60 px-2.5 py-0.5 text-xs text-muted-foreground">
+                <ImageIcon className="size-3" aria-hidden="true" />
+                Photo of a page
+              </span>
+            </div>
           </div>
         </button>
         <input

@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import Link from "next/link"
-import { BookOpen, FileText, Link2, Search } from "lucide-react"
+import { BookOpen, File, FileImage, FileText, Link2, Search, Upload } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { CitationTool } from "@/components/citation-tool"
 import { FeedbackBox } from "@/components/feedback-box"
@@ -18,9 +18,9 @@ const BOXES = [
   },
   {
     tab: "file" as const,
-    icon: FileText,
-    heading: "Upload a PDF, Word doc,",
-    blurb: "or screenshot",
+    icon: Upload,
+    heading: "Upload, screenshot, or photo",
+    blurb: "PDF, Word, or any image",
   },
   {
     tab: "url" as const,
@@ -134,8 +134,9 @@ export default function Page() {
                   Citation Search
                 </TabsTrigger>
                 <TabsTrigger value="file" className="gap-1.5">
-                  <FileText className="size-4" aria-hidden="true" />
-                  File Extraction
+                  <File className="size-4" aria-hidden="true" />
+                  <FileImage className="size-4" aria-hidden="true" />
+                  File or Image
                 </TabsTrigger>
                 <TabsTrigger value="url" className="gap-1.5">
                   <Link2 className="size-4" aria-hidden="true" />
