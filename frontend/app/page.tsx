@@ -57,10 +57,10 @@ export default function Page() {
             McGill Citation Guide &middot; 10th Edition
           </p>
           <h1 className="mt-5 text-balance font-serif text-4xl font-semibold leading-tight text-foreground sm:text-5xl">
-            McGill Legal Citation Tool
+            McGill Guide Citation Tool
           </h1>
           <p className="mt-4 max-w-prose text-pretty text-sm leading-relaxed text-muted-foreground">
-            Verified McGill citations grounded in real legal databases — A2AJ, CrossRef, Open Library, LEGISinfo. Not a fill-in-the-blanks form, not AI guesswork.
+            Cite anything in McGill Guide (10th ed) for free, verified against real databases — cases (A2AJ), bills (LEGISinfo), journals (CrossRef), books (Open Library), and more APIs. Not a fill-in-the-blanks form, not AI guesswork.
           </p>
         </header>
 
