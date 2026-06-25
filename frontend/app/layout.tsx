@@ -24,7 +24,7 @@ const lora = localFont({
 })
 
 export const metadata: Metadata = {
-  title: "McGill Legal Citation Tool (10th ed)",
+  title: "McGill Guide Citation Tool: Data-Verified, AI-Formatted",
   description: "Free McGill Guide (10th ed) legal citation tool for Canadian law students. Verified against real legal databases — A2AJ, CrossRef, Open Library, LEGISinfo. Not AI guesswork.",
   metadataBase: new URL("https://citecounsel.com"),
   alternates: {
@@ -34,7 +34,7 @@ export const metadata: Metadata = {
     type: "website",
     siteName: "Cite Counsel",
     url: "https://citecounsel.com",
-    title: "McGill Legal Citation Tool (10th ed)",
+    title: "McGill Guide Citation Tool: Data-Verified, AI-Formatted",
     description:
       "Free McGill Guide (10th ed) legal citation tool for Canadian law students. Verified against real legal databases — A2AJ, CrossRef, Open Library, LEGISinfo. Not AI guesswork.",
   },
