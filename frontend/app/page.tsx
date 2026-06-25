@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import Link from "next/link"
 import { FileText, Link2, Search } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { CitationTool } from "@/components/citation-tool"
@@ -182,6 +183,16 @@ export default function Page() {
               This tool runs on paid APIs — support keeps it running.
             </span>
           </div>
+          <p className="mt-4 text-xs text-muted-foreground">
+            Learn more on the{" "}
+            <Link href="/about" className="underline-offset-4 transition-colors hover:text-foreground hover:underline">
+              About page
+            </Link>{" "}
+            &middot;{" "}
+            <Link href="/faq" className="underline-offset-4 transition-colors hover:text-foreground hover:underline">
+              Frequently asked questions
+            </Link>
+          </p>
           <p className="mt-4 text-xs text-muted-foreground">
             This tool is actively being developed and may occasionally make mistakes. Please review citations before use.
           </p>
