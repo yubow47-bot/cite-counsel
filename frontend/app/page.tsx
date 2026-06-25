@@ -182,18 +182,17 @@ export default function Page() {
               This tool runs on paid APIs — support keeps it running.
             </span>
           </div>
-          <div className="mt-4 flex flex-wrap items-center gap-3">
+          <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
             <Link
               href="/about"
-              className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-muted"
-              style={{ border: "0.5px solid hsl(var(--border))" }}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border/80 px-4 py-1.5 text-xs text-foreground transition-colors hover:border-foreground/40 hover:bg-muted"
             >
               <BookOpen className="size-4" aria-hidden="true" />
               About / Instructions
             </Link>
             <Link
               href="/faq"
-              className="text-xs text-primary underline-offset-4 transition-colors hover:text-primary/80 hover:underline"
+              className="text-xs font-medium text-primary underline underline-offset-4 transition-colors hover:text-primary/80"
             >
               Frequently asked questions
             </Link>
