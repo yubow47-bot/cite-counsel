@@ -1,6 +1,6 @@
 import type { MetadataRoute } from "next"
 
-const ROUTES = [""] as const // add future path segments here, e.g. "about", "pricing"
+const ROUTES = ["", "about", "faq"] as const
 
 const BASE_URL = "https://citecounsel.com"
 
