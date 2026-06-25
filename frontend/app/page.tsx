@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import Link from "next/link"
-import { FileText, Link2, Search } from "lucide-react"
+import { BookOpen, FileText, Link2, Search } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { CitationTool } from "@/components/citation-tool"
 import { FeedbackBox } from "@/components/feedback-box"
@@ -54,14 +54,11 @@ export default function Page() {
             <span className="font-serif text-sm font-medium text-foreground">Cite Counsel</span>
           </div>
           <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
-            McGill Citation Guide
+            McGill Citation Guide &middot; 10th Edition
           </p>
-          <h1 className="mt-3 text-balance font-serif text-4xl font-semibold leading-tight text-foreground sm:text-5xl">
+          <h1 className="mt-5 text-balance font-serif text-4xl font-semibold leading-tight text-foreground sm:text-5xl">
             McGill Legal Citation Tool
           </h1>
-          <p className="mt-1 font-serif text-xl text-muted-foreground sm:text-2xl">
-            10th Edition
-          </p>
           <p className="mt-4 max-w-prose text-pretty text-sm leading-relaxed text-muted-foreground">
             Verified McGill citations grounded in real legal databases — A2AJ, CrossRef, Open Library, LEGISinfo. Not a fill-in-the-blanks form, not AI guesswork.
           </p>
@@ -166,8 +163,9 @@ export default function Page() {
         {/* ---------- footer ---------- */}
         <footer className="mt-10 border-t border-border/60 pt-8 text-xs leading-relaxed text-muted-foreground">
           <p>
-            Citations are provided for reference. Always verify against the
-            official McGill Guide before submission.
+            Citations are provided for reference. This tool is actively developed and may occasionally
+            make mistakes, so always verify against the official McGill Guide before relying on a
+            citation.
           </p>
           <div className="mt-4 flex items-center gap-3">
             <a
@@ -175,7 +173,8 @@ export default function Page() {
               target="_blank"
               rel="noopener"
               aria-label="Support this project"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+              className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs transition-colors"
+              style={{ background: "#FAECE7", color: "#993C1D", border: "0.5px solid #F0997B" }}
             >
               ☕ Support
             </a>
@@ -183,19 +182,22 @@ export default function Page() {
               This tool runs on paid APIs — support keeps it running.
             </span>
           </div>
-          <p className="mt-4 text-xs text-muted-foreground">
-            Learn more on the{" "}
-            <Link href="/about" className="underline-offset-4 transition-colors hover:text-foreground hover:underline">
-              About page
-            </Link>{" "}
-            &middot;{" "}
-            <Link href="/faq" className="underline-offset-4 transition-colors hover:text-foreground hover:underline">
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <Link
+              href="/about"
+              className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-muted"
+              style={{ border: "0.5px solid hsl(var(--border))" }}
+            >
+              <BookOpen className="size-4" aria-hidden="true" />
+              About / Instructions
+            </Link>
+            <Link
+              href="/faq"
+              className="text-xs text-primary underline-offset-4 transition-colors hover:text-primary/80 hover:underline"
+            >
               Frequently asked questions
             </Link>
-          </p>
-          <p className="mt-4 text-xs text-muted-foreground">
-            This tool is actively being developed and may occasionally make mistakes. Please review citations before use.
-          </p>
+          </div>
         </footer>
       </div>
 
