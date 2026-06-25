@@ -66,6 +66,28 @@ export default function RootLayout({
       className={`light ${GeistSans.variable} ${GeistMono.variable} ${lora.variable} bg-background`}
     >
       <body className="font-sans antialiased">
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              "@context": "https://schema.org",
+              "@graph": [
+                {
+                  "@type": "WebSite",
+                  name: "Cite Counsel",
+                  alternateName: ["CiteCounsel", "citecounsel.com"],
+                  url: "https://citecounsel.com/",
+                },
+                {
+                  "@type": "Organization",
+                  name: "Cite Counsel",
+                  url: "https://citecounsel.com/",
+                  logo: "https://citecounsel.com/icon-96.png",
+                },
+              ],
+            }),
+          }}
+        />
         {children}
         {process.env.NODE_ENV === "production" && <Analytics />}
       </body>

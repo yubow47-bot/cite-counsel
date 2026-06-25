@@ -207,29 +207,6 @@ export default function Page() {
       */}
       <style>{`@keyframes tabFadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }`}</style>
 
-      {/* ---------- structured data (homepage only) ---------- */}
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{
-          __html: JSON.stringify({
-            "@context": "https://schema.org",
-            "@graph": [
-              {
-                "@type": "WebSite",
-                name: "Cite Counsel",
-                alternateName: ["CiteCounsel", "citecounsel.com"],
-                url: "https://citecounsel.com/",
-              },
-              {
-                "@type": "Organization",
-                name: "Cite Counsel",
-                url: "https://citecounsel.com/",
-                logo: "https://citecounsel.com/icon-96.png",
-              },
-            ],
-          }),
-        }}
-      />
     </main>
   )
 }
