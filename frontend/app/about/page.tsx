@@ -51,7 +51,7 @@ export default function AboutPage() {
             <p className="text-pretty text-sm leading-relaxed text-muted-foreground">
               Search with a vague name, citation number, or rough legal concept for a statute, bill,
               or case, then use the guided options to land on exactly what you want. Cite Counsel
-              returns it in McGill format, including Canadian statutes (federal and all provinces and territories), federal bills across past and
+              returns it in McGill format, including Canadian statutes across all jurisdictions, federal bills across past and
               current sessions, and Canadian case law with neutral and part of parallel citations.
             </p>
           </article>
