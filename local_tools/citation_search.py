@@ -453,6 +453,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                 jur = _infer_jurisdiction_canlii(normalized)
             except Exception:
                 jur = None
+            print(f"[CanLII fallback] jur={jur}  normalized={normalized!r}")
             if jur:
                 from local_tools.canlii_api import browse_legislation_in_database
                 mapping_path = os.path.join(
@@ -463,6 +464,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                     with open(mapping_path, encoding='utf-8') as _f:
                         db_map = json.load(_f)
                     db_id = db_map.get(jur, {}).get("statute")
+                    print(f"[CanLII fallback] db_id={db_id}")
                     if db_id:
                         canlii_result = browse_legislation_in_database(db_id)
                         if "error" not in canlii_result:
@@ -481,6 +483,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                                 item for item in legislations
                                 if _normalize_for_match(item.get("title", "")) == norm_target
                             ]
+                            print(f"[CanLII fallback] legislations_count={len(legislations)} norm_target={norm_target!r} match_count={len(matches)}")
                             if len(matches) == 1:
                                 item = matches[0]
                                 verified = True
@@ -490,8 +493,13 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                                 if canlii_cit:
                                     ch_match = re.search(r'(c\s[\w.-]+)', canlii_cit)
                                     chapter = ch_match.group(1) if ch_match else None
-                except Exception:
-                    pass
+                                print(f"[CanLII fallback] MATCH -> {statute_title!r}  cite={canlii_cit!r}")
+                            else:
+                                print(f"[CanLII fallback] NO MATCH (count={len(matches)}, needed exactly 1)")
+                        else:
+                            print(f"[CanLII fallback] CanLII API error: {canlii_result.get('error')!r}")
+                except Exception as e:
+                    print(f"[CanLII fallback] exception: {type(e).__name__}: {e}")
 
         return [{
             "statute_title": statute_title,
