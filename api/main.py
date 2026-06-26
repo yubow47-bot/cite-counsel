@@ -163,7 +163,7 @@ def _candidate_display(item: dict) -> str:
         or item.get("name")
         or "unknown"
     )
-    cit = item.get("neutral_citation") or item.get("chapter") or item.get("reporter", "")
+    cit = item.get("citation") or item.get("neutral_citation") or item.get("chapter") or item.get("reporter", "")
     pin = item.get("pinpoint")
     # Bill candidates carry session and title for disambiguation
     bill_session = item.get("bill_session", "")

@@ -425,6 +425,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
         verified = False
         jurisdiction = None
         chapter = None
+        citation = ""
         statute_title = normalized
 
         if cit_match:
@@ -446,6 +447,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                     r0 = results[0]
                     jurisdiction = _extract_jurisdiction(r0.get("dataset", ""))
                     cit_en = r0.get("citation_en", "")
+                    citation = cit_en
                     ch_match = re.search(r'(c\s[\w.-]+)', cit_en)
                     chapter = ch_match.group(1) if ch_match else None
                     statute_title = r0.get("name_en", normalized)
@@ -497,6 +499,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                                 verified = True
                                 statute_title = item.get("title", normalized)
                                 canlii_cit = item.get("citation", "")
+                                citation = canlii_cit
                                 jurisdiction = jur.upper()
                                 if canlii_cit:
                                     ch_match = re.search(r'(c\s[\w.-]+)', canlii_cit)
@@ -522,6 +525,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                                             "jurisdiction": jur.upper(),
                                             "chapter": ch,
                                             "pinpoint": pinpoint,
+                                            "citation": canlii_cit,
                                             "verified": True,
                                             "source": "canlii",
                                         })
@@ -531,6 +535,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                                     verified = True
                                     statute_title = item.get("title", normalized)
                                     canlii_cit = item.get("citation", "")
+                                    citation = canlii_cit
                                     jurisdiction = jur.upper()
                                     if canlii_cit:
                                         ch_match = re.search(r'(c\s[\w.-]+)', canlii_cit)
@@ -546,6 +551,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
             "jurisdiction": jurisdiction,
             "chapter": chapter,
             "pinpoint": pinpoint,
+            "citation": citation,
             "verified": verified,
             "warning": "" if verified else "⚠️ 未能通过 A2AJ 验证，建议在 CanLII 手动确认",
         }]
