@@ -60,7 +60,7 @@ export default function Page() {
             McGill Guide Citation Tool
           </h1>
           <p className="mt-4 max-w-prose text-pretty text-sm leading-relaxed text-muted-foreground">
-            Cite anything in McGill Guide (10th ed) for free, verified against real databases — cases (A2AJ, CanLII), bills (LEGISinfo), journals (CrossRef), books (Open Library), and more APIs. Not a fill-in-the-blanks form, not AI guesswork.
+            Cite anything in McGill Guide (10th ed) for free, verified against real databases — cases/legislation (A2AJ, CanLII), bills (LEGISinfo), journals (CrossRef), books (Open Library), and more APIs. Not a fill-in-the-blanks form, not AI guesswork.
           </p>
         </header>
 
