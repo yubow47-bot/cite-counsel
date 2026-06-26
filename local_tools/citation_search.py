@@ -246,7 +246,12 @@ Rules:
     return [r for r in ordered if r is not None]
 
 
-_VALID_JURISDICTIONS = {"on", "bc", "ab", "sk", "mb", "qc", "ns", "nb", "pe", "nl", "yt", "nt", "nu", "ca"}
+_CANLII_STATUTE_DB = {
+    "ab": "abs", "bc": "bcs", "ca": "cas", "mb": "mbs",
+    "nb": "nbs", "nl": "nls", "ns": "nss", "nt": "nts",
+    "nu": "nus", "on": "ons", "pe": "pes", "qc": "qcs",
+    "sk": "sks", "yt": "yks",
+}
 
 
 def _normalize_for_match(s: str) -> str:
@@ -279,7 +284,7 @@ xx 必须是以下之一：on, bc, ab, sk, mb, qc, ns, nb, pe, nl, yt, nt, nu, c
             timing.report().add_llm("_infer_jurisdiction_canlii", time.time() - t0)
         result = parse_llm_json(content)
         jur = (result.get("jurisdiction", "") if isinstance(result, dict) else "").strip().lower()
-        if jur in _VALID_JURISDICTIONS:
+        if jur in _CANLII_STATUTE_DB:
             return jur
         return None
     except Exception:
@@ -456,16 +461,22 @@ def search_citation(query: str, classification: dict | None = None) -> list:
             print(f"[CanLII fallback] jur={jur}  normalized={normalized!r}")
             if jur:
                 from local_tools.canlii_api import browse_legislation_in_database
-                mapping_path = os.path.join(
-                    os.path.dirname(os.path.dirname(__file__)),
-                    "data", "canlii_legislation_databases.json"
-                )
+                db_id = None
+                # 优先从 data/canlii_legislation_databases.json 读取
                 try:
+                    mapping_path = os.path.join(
+                        os.path.dirname(os.path.dirname(__file__)),
+                        "data", "canlii_legislation_databases.json"
+                    )
                     with open(mapping_path, encoding='utf-8') as _f:
                         db_map = json.load(_f)
                     db_id = db_map.get(jur, {}).get("statute")
-                    print(f"[CanLII fallback] db_id={db_id}")
-                    if db_id:
+                except (FileNotFoundError, json.JSONDecodeError, KeyError):
+                    # 文件缺失/损坏 → 用硬编码兜底
+                    db_id = _CANLII_STATUTE_DB.get(jur)
+                print(f"[CanLII fallback] db_id={db_id}")
+                if db_id:
+                    try:
                         canlii_result = browse_legislation_in_database(db_id)
                         if "error" not in canlii_result:
                             legislations = canlii_result.get("legislations", [])
@@ -498,8 +509,8 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                                 print(f"[CanLII fallback] NO MATCH (count={len(matches)}, needed exactly 1)")
                         else:
                             print(f"[CanLII fallback] CanLII API error: {canlii_result.get('error')!r}")
-                except Exception as e:
-                    print(f"[CanLII fallback] exception: {type(e).__name__}: {e}")
+                    except Exception as e:
+                        print(f"[CanLII fallback] exception: {type(e).__name__}: {e}")
 
         return [{
             "statute_title": statute_title,
