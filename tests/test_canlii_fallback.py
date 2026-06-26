@@ -206,3 +206,108 @@ def test_cit_match_hit_unchanged():
     # Regression guard: CanLII path NEVER activated
     mock_infer.assert_not_called()
     mock_canlii.assert_not_called()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Test 7: fuzzy match returns multiple candidates
+# ═════════════════════════════════════════════════════════════════════════════
+
+CANLII_CITY_1997 = {
+    "databaseId": "ons", "legislationId": "so-1997-c-2",
+    "title": "City of Toronto Act, 1997",
+    "citation": "SO 1997, c 2", "type": "STATUTE",
+}
+CANLII_CITY_1997_NO2 = {
+    "databaseId": "ons", "legislationId": "so-1997-c-26",
+    "title": "City of Toronto Act, 1997 (No. 2)",
+    "citation": "SO 1997, c 26", "type": "STATUTE",
+}
+CANLII_CITY_2006 = {
+    "databaseId": "ons", "legislationId": "so-2006-c-11-sch-a",
+    "title": "City of Toronto Act, 2006",
+    "citation": "SO 2006, c 11, Sch A", "type": "STATUTE",
+}
+
+
+def test_canlii_fallback_fuzzy_multiple():
+    """Fuzzy match returns >=2 candidates -> returns list for needs_selection."""
+    mock_canlii = MagicMock(return_value={
+        "legislations": [CANLII_CITY_1997, CANLII_CITY_1997_NO2, CANLII_CITY_2006]
+    })
+    mock_infer = MagicMock(return_value="on")
+
+    classification = {
+        "type": "legislation",
+        "normalized": "City of Toronto Act",
+        "original": "City of Toronto Act",
+    }
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("City of Toronto Act", classification)
+
+    assert len(result) == 3
+    for r in result:
+        assert r["verified"] is True
+        assert r["source"] == "canlii"
+        assert r["jurisdiction"] == "ON"
+    assert result[0]["chapter"] == "c 2"
+    assert result[1]["chapter"] == "c 26"
+    assert result[2]["chapter"] == "c 11"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Test 8: fuzzy match returns exactly 1 candidate
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_canlii_fallback_fuzzy_single():
+    """Fuzzy match returns exactly 1 -> single result, verified=True."""
+    mock_canlii = MagicMock(return_value={
+        "legislations": [CANLII_CITY_2006]
+    })
+    mock_infer = MagicMock(return_value="on")
+
+    classification = {
+        "type": "legislation",
+        "normalized": "city of toronto act 2006",
+        "original": "city of toronto act 2006",
+    }
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("city of toronto act 2006", classification)
+
+    assert len(result) == 1
+    r = result[0]
+    assert r["verified"] is True
+    assert r["chapter"] == "c 11"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Test 9: fuzzy match cap at 10
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_canlii_fallback_fuzzy_cap():
+    """Fuzzy match with many hits -> capped at 10."""
+    many = []
+    for i in range(20):
+        rec = dict(CANLII_CITY_1997)
+        rec["title"] = f"City of Toronto Act, {1900 + i}"
+        rec["citation"] = f"SO {1900 + i}, c {i}"
+        rec["legislationId"] = f"so-{1900 + i}-c-{i}"
+        many.append(rec)
+
+    mock_canlii = MagicMock(return_value={"legislations": many})
+    mock_infer = MagicMock(return_value="on")
+
+    classification = {
+        "type": "legislation",
+        "normalized": "City of Toronto Act",
+        "original": "City of Toronto Act",
+    }
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("City of Toronto Act", classification)
+
+    assert len(result) == 10  # capped, not all 20

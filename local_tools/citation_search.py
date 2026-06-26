@@ -505,8 +505,44 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                                     ch_match = re.search(r'(c\s[\w.-]+)', canlii_cit)
                                     chapter = ch_match.group(1) if ch_match else None
                                 print(f"[CanLII fallback] MATCH -> {statute_title!r}  cite={canlii_cit!r}")
-                            else:
-                                print(f"[CanLII fallback] NO MATCH (count={len(matches)}, needed exactly 1)")
+                            elif len(matches) == 0:
+                                # 第二轮：模糊匹配（标题包含用户输入，上限 10 条）
+                                norm_lower = norm_target.lower()
+                                fuzzy = [
+                                    item for item in legislations
+                                    if norm_lower in _normalize_for_match(item.get("title", "")).lower()
+                                ][:10]
+                                print(f"[CanLII fallback] fuzzy match: {len(fuzzy)} candidates")
+                                if len(fuzzy) >= 2:
+                                    # 多候选 → 返回列表让用户选择
+                                    candidates = []
+                                    for item in fuzzy:
+                                        canlii_cit = item.get("citation", "")
+                                        ch = None
+                                        if canlii_cit:
+                                            ch_m = re.search(r'(c\s[\w.-]+)', canlii_cit)
+                                            ch = ch_m.group(1) if ch_m else None
+                                        candidates.append({
+                                            "statute_title": item.get("title", normalized),
+                                            "jurisdiction": jur.upper(),
+                                            "chapter": ch,
+                                            "pinpoint": pinpoint,
+                                            "verified": True,
+                                            "source": "canlii",
+                                        })
+                                    return candidates
+                                elif len(fuzzy) == 1:
+                                    item = fuzzy[0]
+                                    verified = True
+                                    statute_title = item.get("title", normalized)
+                                    canlii_cit = item.get("citation", "")
+                                    jurisdiction = jur.upper()
+                                    if canlii_cit:
+                                        ch_match = re.search(r'(c\s[\w.-]+)', canlii_cit)
+                                        chapter = ch_match.group(1) if ch_match else None
+                                    print(f"[CanLII fallback] FUZZY SINGLE -> {statute_title!r}  cite={canlii_cit!r}")
+                                # else: 0 条模糊匹配 → 保持 verified=False，走现有 warning
+                            # else: ≥2 条精确匹配 → 保持 verified=False，不猜
                         else:
                             print(f"[CanLII fallback] CanLII API error: {canlii_result.get('error')!r}")
                     except Exception as e:
