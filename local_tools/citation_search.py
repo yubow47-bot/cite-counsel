@@ -458,7 +458,6 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                 jur = _infer_jurisdiction_canlii(normalized)
             except Exception:
                 jur = None
-            print(f"[CanLII fallback] jur={jur}  normalized={normalized!r}")
             if jur:
                 from local_tools.canlii_api import browse_legislation_in_database
                 db_id = None
@@ -474,7 +473,6 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                 except (FileNotFoundError, json.JSONDecodeError, KeyError):
                     # 文件缺失/损坏 → 用硬编码兜底
                     db_id = _CANLII_STATUTE_DB.get(jur)
-                print(f"[CanLII fallback] db_id={db_id}")
                 if db_id:
                     try:
                         canlii_result = browse_legislation_in_database(db_id)
@@ -494,7 +492,6 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                                 item for item in legislations
                                 if _normalize_for_match(item.get("title", "")) == norm_target
                             ]
-                            print(f"[CanLII fallback] legislations_count={len(legislations)} norm_target={norm_target!r} match_count={len(matches)}")
                             if len(matches) == 1:
                                 item = matches[0]
                                 verified = True
@@ -504,7 +501,6 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                                 if canlii_cit:
                                     ch_match = re.search(r'(c\s[\w.-]+)', canlii_cit)
                                     chapter = ch_match.group(1) if ch_match else None
-                                print(f"[CanLII fallback] MATCH -> {statute_title!r}  cite={canlii_cit!r}")
                             elif len(matches) == 0:
                                 # 第二轮：模糊匹配（标题包含用户输入，上限 10 条）
                                 norm_lower = norm_target.lower()
@@ -512,7 +508,6 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                                     item for item in legislations
                                     if norm_lower in _normalize_for_match(item.get("title", "")).lower()
                                 ][:10]
-                                print(f"[CanLII fallback] fuzzy match: {len(fuzzy)} candidates")
                                 if len(fuzzy) >= 2:
                                     # 多候选 → 返回列表让用户选择
                                     candidates = []
@@ -540,13 +535,11 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                                     if canlii_cit:
                                         ch_match = re.search(r'(c\s[\w.-]+)', canlii_cit)
                                         chapter = ch_match.group(1) if ch_match else None
-                                    print(f"[CanLII fallback] FUZZY SINGLE -> {statute_title!r}  cite={canlii_cit!r}")
                                 # else: 0 条模糊匹配 → 保持 verified=False，走现有 warning
                             # else: ≥2 条精确匹配 → 保持 verified=False，不猜
-                        else:
-                            print(f"[CanLII fallback] CanLII API error: {canlii_result.get('error')!r}")
-                    except Exception as e:
-                        print(f"[CanLII fallback] exception: {type(e).__name__}: {e}")
+                        # else: CanLII API error → 保持 verified=False
+                    except Exception:
+                        pass
 
         return [{
             "statute_title": statute_title,
