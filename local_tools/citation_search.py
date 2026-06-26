@@ -509,7 +509,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                                 norm_lower = norm_target.lower()
                                 fuzzy = [
                                     item for item in legislations
-                                    if norm_lower in _normalize_for_match(item.get("title", "")).lower()
+                                    if norm_lower in (item_norm := _normalize_for_match(item.get("title", "")).lower()) or item_norm in norm_lower
                                 ][:10]
                                 if len(fuzzy) >= 2:
                                     # 多候选 → 返回列表让用户选择
