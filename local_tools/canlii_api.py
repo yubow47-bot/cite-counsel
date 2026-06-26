@@ -157,3 +157,46 @@ def get_legislation_databases(language: str = "en") -> dict:
         return response.json()
     except requests.exceptions.RequestException as e:
         return {"error": f"CanLII request failed: {e}"}
+
+
+def browse_legislation_in_database(
+    database_id: str,
+    language: str = "en",
+) -> dict:
+    """浏览指定法规数据库的全部法规列表。
+
+    Args:
+        database_id: CanLII 法规数据库 ID（如 "ons"、"cas"）。
+        language: "en" 或 "fr"。
+
+    返回原始 JSON，包含 "legislations" 列表。
+
+    调用方契约：返回值可能是 {"error": "..."} 字典。集成时调用方
+    必须先检查 `if "error" in result`，不可直接索引数据键，否则 KeyError。
+    """
+    if not database_id:
+        return {"error": "database_id required"}
+    if not database_id.strip():
+        return {"error": "database_id required"}
+
+    key = os.environ.get("CANLII_API_KEY")
+    if not key:
+        return {"error": "CANLII_API_KEY not configured"}
+
+    try:
+        t0 = time.time()
+        with prof.measure("http.canlii_legislation_browse", endpoint="/legislationBrowse/{language}/{database_id}/"):
+            response = requests.get(
+                f"{CANLII_BASE}/legislationBrowse/{language}/{database_id}/",
+                params={"api_key": key},
+                timeout=30,
+            )
+        if timing.ENABLE_TIMING:
+            timing.report().add_a2aj(
+                f"browse_legislation_in_database({database_id})",
+                time.time() - t0,
+            )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        return {"error": f"CanLII request failed: {e}"}

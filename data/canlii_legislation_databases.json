@@ -1,0 +1,16 @@
+{
+  "ab": {"statute": "abs"},
+  "bc": {"statute": "bcs"},
+  "ca": {"statute": "cas"},
+  "mb": {"statute": "mbs"},
+  "nb": {"statute": "nbs"},
+  "nl": {"statute": "nls"},
+  "ns": {"statute": "nss"},
+  "nt": {"statute": "nts"},
+  "nu": {"statute": "nus"},
+  "on": {"statute": "ons"},
+  "pe": {"statute": "pes"},
+  "qc": {"statute": "qcs"},
+  "sk": {"statute": "sks"},
+  "yk": {"statute": "yks"}
+}
