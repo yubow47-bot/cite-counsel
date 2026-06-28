@@ -68,6 +68,9 @@ def test_canlii_fallback_exact_match_hit():
     assert len(result) == 1
     r = result[0]
     assert r["verified"] is True
+    assert r["_match_path"] == "exact", (
+        f"Expected exact match path, got {r['_match_path']!r}"
+    )
     assert r["statute_title"] == "Alberta Human Rights Act"
     assert r["chapter"] == "c A-25.5"
     assert r["jurisdiction"] == "AB"
@@ -209,92 +212,103 @@ def test_cit_match_hit_unchanged():
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Test 7: fuzzy match returns multiple candidates
+# Test 7: fuzzy match returns multiple candidates (Direction A)
 # ═════════════════════════════════════════════════════════════════════════════
 
-CANLII_CITY_1997 = {
-    "databaseId": "ons", "legislationId": "so-1997-c-2",
-    "title": "City of Toronto Act, 1997",
-    "citation": "SO 1997, c 2", "type": "STATUTE",
+CANLII_RESIDUAL_A = {
+    "databaseId": "ons", "legislationId": "so-ns",
+    "title": "Nova Scotia",
+    "citation": "SO 2000, c 1", "type": "STATUTE",
 }
-CANLII_CITY_1997_NO2 = {
-    "databaseId": "ons", "legislationId": "so-1997-c-26",
-    "title": "City of Toronto Act, 1997 (No. 2)",
-    "citation": "SO 1997, c 26", "type": "STATUTE",
-}
-CANLII_CITY_2006 = {
-    "databaseId": "ons", "legislationId": "so-2006-c-11-sch-a",
-    "title": "City of Toronto Act, 2006",
-    "citation": "SO 2006, c 11, Sch A", "type": "STATUTE",
+CANLII_RESIDUAL_B = {
+    "databaseId": "ons", "legislationId": "so-ca",
+    "title": "Canada",
+    "citation": "SO 2000, c 2", "type": "STATUTE",
 }
 
 
 def test_canlii_fallback_fuzzy_multiple():
-    """Fuzzy match returns >=2 candidates -> returns list for needs_selection."""
+    """Direction A with >=2 survivors -> returns list for needs_selection."""
     mock_canlii = MagicMock(return_value={
-        "legislations": [CANLII_CITY_1997, CANLII_CITY_1997_NO2, CANLII_CITY_2006]
+        "legislations": [CANLII_RESIDUAL_A, CANLII_RESIDUAL_B]
     })
     mock_infer = MagicMock(return_value="on")
 
     classification = {
         "type": "legislation",
-        "normalized": "City of Toronto Act",
-        "original": "City of Toronto Act",
+        "normalized": "Nova Scotia Canada",
+        "original": "Nova Scotia Canada",
     }
 
     with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
          patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
-        result = search_citation("City of Toronto Act", classification)
+        result = search_citation("Nova Scotia Canada", classification)
 
-    assert len(result) == 3
+    assert len(result) == 2
     for r in result:
         assert r["verified"] is True
         assert r["source"] == "canlii"
         assert r["jurisdiction"] == "ON"
-    assert result[0]["chapter"] == "c 2"
-    assert result[1]["chapter"] == "c 26"
-    assert result[2]["chapter"] == "c 11"
+    assert result[0]["chapter"] == "c 1"
+    assert result[1]["chapter"] == "c 2"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Test 8: fuzzy match returns exactly 1 candidate
+# Test 8: Direction A single match (province-prefixed query, generic candidate)
 # ═════════════════════════════════════════════════════════════════════════════
+
+RECORD_HIGHWAY_TRAFFIC = {
+    "databaseId": "ons", "legislationId": "so-hta",
+    "title": "Highway Traffic Act",
+    "citation": "RSO 1990, c H.8", "type": "STATUTE",
+}
+
+RECORD_THE_MARRIAGE = {
+    "databaseId": "cas", "legislationId": "federal-marriage",
+    "title": "The Marriage (Prohibited Degrees) Act",
+    "citation": "SC 1990, c 46", "type": "STATUTE",
+}
+
 
 def test_canlii_fallback_fuzzy_single():
-    """Fuzzy match returns exactly 1 -> single result, verified=True."""
+    """Direction A match (province in query, generic candidate) -> verified=True."""
     mock_canlii = MagicMock(return_value={
-        "legislations": [CANLII_CITY_2006]
+        "legislations": [RECORD_HIGHWAY_TRAFFIC]
     })
     mock_infer = MagicMock(return_value="on")
 
     classification = {
         "type": "legislation",
-        "normalized": "city of toronto act 2006",
-        "original": "city of toronto act 2006",
+        "normalized": "Ontario Highway Traffic Act",
+        "original": "Ontario Highway Traffic Act",
     }
 
     with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
          patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
-        result = search_citation("city of toronto act 2006", classification)
+        result = search_citation("Ontario Highway Traffic Act", classification)
 
     assert len(result) == 1
     r = result[0]
     assert r["verified"] is True
-    assert r["chapter"] == "c 11"
+    assert r["_match_path"] == "direction_a_residual_ok"
+    assert r["statute_title"] == "Highway Traffic Act"
+    assert r["chapter"] == "c H.8"
+    assert r["jurisdiction"] == "ON"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Test 9: fuzzy match cap at 10
+# Test 9: Direction A cap — many candidates capped at 10
 # ═════════════════════════════════════════════════════════════════════════════
 
 def test_canlii_fallback_fuzzy_cap():
-    """Fuzzy match with many hits -> capped at 10."""
+    """Direction A with many matching substrings -> capped at 10."""
     many = []
     for i in range(20):
-        rec = dict(CANLII_CITY_1997)
-        rec["title"] = f"City of Toronto Act, {1900 + i}"
-        rec["citation"] = f"SO {1900 + i}, c {i}"
-        rec["legislationId"] = f"so-{1900 + i}-c-{i}"
+        rec = dict(RECORD_HIGHWAY_TRAFFIC)
+        # Each candidate is a valid substring of "Ontario Canada Highway Traffic Act"
+        rec["title"] = f"Highway Traffic Act"  # constant — same substring for all 20
+        rec["citation"] = f"SO 2000, c {i}"
+        rec["legislationId"] = f"so-2000-c-{i}"
         many.append(rec)
 
     mock_canlii = MagicMock(return_value={"legislations": many})
@@ -302,12 +316,176 @@ def test_canlii_fallback_fuzzy_cap():
 
     classification = {
         "type": "legislation",
-        "normalized": "City of Toronto Act",
-        "original": "City of Toronto Act",
+        "normalized": "Ontario Canada Highway Traffic Act",
+        "original": "Ontario Canada Highway Traffic Act",
     }
 
     with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
          patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
-        result = search_citation("City of Toronto Act", classification)
+        result = search_citation("Ontario Canada Highway Traffic Act", classification)
 
-    assert len(result) == 10  # capped, not all 20
+    # capped at 10 (all 20 match but result list is limited)
+    assert len(result) == 10
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  REGRESSION: leading-article normalization (exact, not fuzzy)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_leading_article_normalization():
+    """'Marriage (Prohibited Degrees) Act' with 'The Marriage...' -> exact match, _match_path=exact."""
+    rec = {
+        "databaseId": "cas", "legislationId": "federal-marriage",
+        "title": "The Marriage (Prohibited Degrees) Act",
+        "citation": "SC 1990, c 46", "type": "STATUTE",
+    }
+    mock_canlii = MagicMock(return_value={"legislations": [rec]})
+    mock_infer = MagicMock(return_value="ca")
+
+    classification = {
+        "type": "legislation",
+        "normalized": "Marriage (Prohibited Degrees) Act",
+        "original": "Marriage (Prohibited Degrees) Act",
+    }
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer),          patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("Marriage (Prohibited Degrees) Act", classification)
+
+    assert len(result) == 1
+    r = result[0]
+    assert r["verified"] is True
+    assert r["_match_path"] == "exact", (
+        f"Expected exact match via article normalization, got {r['_match_path']!r}"
+    )
+    assert r["statute_title"] == "The Marriage (Prohibited Degrees) Act"
+
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  REGRESSION: Direction A province-prefix (positive)
+# ═════════════════════════════════════════════════════════════════════════════
+
+RECORD_FAMILY_LAW = {
+    "databaseId": "bcs", "legislationId": "bc-family",
+    "title": "Family Law Act",
+    "citation": "SBC 2011, c 25", "type": "STATUTE",
+}
+
+
+def test_direction_a_province_prefix():
+    """British Columbia Family Law Act + Family Law Act -> Direction A, residual OK."""
+    mock_canlii = MagicMock(return_value={"legislations": [RECORD_FAMILY_LAW]})
+    mock_infer = MagicMock(return_value="bc")
+
+    classification = {
+        "type": "legislation",
+        "normalized": "British Columbia Family Law Act",
+        "original": "British Columbia Family Law Act",
+    }
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer),          patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("British Columbia Family Law Act", classification)
+
+    assert len(result) == 1
+    r = result[0]
+    assert r["verified"] is True
+    assert r["_match_path"] == "direction_a_residual_ok"
+    assert r["statute_title"] == "Family Law Act"
+    assert r["jurisdiction"] == "BC"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  REGRESSION: Direction B removed — amending act rejection (modify variant)
+# ═════════════════════════════════════════════════════════════════════════════
+
+RECORD_AMENDING_MODIFY = {
+    "databaseId": "cas", "legislationId": "fed-modify",
+    "title": "An Act to modify the Constitution Act, 1867",
+    "citation": "SC 2024, c 1", "type": "STATUTE",
+}
+
+
+def test_direction_b_removed_modify_act():
+    """Direction B removed: modify act rejected when query is shorter (no blacklist)."""
+    mock_canlii = MagicMock(return_value={"legislations": [RECORD_AMENDING_MODIFY]})
+    mock_infer = MagicMock(return_value="ca")
+
+    classification = {
+        "type": "legislation",
+        "normalized": "Constitution Act, 1867",
+        "original": "Constitution Act, 1867",
+    }
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer),          patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("Constitution Act, 1867", classification)
+
+    # The constitutional guard intercepts this in production.
+    assert len(result) == 1
+    r = result[0]
+    assert r["statute_title"] == "Constitution Act, 1867"
+    assert r["verified"] is True
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  REGRESSION: Direction A no-match (Traffic Offences -> Traffic Act)
+# ═════════════════════════════════════════════════════════════════════════════
+
+RECORD_TRAFFIC_ACT = {
+    "databaseId": "ons", "legislationId": "so-traffic",
+    "title": "Traffic Act",
+    "citation": "RSO 1990, c T.1", "type": "STATUTE",
+}
+
+
+def test_direction_a_no_match():
+    """Traffic Offences Act 2020 + Traffic Act -> NOT verified (no direction match)."""
+    mock_canlii = MagicMock(return_value={"legislations": [RECORD_TRAFFIC_ACT]})
+    mock_infer = MagicMock(return_value="on")
+
+    classification = {
+        "type": "legislation",
+        "normalized": "Traffic Offences Act 2020",
+        "original": "Traffic Offences Act 2020",
+    }
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer),          patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("Traffic Offences Act 2020", classification)
+
+    assert len(result) == 1
+    r = result[0]
+    assert r["verified"] is False
+    assert "⚠️" in r["warning"]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  REGRESSION: Quebec long-title is intentionally degraded (false-neg acknowledgment)
+# ═════════════════════════════════════════════════════════════════════════════
+
+RECORD_QC_LONG = {
+    "databaseId": "qcs", "legislationId": "qc-access",
+    "title": "Act respecting Access to documents held by public bodies and the Protection of personal information",
+    "citation": "RLRQ, c A-2.1", "type": "STATUTE",
+}
+
+
+def test_quebec_long_title_safe_degrade():
+    """Quebec long-title -> NOT verified.  Intentional safe degrade (broader act)."""
+    mock_canlii = MagicMock(return_value={"legislations": [RECORD_QC_LONG]})
+    mock_infer = MagicMock(return_value="qc")
+
+    classification = {
+        "type": "legislation",
+        "normalized": "Act respecting Access to documents held by public bodies",
+        "original": "Act respecting Access to documents held by public bodies",
+    }
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer),          patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation(
+            "Act respecting Access to documents held by public bodies",
+            classification,
+        )
+
+    assert len(result) == 1
+    r = result[0]
+    assert r["verified"] is False
+    assert "⚠️" in r["warning"]
