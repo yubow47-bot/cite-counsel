@@ -400,6 +400,39 @@ def search_citation(query: str, classification: dict | None = None) -> list:
 
     # 3. legislation：A2AJ /fetch (doc_type=laws) 验证
     elif input_type == "legislation":
+        # ── Constitutional statute pre-routing ──
+        # Intercept closed-set constitutional titles BEFORE the external API chain
+        # (cit_match / A2AJ / CanLII-fallback). Phase 1 confirmed classify_and_normalize
+        # produces clean titles, so prefix-matching against normalized works reliably.
+        from core.mcgill_engine import _normalize_title
+
+        _CANONICAL = {
+            "constitution act 1867": "Constitution Act, 1867",
+            "constitution act 1982": "Constitution Act, 1982",
+            "canadian charter of rights and freedoms": "Canadian Charter of Rights and Freedoms",
+            "canada act 1982": "Canada Act 1982",
+        }
+
+        norm = _normalize_title(normalized)
+        for _norm_prefix, _canonical_title in _CANONICAL.items():
+            if norm.startswith(_norm_prefix):
+                _pin = extract_pinpoint(normalized) or None
+                if not _pin:
+                    _pin_match = re.search(
+                        r'(?:,\s*)?((?:s|ss|art|cl|para|sub)\.?\s*[\d(][\d\w().,-]*(?:\s*\([\w\d]+\))*)\s*$',
+                        normalized,
+                        re.IGNORECASE
+                    )
+                    if _pin_match:
+                        _pin = _pin_match.group(1)
+                return [{
+                    "statute_title": _canonical_title,
+                    "jurisdiction": None,
+                    "chapter": None,
+                    "pinpoint": _pin,
+                    "verified": True,
+                }]
+
         import requests
 
         # 从标准化文本中提取基础引用号

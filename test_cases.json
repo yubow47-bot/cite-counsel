@@ -13,9 +13,17 @@
       "id": "constitutional-pinpoint-001",
       "input": "Charter s 7",
       "route": "constitutional_statutes",
-      "gold_citation": "TODO核对",
+      "gold_citation": "*Canadian Charter of Rights and Freedoms*, s 7, Part I of the *Constitution Act, 1982*, being Schedule B to the *Canada Act 1982* (UK), 1982, c 11.",
       "source": "seed",
       "covers": "constitutional_statutes pinpoint fallback regex"
+    },
+    {
+      "id": "constitutional-1867-001",
+      "input": "Constitution Act, 1867, s 91",
+      "route": "constitutional_statutes",
+      "gold_citation": "*Constitution Act, 1867* (UK), 30 & 31 Vict, c 3, s 91, reprinted in RSC 1985, Appendix II, No 5.",
+      "source": "mcgill_rules.json > legislation > Constitutional Statutes ex[0] (McGill §2.2 p22)",
+      "covers": "constitutional 1867 pinpoint after chapter (not after title)"
     },
     {
       "id": "bill-pinpoint-001",
