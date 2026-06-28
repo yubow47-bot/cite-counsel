@@ -56,6 +56,17 @@ ALLOWED_ORIGINS = [
     if o.strip()
 ]
 
+
+def _without_internal(d: dict) -> dict:
+    """Strip known internal diagnostic keys from a result dict before user-facing use.
+
+    Only specific keys (``_match_path``) are removed.  Other underscore-prefixed
+    keys (e.g. ``_bill_citation`` used by the bill route) are preserved.
+    """
+    _INTERNAL_KEYS = {"_match_path"}
+    return {k: v for k, v in d.items() if k not in _INTERNAL_KEYS}
+
+
 app = FastAPI(title="McGill Citation Tool API", version="1.0.0")
 rate_limiter = RateLimiter()
 
@@ -330,7 +341,7 @@ async def citation_query(body: CitationInput, request: Request):
         for item in results:
             candidates.append({
                 "display": _candidate_display(item),
-                **item,
+                **_without_internal(item),
             })
         return _envelope(True, route, "needs_selection", {
             "candidates": candidates,
@@ -338,7 +349,7 @@ async def citation_query(body: CitationInput, request: Request):
 
     # ── single result → format directly ──
     try:
-        citation = format_citation(results[0])
+        citation = format_citation(_without_internal(results[0]))
         _cit_data: dict = {"citation": citation, "source_type": route}
         _pin = results[0].get("pinpoint")
         if _pin:
@@ -379,7 +390,7 @@ def _handle_concept(results: list) -> dict:
         for item in results:
             candidates.append({
                 "display": _candidate_display(item),
-                **item,
+                **_without_internal(item),
             })
         return _envelope(True, "concept", "needs_selection", {
             "candidates": candidates,
@@ -387,7 +398,7 @@ def _handle_concept(results: list) -> dict:
 
     # Single result → format directly
     try:
-        citation = format_citation(results[0])
+        citation = format_citation(_without_internal(results[0]))
         _cit_data: dict = {"citation": citation, "source_type": "concept"}
         _pin = results[0].get("pinpoint")
         if _pin:
@@ -427,7 +438,7 @@ async def citation_select(body: CitationSelectInput):
     item = body.candidates[body.selected_index]
 
     try:
-        citation = format_citation(item)
+        citation = format_citation(_without_internal(item))
         # Bill candidates carry bill_session → use "bill" directly;
         # detect_type cannot classify LEGISinfo record keys.
         item_source_type = "bill" if item.get("bill_session") else detect_type(item)

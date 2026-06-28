@@ -253,12 +253,28 @@ _CANLII_STATUTE_DB = {
     "sk": "sks", "yt": "yks",
 }
 
+# Tokens that are allowed in the residual after stripping a matched Direction-A
+# substring.  "of", "and", "the" (mid-title) etc. are deliberately excluded —
+# only jurisdiction names and leading articles.
+_JURISDICTION_ARTICLE_SET = {
+    "the", "a", "an",
+    "ontario", "quebec", "alberta", "manitoba", "saskatchewan",
+    "british", "columbia", "nova", "scotia",
+    "new", "brunswick", "newfoundland", "labrador",
+    "prince", "edward", "island",
+    "yukon", "nunavut", "northwest", "territories",
+    "canada", "canadian", "federal",
+}
+
+
+_LEADING_ARTICLE_RE = re.compile(r'^(the|a|an)\s+', re.IGNORECASE)
 
 def _normalize_for_match(s: str) -> str:
-    """规范化文本用于精确比较：lowercase、去标点、collapse 空格。"""
+    """规范化文本用于精确比较：lowercase、去标点、collapse 空格，去掉前置冠词。"""
     s = s.lower()
     s = re.sub(r'[^\w\s]', '', s)
     s = re.sub(r'\s+', ' ', s).strip()
+    s = _LEADING_ARTICLE_RE.sub('', s).strip()
     return s
 
 
@@ -460,6 +476,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
         chapter = None
         citation = ""
         statute_title = normalized
+        _match_path = "none"
 
         if cit_match:
             # ── A2AJ path（cit_match 命中，引用号已知）──
@@ -529,6 +546,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                             ]
                             if len(matches) == 1:
                                 item = matches[0]
+                                _match_path = "exact"
                                 verified = True
                                 statute_title = item.get("title", normalized)
                                 canlii_cit = item.get("citation", "")
@@ -538,12 +556,23 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                                     ch_match = re.search(r'(c\s[\w.-]+)', canlii_cit)
                                     chapter = ch_match.group(1) if ch_match else None
                             elif len(matches) == 0:
-                                # 第二轮：模糊匹配（标题包含用户输入，上限 10 条）
-                                norm_lower = norm_target.lower()
-                                fuzzy = [
-                                    item for item in legislations
-                                    if norm_lower in (item_norm := _normalize_for_match(item.get("title", "")).lower()) or item_norm in norm_lower
-                                ][:10]
+                                # ── Direction-A-only fuzzy match ＋ residual gate ──
+                                # A candidate matches iff its normalized title is a substring
+                                # of the normalized query (Direction A).  Direction B (query
+                                # is substring of longer candidate) is REMOVED — no blacklist
+                                # needed.  After the substring check, the residual (query
+                                # minus the matched substring) must be empty or consist solely
+                                # of jurisdiction/article tokens; otherwise the match is
+                                # rejected as a likely false positive.
+                                fuzzy = []
+                                for item in legislations:
+                                    item_norm = _normalize_for_match(item.get("title", ""))
+                                    if item_norm in norm_target:
+                                        residual = norm_target.replace(item_norm, '', 1).strip()
+                                        res_tokens = residual.split()
+                                        if not residual or all(t in _JURISDICTION_ARTICLE_SET for t in res_tokens):
+                                            fuzzy.append(item)
+                                fuzzy = fuzzy[:10]
                                 if len(fuzzy) >= 2:
                                     # 多候选 → 返回列表让用户选择
                                     candidates = []
@@ -565,6 +594,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                                     return candidates
                                 elif len(fuzzy) == 1:
                                     item = fuzzy[0]
+                                    _match_path = "direction_a_residual_ok"
                                     verified = True
                                     statute_title = item.get("title", normalized)
                                     canlii_cit = item.get("citation", "")
@@ -584,6 +614,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
             "jurisdiction": jurisdiction,
             "chapter": chapter,
             "pinpoint": pinpoint,
+            "_match_path": _match_path,
             "citation": citation,
             "verified": verified,
             "warning": "" if verified else "⚠️ 未能通过 A2AJ 验证，建议在 CanLII 手动确认",
