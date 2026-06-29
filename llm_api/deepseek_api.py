@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_MODEL = os.getenv("LLM_DEFAULT_MODEL", "deepseek-v4-flash")
+URL_EXTRACT_FETCH_TIMEOUT = 5
 
 
 def _load_env():
@@ -122,7 +123,7 @@ def fetch_html(url: str, timeout: int = 15) -> str | None:
 
 def extract_url(url: str) -> str | None:
     """抓取 + 解析。任一步失败返回 None，交给上层降级。"""
-    html = fetch_html(url)
+    html = fetch_html(url, timeout=URL_EXTRACT_FETCH_TIMEOUT)
     if not html:
         return None
     import trafilatura
@@ -139,7 +140,7 @@ def extract_from_url(url: str) -> dict:
     """
     import trafilatura
 
-    html = fetch_html(url)
+    html = fetch_html(url, timeout=URL_EXTRACT_FETCH_TIMEOUT)
     if not html:
         return {"url": url, "error": "This website blocked automatic fetching (anti-scraping). Please fill in the citation fields manually."}
 
