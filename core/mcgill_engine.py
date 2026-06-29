@@ -178,6 +178,40 @@ SUBPATTERN_TEMPLATES: dict[str, dict] = {
             }
         ],
     },
+    "general_rules": {
+        "category": "General Source — Citation",
+        "topics": [
+            {
+                "topic": "Statute/Regulation (identified by statute_title)",
+                "template": "Title, jurisdiction year, chapter, pinpoint.",
+                "rules": [
+                    "If statute_title is present, it is the Title.",
+                    "If jurisdiction and citation are present, include them after the Title.",
+                    "If chapter is present, include it.",
+                    "If ONLY statute_title is present with no other data, output just the Title and end with a period.",
+                    "If NO field is useful, output just the Title or leave a minimal placeholder.",
+                ],
+                "examples": [
+                    "Criminal Code, RSC 1985, c C-46.",
+                    "Employment Standards Act.",
+                ],
+            },
+            {
+                "topic": "Document/Report (identified by title, author, date)",
+                "template": "Author, Title (Date).",
+                "rules": [
+                    "If author is present: Author, *Title* (Date).",
+                    "If no author: *Title* (Date).",
+                    "Italicize document/report titles using Markdown *asterisks*.",
+                    "If date is missing, omit the parentheses.",
+                    "If publisher is available, include as (Place: Publisher, Year).",
+                ],
+                "examples": [
+                    "python-docx, *Test Document Title* (2013).",
+                ],
+            },
+        ],
+    },
 }
 
 
@@ -258,6 +292,9 @@ def select_subpattern(detected_type: str, fields: dict) -> str | None:
         if subtype == "inquiry_reports":
             return "gov.inquiry_reports"
         return None
+
+    if detected_type == "general_rules":
+        return "general_rules"
 
     return None
 
@@ -471,6 +508,13 @@ def _build_italic_rules(detected_type: str, subpattern: str | None = None) -> st
                 "- Follow the template: Jurisdiction, legislative body, session, volume (date) pinpoint (speaker), online: <URL>.\n"
             )
 
+        if subpattern == "general_rules":
+            return (
+                "- If the source has a statute_title, do NOT italicize it (it is a statute/regulation title in Roman).\n"
+                "- If the source has a document/report title, italicize it using Markdown *asterisks*.\n"
+                "  Example: python-docx, *Test Document Title* (2013).\n"
+            )
+
         # Fallback for unknown subpattern: no italic instruction
         return ""
 
@@ -570,6 +614,7 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
                   不为 None 时覆盖 detect_type() 的结果。
     """
     global _last_prompt, _last_raw_response, _last_source
+    _last_source = None
 
     # ── Bill 确定性路径（LEGISinfo，不过 LLM） ──
     bill_cit = extracted_fields.get("_bill_citation")
