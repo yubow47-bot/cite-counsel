@@ -248,7 +248,8 @@ def test_leg_empty_title():
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  select_subpattern — Other types (should always return None)
+#  select_subpattern — Other types (most return None;
+#  general_rules now has a compact subpattern template)
 # ═══════════════════════════════════════════════════════════════════
 
 def test_gov_docs_subtype_parliamentary():
@@ -292,8 +293,11 @@ def test_other_type_secondary_sources():
     assert result is None
 
 def test_other_type_general_rules():
+    """general_rules now has a compact template subpattern (was None with the old footnoting-prose dump)"""
     result = select_subpattern("general_rules", {})
-    assert result is None
+    assert result == "general_rules", (
+        f"Expected 'general_rules' (compact template), got {result}"
+    )
 
 def test_other_type_constitutional_statutes():
     """constitutional_statutes (top-level) → None; only 'legislation' type routes to leg.*"""
