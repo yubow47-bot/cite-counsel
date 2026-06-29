@@ -76,7 +76,7 @@ def test_canlii_fallback_exact_match_hit():
     assert r["jurisdiction"] == "AB"
     assert r["warning"] == ""
     mock_canlii.assert_called_once()
-    mock_infer.assert_called_once_with("Alberta Human Rights Act")
+    mock_infer.assert_not_called()  # prescan resolves "alberta" -> "ab", no LLM call
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -489,3 +489,110 @@ def test_quebec_long_title_safe_degrade():
     r = result[0]
     assert r["verified"] is False
     assert "⚠️" in r["warning"]
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  CHANGE 1: deterministic jurisdiction prescan
+# ═════════════════════════════════════════════════════════════════════════════
+
+RECORD_ANIMAL_PROTECTION = {
+    "databaseId": "abs", "legislationId": "rsa-2000-c-a-30",
+    "title": "Animal Protection Act",
+    "citation": "RSA 2000, c A-30", "type": "STATUTE",
+}
+
+RECORD_SOME_ACT = {
+    "databaseId": "ons", "legislationId": "so-2000-c-1",
+    "title": "Some Act",
+    "citation": "SO 2000, c 1", "type": "STATUTE",
+}
+
+
+def test_prescan_resolves_jurisdiction_before_llm():
+    """Query has 'alberta' -> prescan yields ab, LLM never called, verified=True."""
+    mock_canlii = MagicMock(return_value=_canlii_resp(RECORD_ANIMAL_PROTECTION))
+    mock_infer = MagicMock(side_effect=Exception("LLM should not be called"))
+
+    classification = {
+        "type": "legislation",
+        "normalized": "Animal Protection Act",
+        "original": "animal protection act alberta",
+    }
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("animal protection act alberta", classification)
+
+    assert len(result) == 1
+    r = result[0]
+    assert r["verified"] is True
+    assert r["_match_path"] == "exact"
+    assert r["jurisdiction"] == "AB"
+    mock_infer.assert_not_called()
+    mock_canlii.assert_called_once()
+
+
+def test_prescan_no_province_delegates_to_llm():
+    """Query has no province token -> prescan returns None, LLM IS called."""
+    mock_canlii = MagicMock(return_value=_canlii_resp(RECORD_SOME_ACT))
+    mock_infer = MagicMock(return_value="on")
+
+    classification = {
+        "type": "legislation",
+        "normalized": "Some Act",
+        "original": "Some Act",
+    }
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("Some Act", classification)
+
+    assert len(result) == 1
+    r = result[0]
+    assert r["verified"] is True
+    mock_infer.assert_called_once()
+    mock_canlii.assert_called_once()
+
+
+def test_prescan_two_provinces_defers_to_llm():
+    """Query has two distinct province tokens -> prescan defers to LLM."""
+    mock_canlii = MagicMock()
+    mock_infer = MagicMock(return_value="on")
+
+    # "nova scotia" -> ns, "canada" -> ca  => 2 distinct codes => prescan returns None
+    classification = {
+        "type": "legislation",
+        "normalized": "Nova Scotia Canada",
+        "original": "Nova Scotia Canada",
+    }
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        search_citation("Nova Scotia Canada", classification)
+
+    mock_infer.assert_called_once()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  CHANGE 2: observability — _match_path values on failure paths
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_canlii_error_sets_match_path():
+    """browse_legislation_in_database returns error -> _match_path=canlii_error."""
+    mock_canlii = MagicMock(return_value={"error": "CanLII request failed: 500"})
+    mock_infer = MagicMock(return_value="ab")
+
+    classification = {
+        "type": "legislation",
+        "normalized": "Alberta Human Rights Act",
+        "original": "Alberta Human Rights Act",
+    }
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("Alberta Human Rights Act", classification)
+
+    assert len(result) == 1
+    r = result[0]
+    assert r["verified"] is False
+    assert r["_match_path"] == "canlii_error"
+    assert "failed through A2AJ" in r["warning"] or "建议在 CanLII 手动确认" in r["warning"]

@@ -253,6 +253,29 @@ _CANLII_STATUTE_DB = {
     "sk": "sks", "yt": "yks",
 }
 
+_PROVINCE_TOKEN_MAP = {
+    # Province/territory full names → CanLII jurisdiction codes
+    "alberta": "ab",
+    "ontario": "on",
+    "quebec": "qc",
+    "manitoba": "mb",
+    "saskatchewan": "sk",
+    "nova scotia": "ns",
+    "new brunswick": "nb",
+    "prince edward island": "pe",
+    "british columbia": "bc",
+    "newfoundland": "nl",
+    "labrador": "nl",
+    "yukon": "yt",
+    "nunavut": "nu",
+    "northwest territories": "nt",
+    # Country-level / federal
+    "canada": "ca",
+    "canadian": "ca",
+    "federal": "ca",
+}
+
+
 # Tokens that are allowed in the residual after stripping a matched Direction-A
 # substring.  "of", "and", "the" (mid-title) etc. are deliberately excluded —
 # only jurisdiction names and leading articles.
@@ -276,6 +299,49 @@ def _normalize_for_match(s: str) -> str:
     s = re.sub(r'\s+', ' ', s).strip()
     s = _LEADING_ARTICLE_RE.sub('', s).strip()
     return s
+
+
+def _prescan_jurisdiction(query: str) -> str | None:
+    """Scan ORIGINAL query for explicit province/territory/country names.
+
+    Performs exact lowercased token matching against the closed set in
+    _PROVINCE_TOKEN_MAP.  Multi-word names (e.g. "british columbia") must
+    appear as adjacent tokens.
+
+    Returns a single jurisdiction code if exactly one distinct code is found,
+    or None if zero or multiple distinct codes are found (ambiguity falls
+    through to the LLM-based _infer_jurisdiction_canlii).
+
+    Jurisdiction misinference is safe by construction — the downstream
+    exact-title-match gate is unchanged, so a wrong jurisdiction yields a
+    miss (verified=False), never a false positive.
+    """
+    query_lower = query.lower().strip()
+    tokens = query_lower.split()
+    found_codes = set()
+
+    # Multi-word entries: check adjacency via token-slice comparison
+    multi = sorted(
+        [(n, c) for n, c in _PROVINCE_TOKEN_MAP.items() if ' ' in n],
+        key=lambda x: -len(x[0]),
+    )
+    for name, code in multi:
+        nt = name.split()
+        for i in range(len(tokens) - len(nt) + 1):
+            if tokens[i:i + len(nt)] == nt:
+                found_codes.add(code)
+                break
+
+    # Single-word entries: exact token match
+    for name, code in _PROVINCE_TOKEN_MAP.items():
+        if ' ' in name:
+            continue
+        if name in tokens:
+            found_codes.add(code)
+
+    if len(found_codes) == 1:
+        return next(iter(found_codes))
+    return None
 
 
 def _infer_jurisdiction_canlii(normalized: str) -> str | None:
@@ -505,11 +571,21 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                 verified = False
         else:
             # ── CanLII fallback（cit_match 未命中，跳过无意义 A2AJ）──
+            # Deterministic jurisdiction prescan on the original query.
+            # If the query text explicitly names a single province/territory,
+            # use that directly and skip the LLM.  Rationale: jurisdiction
+            # misinference is safe by construction — the downstream
+            # exact-title-match gate is unchanged, so a wrong jurisdiction
+            # yields a miss (verified=False), never a false positive.
             jur = None
-            try:
-                jur = _infer_jurisdiction_canlii(normalized)
-            except Exception:
-                jur = None
+            prescan_jur = _prescan_jurisdiction(query)
+            if prescan_jur:
+                jur = prescan_jur
+            else:
+                try:
+                    jur = _infer_jurisdiction_canlii(normalized)
+                except Exception:
+                    jur = None
             if jur:
                 from local_tools.canlii_api import browse_legislation_in_database
                 db_id = None
@@ -605,9 +681,16 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                                         chapter = ch_match.group(1) if ch_match else None
                                 # else: 0 条模糊匹配 → 保持 verified=False，走现有 warning
                             # else: ≥2 条精确匹配 → 保持 verified=False，不猜
-                        # else: CanLII API error → 保持 verified=False
+                            # _match_path is diagnostic-only; stripped at API boundary via _without_internal
+                            if not verified:
+                                _match_path = "no_exact_match"
+                        else:
+                            _match_path = "canlii_error"
                     except Exception:
-                        pass
+                        _match_path = "canlii_error"
+            else:
+                # No jurisdiction resolved (prescan miss AND LLM returned None)
+                _match_path = "jur_none"
 
         return [{
             "statute_title": statute_title,
