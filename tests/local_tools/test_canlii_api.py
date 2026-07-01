@@ -85,4 +85,4 @@ def test_browse_legislation_in_database_http_error():
         result = browse_legislation_in_database("abs")
 
     assert "error" in result
-    assert "CanLII request failed" in result["error"]
+    assert "Legal database lookup failed" in result["error"]

@@ -183,7 +183,7 @@ def extract_from_url(url: str) -> dict:
         meta = parse_llm_json(result)
     except Exception as e:
         logger.warning("[JSON] extract_from_url failed: %s  len=%d", e, len(result) if result else 0)
-        return {"url": url, "error": f"Content extraction failed: {e}"}
+        return {"url": url, "error": "We couldn't read the content of this page. Try uploading a screenshot instead."}
 
     # 从 hostname 推断来源名称（去掉 .com/.org 等后缀）
     hostname = meta.get("hostname", "") or ""

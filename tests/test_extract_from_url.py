@@ -23,7 +23,7 @@ def test_extract_from_url_trafilatura_extract_raises():
         result = extract_from_url("https://example.com/article")
 
     assert "error" in result
-    assert "Content extraction failed" in result["error"]
+    assert "We couldn't read the content of this page" in result["error"]
 
 
 def test_extract_from_url_trafilatura_extract_raises_runtime_error():
@@ -33,7 +33,7 @@ def test_extract_from_url_trafilatura_extract_raises_runtime_error():
         result = extract_from_url("https://example.com/article")
 
     assert "error" in result
-    assert "Content extraction failed" in result["error"]
+    assert "We couldn't read the content of this page" in result["error"]
 
 
 # ═════════════════════════════════════════════════════════════════════════════

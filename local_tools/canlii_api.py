@@ -48,7 +48,8 @@ def get_case_databases(language: str = "en") -> dict:
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        return {"error": f"CanLII request failed: {e}"}
+        logger.warning("CanLII get_case_databases failed: %s", e)
+        return {"error": "Legal database lookup failed. Try again or enter the citation manually."}
 
 
 def browse_cases(
@@ -98,7 +99,8 @@ def browse_cases(
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        return {"error": f"CanLII request failed: {e}"}
+        logger.warning("CanLII browse_cases failed: %s", e)
+        return {"error": "Legal database lookup failed. Try again or enter the citation manually."}
 
 
 def get_case_metadata(
@@ -148,7 +150,8 @@ def get_case_metadata(
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        return {"error": f"CanLII request failed: {e}"}
+        logger.warning("CanLII get_case_metadata failed: %s", e)
+        return {"error": "Legal database lookup failed. Try again or enter the citation manually."}
 
 
 def get_legislation_databases(language: str = "en") -> dict:
@@ -175,7 +178,8 @@ def get_legislation_databases(language: str = "en") -> dict:
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        return {"error": f"CanLII request failed: {e}"}
+        logger.warning("CanLII get_legislation_databases failed: %s", e)
+        return {"error": "Legal database lookup failed. Try again or enter the citation manually."}
 
 
 def browse_legislation_in_database(
@@ -224,4 +228,5 @@ def browse_legislation_in_database(
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        return {"error": f"CanLII request failed: {e}"}
+        logger.warning("CanLII browse_legislation_in_database failed: %s", e)
+        return {"error": "Legal database lookup failed. Try again or enter the citation manually."}

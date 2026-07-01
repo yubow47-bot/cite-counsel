@@ -69,7 +69,8 @@ def fetch_by_citation(citation: str, doc_type: str = "cases") -> dict:
             return {"raw_input": citation}
         return _map_fields(results[0])
     except requests.exceptions.RequestException as e:
-        return {"raw_input": citation, "error": f"A2AJ fetch failed: {e}"}
+        logger.warning("A2AJ fetch failed: %s", e)
+        return {"raw_input": citation, "error": "A2AJ database lookup failed. Try again or enter the citation manually."}
 
 
 def _map_fields(result: dict) -> dict:
