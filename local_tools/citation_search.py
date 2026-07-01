@@ -6,7 +6,7 @@ import logging
 
 from llm_api.deepseek_api import ask_deepseek
 from local_tools.a2aj_api import fetch_by_citation, search_cases_multi, _map_fields, _extract_year, _extract_jurisdiction
-from local_tools.utils import extract_pinpoint
+from local_tools.utils import extract_case_pinpoint, extract_pinpoint
 from utils.json_util import parse_llm_json
 from local_tools import timing_util as timing
 from profiling import timing as prof
@@ -16,6 +16,34 @@ logger = logging.getLogger(__name__)
 # ── Per-process lazy-init tracking ──
 _first_classify = True
 _first_deepseek_call = True
+
+
+_BARE_REPORTER_RE = re.compile(r'^(\d{4})\s+(\d+)\s+([A-Za-z]+)\s+(\d+)$')
+
+
+def _bracket_reporter_year(s: str) -> str:
+    """Wrap bare "YEAR VOL REPORTER PAGE" citations in brackets.
+
+    "1986 1 SCR 103"       → "[1986] 1 SCR 103"
+    "[1986] 1 SCR 103"     → unchanged (already bracketed)
+    "2022 SCC 39"           → unchanged (neutral citation — no volume digit)
+    "2022 SCC"              → unchanged (ambiguous — missing volume/page)
+    "just some legal text"  → unchanged (garbage)
+    ""                      → unchanged (empty)
+    "  1986  1  SCR 103  "  → "[1986] 1 SCR 103" (whitespace normalized)
+
+    Never guesses — degrades to unchanged when the pattern doesn't match.
+    """
+    if not s:
+        return s
+    # Normalise whitespace
+    s = ' '.join(s.split())
+    # Strip trailing period before pattern check
+    s = s.rstrip('.')
+    m = _BARE_REPORTER_RE.match(s)
+    if m:
+        return f"[{m.group(1)}] {m.group(2)} {m.group(3)} {m.group(4)}"
+    return s
 
 
 def _mark_first_classify() -> bool:
@@ -474,7 +502,9 @@ def search_citation(query: str, classification: dict | None = None) -> list:
 
     # 1. citation_number：按引用号精确查
     if input_type == "citation_number":
-        result = fetch_by_citation(normalized)
+        # Apply bracket normalization before calling fetch_by_citation
+        bracketed = _bracket_reporter_year(normalized)
+        result = fetch_by_citation(bracketed)
         if "error" not in result and "raw_input" not in result:
             result["verified"] = True
             return [result]
@@ -486,6 +516,15 @@ def search_citation(query: str, classification: dict | None = None) -> list:
 
     # 2. case_name：单次 A2AJ /search（A2AJ 无分页，size ≤ 50）
     elif input_type == "case_name":
+        # ── Pinpoint extraction ───────────────────────────────────────
+        # Strip trailing period, then check for trailing pinpoint patterns
+        search_query = normalized.strip().rstrip('.')
+        pinpoint_str = extract_case_pinpoint(search_query)
+        if pinpoint_str:
+            # Remove pinpoint from the search query
+            search_query = search_query[:-len(pinpoint_str)].strip().rstrip(',').strip()
+        # ───────────────────────────────────────────────────────────────
+
         # 从原始输入提取年份，与 DeepSeek 标准化互不干扰
         _, year = _extract_year(classified["original"])
         start_date = f"{year}-01-01" if year else None
@@ -497,13 +536,13 @@ def search_citation(query: str, classification: dict | None = None) -> list:
         keyword = re.sub(
             r"^(?:R\s+v|R\s+c|Regina\s+v|The\s+Queen\s+v)\s+",
             "",
-            normalized,
+            search_query,
             flags=re.IGNORECASE
         ).strip()
 
         t0 = time.time()
         results = search_cases_multi(
-            normalized, size=45,
+            search_query, size=45,
             start_date=start_date, end_date=end_date,
         )
         if timing.ENABLE_TIMING:
@@ -531,7 +570,11 @@ def search_citation(query: str, classification: dict | None = None) -> list:
             if len(final) >= 5:
                 break
 
-        return [dict(_map_fields(r), verified=True) for r in final]
+        results = [dict(_map_fields(r), verified=True) for r in final]
+        if pinpoint_str:
+            for r in results:
+                r["pinpoint"] = pinpoint_str
+        return results
 
     # 3. legislation：A2AJ /fetch (doc_type=laws) 验证
     elif input_type == "legislation":
