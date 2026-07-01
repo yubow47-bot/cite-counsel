@@ -91,7 +91,7 @@ export default function RootLayout({
         />
         {children}
         {process.env.NODE_ENV === "production" && <Analytics />}
-        <WarmupPing />
+        {process.env.NODE_ENV === "production" && <WarmupPing />}
       </body>
     </html>
   )
