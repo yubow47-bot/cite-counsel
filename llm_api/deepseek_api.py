@@ -133,7 +133,8 @@ def fetch_url_content(url: str) -> str:
     except requests.exceptions.ReadTimeout:
         return "Failed to fetch URL: Server took too long to respond"
     except Exception as e:
-        return f"Failed to fetch URL: {e}"
+        logger.warning("fetch_url_content failed: %s", e)
+        return "Failed to fetch this URL."
 
 
 def fetch_html(url: str, timeout: int = 15) -> str | None:
