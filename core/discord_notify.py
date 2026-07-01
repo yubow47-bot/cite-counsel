@@ -1,13 +1,15 @@
 """Discord webhook notification for feedback events.
 
 Reads env DISCORD_FEEDBACK_WEBHOOK. If unset, degrades gracefully (no-op).
-All errors are swallowed and logged as warnings — never raised.
+All errors are swallowed and logged as warnings â?never raised.
 """
 
 import logging
 import os
 
-import requests
+import requests as _requests
+
+from local_tools.utils import discord_session
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +32,7 @@ def notify(record: dict) -> bool:
     output = record.get("output", "")
 
     if kind == "message":
-        text = f"**💬 Feedback Message**\n{note}"
+        text = f"**ð¬ Feedback Message**\n{note}"
     else:
         text = (
             f"**{'👍' if verdict == 'up' else '👎'} Rating ({verdict})**\n"
@@ -39,9 +41,9 @@ def notify(record: dict) -> bool:
         )
 
     try:
-        resp = requests.post(webhook, json={"content": text}, timeout=5)
+        resp = discord_session.post(webhook, json={"content": text}, timeout=5)
         resp.raise_for_status()
         return True
-    except requests.RequestException as exc:
+    except _requests.RequestException as exc:
         logger.warning("Discord webhook POST failed: %s", exc)
         return False

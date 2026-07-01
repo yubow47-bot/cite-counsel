@@ -119,6 +119,77 @@ describe('CitationCard — pinpoint add / edit / remove', () => {
     // Input is visible and empty — notice should NOT appear
     expect(screen.queryByText(/pinpoint is user-provided/i)).toBeNull()
   })
+
+  it('prefills pinpoint from API response and opens input automatically', () => {
+    render(<CitationCard item={{ ...BASE_CITATION, pinpoint: "at para 2" }} sourceInput="" />)
+
+    // Input should be visible and prefilled
+    const input = screen.getByRole('textbox', { name: /pinpoint reference/i }) as HTMLInputElement
+    expect(input.value).toBe('at para 2')
+  })
+
+  it('state-lock: user clears prefilled pinpoint → re-render does not re-prefill', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(
+      <CitationCard item={{ ...BASE_CITATION, pinpoint: "at para 2" }} sourceInput="r v leo" />
+    )
+
+    // Verify prefilled
+    const input = screen.getByRole('textbox', { name: /pinpoint reference/i }) as HTMLInputElement
+    expect(input.value).toBe('at para 2')
+
+    // User clears it
+    await user.clear(input)
+    expect(input.value).toBe('')
+
+    // Simulate re-render with identical props (same sourceInput)
+    rerender(
+      <CitationCard item={{ ...BASE_CITATION, pinpoint: "at para 2" }} sourceInput="r v leo" />
+    )
+
+    // Field must stay empty (state-lock: same query → no re-prefill)
+    const inputAfter = screen.getByRole('textbox', { name: /pinpoint reference/i }) as HTMLInputElement
+    expect(inputAfter.value).toBe('')
+  })
+
+  it('cross-query: new query resets state-lock so new pinpoint prefills', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(
+      <CitationCard
+        item={{ ...BASE_CITATION, pinpoint: "at para 2" }}
+        sourceInput="r v leo at para 2"
+      />
+    )
+
+    // Verify prefill for query A
+    const input = screen.getByRole('textbox', { name: /pinpoint reference/i }) as HTMLInputElement
+    expect(input.value).toBe('at para 2')
+
+    // User clears it within same query
+    await user.clear(input)
+    expect(input.value).toBe('')
+
+    // Re-render with same query → field stays empty (state-lock)
+    rerender(
+      <CitationCard
+        item={{ ...BASE_CITATION, pinpoint: "at para 2" }}
+        sourceInput="r v leo at para 2"
+      />
+    )
+    expect(
+      (screen.getByRole('textbox', { name: /pinpoint reference/i }) as HTMLInputElement).value
+    ).toBe('')
+
+    // New query B (different sourceInput) → lock resets → prefills B's pinpoint
+    rerender(
+      <CitationCard
+        item={{ ...BASE_CITATION, citation: "R v Oakes, [1986] 1 SCR 103.", pinpoint: "at para 5" }}
+        sourceInput="R v Oakes at para 5"
+      />
+    )
+    const inputB = screen.getByRole('textbox', { name: /pinpoint reference/i }) as HTMLInputElement
+    expect(inputB.value).toBe('at para 5')
+  })
 })
 
 describe('CitationCard — period concatenation logic', () => {

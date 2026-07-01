@@ -2,6 +2,7 @@
 
 import re
 import requests
+from local_tools.utils import crossref_session
 from profiling import timing as prof
 
 CROSSREF_HEADERS = {
@@ -33,7 +34,7 @@ def fetch_crossref(doi: str) -> dict | None:
     url = f"https://api.crossref.org/works/{doi}"
     try:
         with prof.measure("http.crossref", endpoint="api.crossref.org"):
-            resp = requests.get(url, headers=CROSSREF_HEADERS, timeout=15)
+            resp = crossref_session.get(url, headers=CROSSREF_HEADERS, timeout=15)
         resp.raise_for_status()
         return resp.json().get("message")
     except Exception:

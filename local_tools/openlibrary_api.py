@@ -2,6 +2,7 @@
 
 import re
 import requests
+from local_tools.utils import openlibrary_session
 from profiling import timing as prof
 
 from local_tools.format_util import _wrap_italic
@@ -86,7 +87,7 @@ def fetch_openlibrary(isbn: str) -> dict | None:
     url = f"https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&format=json&jscmd=data"
     try:
         with prof.measure("http.openlibrary", endpoint="openlibrary.org"):
-            resp = requests.get(url, timeout=15)
+            resp = openlibrary_session.get(url, timeout=15)
         resp.raise_for_status()
         data = resp.json()
         key = f"ISBN:{isbn}"

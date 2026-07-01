@@ -10,6 +10,8 @@ import base64
 import os
 import re
 import requests
+
+from local_tools.utils import gemini_session
 from profiling import timing as prof
 from utils.json_util import parse_llm_json
 
@@ -102,7 +104,7 @@ def _call_gemini(image_paths: list[str]) -> dict | None:
 
     try:
         with prof.measure("http.gemini", model=model):
-            resp = requests.post(
+            resp = gemini_session.post(
                 url,
                 headers={
                     "X-goog-api-key": api_key,

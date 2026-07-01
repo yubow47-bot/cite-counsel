@@ -2,6 +2,7 @@ import json
 import os
 import re
 import time
+import logging
 
 from llm_api.deepseek_api import ask_deepseek
 from local_tools.a2aj_api import fetch_by_citation, search_cases_multi, _map_fields, _extract_year, _extract_jurisdiction
@@ -10,9 +11,34 @@ from utils.json_util import parse_llm_json
 from local_tools import timing_util as timing
 from profiling import timing as prof
 
+logger = logging.getLogger(__name__)
+
+# ── Per-process lazy-init tracking ──
+_first_classify = True
+_first_deepseek_call = True
+
+
+def _mark_first_classify() -> bool:
+    global _first_classify
+    if _first_classify:
+        _first_classify = False
+        return True
+    return False
+
+
+def _mark_first_deepseek_call() -> bool:
+    global _first_deepseek_call
+    if _first_deepseek_call:
+        _first_deepseek_call = False
+        return True
+    return False
+
 
 def classify_and_normalize(query: str) -> dict:
     """判断输入类型并标准化。"""
+    _fn_t0 = time.perf_counter()
+    _is_first_classify = _mark_first_classify()
+    logger.debug("[DUR] classify_and_normalize START — first_call=%s query_len=%d", _is_first_classify, len(query))
 
     # Bill 快速检测（"Bill C-22" / "bill s-2" / "bill c34" / "bill C34"），不调 LLM
     # 接受有/无横杠，捕获字母+数字，统一归一到 L-DDDD 格式
@@ -20,6 +46,8 @@ def classify_and_normalize(query: str) -> dict:
     if bill_match:
         letter = bill_match.group(1).upper()
         digits = bill_match.group(2)
+        _fn_elapsed = time.perf_counter() - _fn_t0
+        logger.debug("[DUR] classify_and_normalize END (bill_regex_fastpath) — %.1fms", _fn_elapsed * 1000)
         return {"type": "bill", "normalized": f"{letter}-{digits}", "original": query.strip()}
 
     prompt = f"""你是加拿大法律引用专家。分析以下用户输入，完成两件事：
@@ -45,15 +73,24 @@ def classify_and_normalize(query: str) -> dict:
 
     try:
         t0 = time.time()
+        _is_first_ds = _mark_first_deepseek_call()
+        if _is_first_ds:
+            logger.debug("[DUR] classify_and_normalize — first call to DeepSeek API (DNS + TLS setup expected)")
         with prof.measure("llm.classify", model=os.getenv("LLM_DEFAULT_MODEL", "deepseek-v4-flash")):
             content = ask_deepseek(prompt)
         if timing.ENABLE_TIMING:
             timing.report().add_llm("classify_and_normalize", time.time() - t0)
+        _ds_elapsed = time.time() - t0
+        logger.debug("[DUR] DeepSeek classify_and_normalize LLM call — %.1fms  first=%s", _ds_elapsed * 1000, _is_first_ds)
         result = parse_llm_json(content)
         if result.get("type") in ("citation_number", "case_name", "legislation", "bill", "concept"):
+            _fn_elapsed = time.perf_counter() - _fn_t0
+            logger.debug("[DUR] classify_and_normalize END (llm_path) — %.1fms  llm=%.1fms", _fn_elapsed * 1000, _ds_elapsed * 1000)
             return result
     except Exception as e:
-        print(f"[JSON解析] classify_and_normalize 失败: {e}  len={len(content)}  前200字: {content[:200]!r}")
+        logger.warning("[JSON] classify_and_normalize failed: %s  len=%d", e, len(content))
+    _fn_elapsed = time.perf_counter() - _fn_t0
+    logger.debug("[DUR] classify_and_normalize END (fallback) — %.1fms", _fn_elapsed * 1000)
     return {"type": "case_name", "normalized": query, "original": query}
 
 
@@ -99,7 +136,7 @@ Rules:
         try:
             obj = parse_llm_json(cleaned)
         except (ValueError, json.JSONDecodeError) as e:
-            print(f"[JSON解析] expand_concept 解析失败: {e}  len={len(content)}  前200字: {content[:200]!r}")
+            logger.warning("[JSON] expand_concept failed: %s  len=%d", e, len(content))
             return None
         candidates = obj.get("candidates") if isinstance(obj, dict) else obj
         if isinstance(candidates, list):
@@ -115,7 +152,7 @@ Rules:
     items = _parse_llm_output(raw)
 
     if not items:
-        print(f"[WARN] expand_concept 解析失败")
+        logger.warning("[WARN] expand_concept failed to parse")
         return []
 
     # ── 并发验证 ──
@@ -150,7 +187,7 @@ Rules:
         """验证法规候选：标准化 → A2AJ /fetch(doc_type=laws)。
         与 search_citation() legislation 路由做法一致。
         """
-        import requests as _req
+        from local_tools.utils import a2aj_session
         import os as _os
 
         entry = {"verified": False}
@@ -190,7 +227,7 @@ Rules:
         # 3. A2AJ /fetch(doc_type="laws")
         try:
             _t0 = time.time()
-            resp = _req.get(
+            resp = a2aj_session.get(
                 "https://api.a2aj.ca/fetch",
                 params={"citation": base_citation, "doc_type": "laws"},
                 timeout=15
@@ -373,19 +410,33 @@ xx 必须是以下之一：on, bc, ab, sk, mb, qc, ns, nb, pe, nl, yt, nt, nu, c
         return None
 
 
-def search_citation(query: str, classification: dict | None = None) -> list:
-    """主入口：分类 → 标准化 → 搜索/验证。
+_first_search = True
 
-    Args:
-        query: 用户原始输入
-        classification: 可选。外部已算好的分类结果（避免重复 LLM 调用）。
-                       为 None 时自动调用 classify_and_normalize（向后兼容）。
-    """
+
+def _mark_first_search() -> bool:
+    global _first_search
+    if _first_search:
+        _first_search = False
+        return True
+    return False
+
+
+def search_citation(query: str, classification: dict | None = None) -> list:
+    """主入口：分类 → 标准化 → 搜索/验证。"""
+    _fn_t0 = time.perf_counter()
+    _is_first = _mark_first_search()
+    if _is_first:
+        logger.debug("[DUR] search_citation — FIRST call")
+
+    def _end_timing():
+        _elapsed = time.perf_counter() - _fn_t0
+        logger.debug("[DUR] search_citation END — %.1fms", _elapsed * 1000)
+
     if classification is None:
         classified = classify_and_normalize(query)
     else:
         classified = classification
-    print(f"[DEBUG] 分类结果: {classified}")
+    logger.debug("[DEBUG] 分类结果: type=%s normalized=%s", classified.get("type"), classified.get("normalized"))
     input_type = classified["type"]
     normalized = classified["normalized"]
 
@@ -438,7 +489,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
         start_date = f"{year}-01-01" if year else None
         end_date = f"{year}-12-31" if year else None
         if year:
-            print(f"[DEBUG] 从原始输入提取到年份: {year} → {start_date} ~ {end_date}")
+            logger.debug("[DEBUG] extracted year from input: %s → %s ~ %s", year, start_date, end_date)
 
         # 提取核心关键词（去掉 R v / R c / Regina v 等前缀）
         keyword = re.sub(
@@ -515,7 +566,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                     "verified": True,
                 }]
 
-        import requests
+        from local_tools.utils import a2aj_session
 
         # 从标准化文本中提取基础引用号
         # 匹配 SC/RSC/SOR 等编号（去掉法条名和条款部分）
@@ -549,7 +600,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
             try:
                 t0 = time.time()
                 with prof.measure("http.a2aj_legislation", endpoint="/fetch", doc_type="laws"):
-                    resp = requests.get(
+                    resp = a2aj_session.get(
                         "https://api.a2aj.ca/fetch",
                         params={"citation": base_citation, "doc_type": "laws"},
                         timeout=15
@@ -711,7 +762,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
         _, bill_year_str = _extract_year(classified.get("original", ""))
         bill_year = int(bill_year_str) if bill_year_str else None
         if bill_year:
-            print(f"[DEBUG] 从 bill 原始输入提取到年份: {bill_year}")
+            logger.debug("[DEBUG] extracted year from bill input: %s", bill_year)
 
         # 从原始输入提取 pinpoint（normalized 只含法案编号）
         bill_pinpoint = None
@@ -782,6 +833,8 @@ def search_citation(query: str, classification: dict | None = None) -> list:
 
     # 5. concept：概念展开
     elif input_type == "concept":
+        _end_timing()
         return expand_concept(normalized)
 
+    _end_timing()
     return []

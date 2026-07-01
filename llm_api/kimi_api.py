@@ -10,6 +10,7 @@ import base64
 import os
 import re
 import requests
+from local_tools.utils import kimi_session
 from profiling import timing as prof
 from utils.json_util import parse_llm_json
 
@@ -88,7 +89,7 @@ def _call_kimi_vision(image_paths: list[str]) -> dict:
 
     try:
         with prof.measure("http.kimi", model=KIMI_VISION_MODEL):
-            resp = requests.post(
+            resp = kimi_session.post(
                 url,
                 headers={
                     "Authorization": f"Bearer {api_key}",
