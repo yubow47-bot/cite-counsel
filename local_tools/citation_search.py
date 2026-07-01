@@ -24,15 +24,29 @@ _BARE_REPORTER_RE = re.compile(r'^(\d{4})\s+(\d+)\s+([A-Za-z]+)\s+(\d+)$')
 def _bracket_reporter_year(s: str) -> str:
     """Wrap bare "YEAR VOL REPORTER PAGE" citations in brackets.
 
-    "1986 1 SCR 103"       → "[1986] 1 SCR 103"
-    "[1986] 1 SCR 103"     → unchanged (already bracketed)
-    "2022 SCC 39"           → unchanged (neutral citation — no volume digit)
-    "2022 SCC"              → unchanged (ambiguous — missing volume/page)
-    "just some legal text"  → unchanged (garbage)
-    ""                      → unchanged (empty)
-    "  1986  1  SCR 103  "  → "[1986] 1 SCR 103" (whitespace normalized)
+    Handles only the narrow pattern where the reporter is a single
+    alphabetic token (letters only, no dots or spaces) — "SCR", "FCR",
+    "DLR", etc.
 
-    Never guesses — degrades to unchanged when the pattern doesn't match.
+    "1986 1 SCR 103"       → "[1986] 1 SCR 103"
+    "[1986] 1 SCR 103"     → "[1986] 1 SCR 103"  (no double-bracketing)
+    "2022 SCC 39"           → "2022 SCC 39"       (neutral — no volume digit)
+    "2022 SCC"              → "2022 SCC"          (ambiguous — no page)
+    " 1986  1  SCR  103  "  → "[1986] 1 SCR 103"  (whitespace collapsed)
+    "(2024) 1 SCR 103"      → "(2024) 1 SCR 103"  (not bare — leading bracket)
+    "1986 1 S.C.R. 103"     → "1986 1 S.C.R. 103" (dotted reporter)
+    "2000 1 Alta L R 1"     → "2000 1 Alta L R 1" (multi-token reporter)
+    ""                      → ""                  (empty)
+
+    Design choice: the regex requires a single alphabetic reporter token
+    (``[A-Za-z]+``).  Dotted reporters ("S.C.R."), multi-token reporters
+    ("Alta L R"), year-in-parentheses, and any other format are left as-is
+    without guessing.  This is a deliberate false-negative-over-false-positive
+    tradeoff — nothing to fix unless a real case surfaces needing it.
+
+    Even when no bracket is applied, whitespace is still collapsed and a
+    trailing period is still stripped before the return (so "2022 SCC 39."
+    → "2022 SCC 39" rather than being passed to the API with the dot).
     """
     if not s:
         return s
