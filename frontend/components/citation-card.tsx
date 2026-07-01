@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useRef, useEffect } from "react"
 import { Check, Copy, PencilLine, Plus, ThumbsDown, ThumbsUp, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -111,6 +111,20 @@ export function CitationCard({
   const [vote, setVote] = useState<"up" | "down" | null>(null)
   const [pinpointOpen, setPinpointOpen] = useState(false)
   const [pinpointText, setPinpointText] = useState("")
+  const prefillAppliedForQueryRef = useRef<string | null>(null)
+
+  // State-lock prefill: populate the pinpoint input from the API response on first receipt
+  // for each unique query only.  Within the same query (same sourceInput), once applied or
+  // the user clears the field, subsequent re-renders or identical props re-passes will NOT
+  // re-populate the value.  When a new query produces a new API response (different
+  // sourceInput), the lock resets so the new pinpoint prefills once.
+  useEffect(() => {
+    if (item.pinpoint && prefillAppliedForQueryRef.current !== sourceInput) {
+      setPinpointText(item.pinpoint)
+      setPinpointOpen(true)
+      prefillAppliedForQueryRef.current = sourceInput
+    }
+  }, [item.pinpoint, sourceInput])
 
   const placeholder = getPinpointPlaceholder(item.source_type)
 

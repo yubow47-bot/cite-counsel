@@ -17,7 +17,6 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import requests as _requests
 from local_tools.citation_search import search_citation
 
 
@@ -59,7 +58,7 @@ def test_constitutional_1867_no_pinpoint():
     mock_infer = MagicMock()
     mock_canlii = MagicMock()
 
-    with patch.object(_requests, "get", mock_a2aj), \
+    with patch("local_tools.utils.a2aj_session.get", mock_a2aj), \
          patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
          patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
         result = search_citation("Constitution Act, 1867", CLASSIFICATION_1867)
@@ -85,7 +84,7 @@ def test_constitutional_1867_with_pinpoint():
     mock_infer = MagicMock()
     mock_canlii = MagicMock()
 
-    with patch.object(_requests, "get", mock_a2aj), \
+    with patch("local_tools.utils.a2aj_session.get", mock_a2aj), \
          patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
          patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
         result = search_citation("Constitution Act, 1867, s 91", CLASSIFICATION_1867_S91)
@@ -111,7 +110,7 @@ def test_constitutional_charter_with_pinpoint():
     mock_infer = MagicMock()
     mock_canlii = MagicMock()
 
-    with patch.object(_requests, "get", mock_a2aj), \
+    with patch("local_tools.utils.a2aj_session.get", mock_a2aj), \
          patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
          patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
         result = search_citation(
@@ -138,7 +137,7 @@ def test_constitutional_1982_with_pinpoint():
     mock_infer = MagicMock()
     mock_canlii = MagicMock()
 
-    with patch.object(_requests, "get", mock_a2aj), \
+    with patch("local_tools.utils.a2aj_session.get", mock_a2aj), \
          patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
          patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
         result = search_citation("Constitution Act, 1982, s 35", CLASSIFICATION_1982_S35)
@@ -167,7 +166,7 @@ def test_constitutional_canada_act_intercept():
     mock_infer = MagicMock()
     mock_canlii = MagicMock()
 
-    with patch.object(_requests, "get", mock_a2aj), \
+    with patch("local_tools.utils.a2aj_session.get", mock_a2aj), \
          patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
          patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
         result = search_citation("Canada Act 1982", classification)

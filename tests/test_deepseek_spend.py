@@ -39,7 +39,7 @@ class TestDeepSeekSpendTracking:
             "choices": [{"message": {"content": "x"}}],
             "usage": {"prompt_tokens": 1000, "completion_tokens": 500},
         }
-        with patch("llm_api.deepseek_api.requests.post") as m_post:
+        with patch("llm_api.deepseek_api.deepseek_session.post") as m_post:
             m_post.return_value = _mock_response(fake_data)
             with patch("core.spend_tracker.spend_tracker.record_cost") as m_record:
                 result = ask_deepseek("x")
@@ -53,7 +53,7 @@ class TestDeepSeekSpendTracking:
             "choices": [{"message": {"content": "y"}}],
             "usage": {"prompt_tokens": 50, "completion_tokens": 10},
         }
-        with patch("llm_api.deepseek_api.requests.post") as m_post:
+        with patch("llm_api.deepseek_api.deepseek_session.post") as m_post:
             m_post.return_value = _mock_response(fake_data)
             with patch("core.spend_tracker.spend_tracker.record_cost") as m_record:
                 result = ask_deepseek("y", model="deepseek-v4-pro")
@@ -69,7 +69,7 @@ class TestDeepSeekSpendTracking:
             "choices": [{"message": {"content": "x"}}],
             "usage": {"prompt_tokens": 100, "completion_tokens": 50},
         }
-        with patch("llm_api.deepseek_api.requests.post") as m_post:
+        with patch("llm_api.deepseek_api.deepseek_session.post") as m_post:
             m_post.return_value = _mock_response(fake_data)
             with patch("core.spend_tracker.spend_tracker.record_cost") as m_record:
                 m_record.side_effect = RuntimeError("Backend unavailable")
@@ -86,7 +86,7 @@ class TestDeepSeekSpendTracking:
             "choices": [{"message": {"content": "x"}}],
             # deliberately no "usage" key
         }
-        with patch("llm_api.deepseek_api.requests.post") as m_post:
+        with patch("llm_api.deepseek_api.deepseek_session.post") as m_post:
             m_post.return_value = _mock_response(fake_data)
             with patch("core.spend_tracker.spend_tracker.record_cost") as m_record:
                 result = ask_deepseek("x")
@@ -100,7 +100,7 @@ class TestDeepSeekSpendTracking:
             "choices": [{"message": {"content": "x"}}],
             "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         }
-        with patch("llm_api.deepseek_api.requests.post") as m_post:
+        with patch("llm_api.deepseek_api.deepseek_session.post") as m_post:
             m_post.return_value = _mock_response(fake_data)
             with patch("core.spend_tracker.spend_tracker.record_cost") as m_record:
                 result = ask_deepseek("x")

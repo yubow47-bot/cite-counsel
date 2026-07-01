@@ -3,7 +3,7 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from local_tools.format_util import _wrap_italic
-from local_tools.utils import extract_pinpoint
+from local_tools.utils import extract_pinpoint, extract_case_pinpoint
 
 
 class TestWrapItalic:
@@ -68,3 +68,53 @@ class TestExtractPinpoint:
 
     def test_no_citation_match(self):
         assert extract_pinpoint("Some random text without a citation") == ""
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  extract_case_pinpoint — new helper for case-route pinpoint
+# ═══════════════════════════════════════════════════════════════════
+
+class TestExtractCasePinpoint:
+    """extract_case_pinpoint: deterministic string parsing, no I/O."""
+
+    def test_at_para_n(self):
+        assert extract_case_pinpoint("r v leo at para 2") == "at para 2"
+
+    def test_at_paras_range(self):
+        assert extract_case_pinpoint("r v sharma at paras 10-15") == "at paras 10-15"
+
+    def test_bare_at_number(self):
+        assert extract_case_pinpoint("r v smith at 47") == "at 47"
+
+    def test_at_p_n(self):
+        assert extract_case_pinpoint("r v jones at p 5") == "at p 5"
+
+    def test_at_pp_range(self):
+        assert extract_case_pinpoint("r v brown at pp 10-15") == "at pp 10-15"
+
+    def test_no_pinpoint_no_match(self):
+        assert extract_case_pinpoint("R v Oakes") == ""
+
+    def test_trailing_period_no_match(self):
+        assert extract_case_pinpoint("R v Oakes.") == ""
+
+    def test_citation_number_no_match(self):
+        assert extract_case_pinpoint("2022 SCC 39") == ""
+
+    def test_reporter_no_match(self):
+        assert extract_case_pinpoint("1986 1 scr 103") == ""
+
+    def test_pinpoint_not_at_end_no_match(self):
+        assert extract_case_pinpoint("at para 2 something else") == ""
+
+    def test_empty_string(self):
+        assert extract_case_pinpoint("") == ""
+
+    def test_none_input(self):
+        assert extract_case_pinpoint(None) == ""
+
+    def test_at_para_single_digit(self):
+        assert extract_case_pinpoint("r v wong at para 5") == "at para 5"
+
+    def test_case_insensitive(self):
+        assert extract_case_pinpoint("R v PATEL AT PARA 42") == "AT PARA 42"

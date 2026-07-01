@@ -1,8 +1,11 @@
 import json
 import re
 import time
+import logging
 
 from llm_api.deepseek_api import ask_deepseek
+
+logger = logging.getLogger(__name__)
 from local_tools import timing_util as timing
 from local_tools.crossref_api import extract_doi, fetch_crossref, build_journal_citation
 from local_tools.openlibrary_api import extract_isbn, validate_isbn, fetch_openlibrary, build_book_citation
@@ -605,6 +608,21 @@ STRICT OUTPUT RULES:
 {italic_rules}"""
 
 
+# ── Per-process first-call tracking for format_citation ──
+_first_format = True
+
+
+def _mark_first_format() -> bool:
+    global _first_format
+    if _first_format:
+        _first_format = False
+        return True
+    return False
+
+
+import time as _fmt_time
+
+
 def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
     """对外主入口：自动判断类型 → 取规则 → 拼 prompt → 调 DeepSeek → 返回引用。
 
@@ -613,6 +631,10 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
         doc_type: 可选。LLM 分类的文档类型（如 "case"、"journal_article"），
                   不为 None 时覆盖 detect_type() 的结果。
     """
+    _f_t0 = _fmt_time.perf_counter()
+    _is_first_fmt = _mark_first_format()
+    if _is_first_fmt:
+        logger.debug("[DUR] format_citation — FIRST call")
     global _last_prompt, _last_raw_response, _last_source
     _last_source = None
 
@@ -622,6 +644,8 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
         _last_prompt = "[LEGISinfo] " + (extracted_fields.get("style_of_cause", ""))
         _last_raw_response = bill_cit
         _last_source = "legisinfo"
+        _f_elapsed = _fmt_time.perf_counter() - _f_t0
+        logger.debug("[DUR] format_citation END (bill_path) — %.1fms  first=%s", _f_elapsed * 1000, _is_first_fmt)
         return bill_cit
 
     # ── CrossRef 优先路径（仅 journal_article） ──
@@ -706,4 +730,6 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
     _last_raw_response = result
     if _last_source is None:
         _last_source = "deepseek"
+    _f_elapsed = _fmt_time.perf_counter() - _f_t0
+    logger.debug("[DUR] format_citation END (llm_path) — %.1fms  first=%s", _f_elapsed * 1000, _is_first_fmt)
     return result

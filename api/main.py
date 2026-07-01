@@ -68,7 +68,41 @@ def _without_internal(d: dict) -> dict:
 
 
 app = FastAPI(title="McGill Citation Tool API", version="1.0.0")
+
+# ── Startup marker: distinguishes brand-new container from warm reuse ──
+import datetime as _dt
+import logging as _logging
+_logger = _logging.getLogger(__name__)
+_CONTAINER_START_TS = _dt.datetime.now()
+_logger.info("[STARTUP] %s — Container/process started, app boot complete", _CONTAINER_START_TS.isoformat())
+
+# ── Per-process lazy-init tracking ──
+_FIRST_REQUEST = True  # reset to True each time the process starts
+
+
+def _mark_first_request() -> bool:
+    """Return True if this is the first request since process boot."""
+    global _FIRST_REQUEST
+    if _FIRST_REQUEST:
+        _FIRST_REQUEST = False
+        return True
+    return False
+
+
 rate_limiter = RateLimiter()
+
+# ── LEGISinfo cache warm-up at boot ─────────────────────────────────────
+# Pre-fetch the current-session bill list so the module-level _CACHE is
+# populated when the first bill query arrives.  Failures are logged but do
+# NOT block app startup — the existing lazy-fetch-on-miss is the fallback.
+@app.on_event("startup")
+async def _warm_legisinfo_cache():
+    try:
+        from local_tools.legisinfo_api import fetch_legisinfo_bills
+        bills = fetch_legisinfo_bills(force_refresh=True)
+        _logger.info("[STARTUP] LEGISinfo cache warmed — %d bills loaded in current session", len(bills))
+    except Exception as exc:
+        _logger.warning("[STARTUP] LEGISinfo cache warm-up failed (non-fatal): %s", exc)
 
 # ── CORS ──
 from fastapi.middleware.cors import CORSMiddleware
@@ -349,9 +383,16 @@ async def citation_query(body: CitationInput, request: Request):
 
     # ── single result → format directly ──
     try:
-        citation = format_citation(_without_internal(results[0]))
-        _cit_data: dict = {"citation": citation, "source_type": route}
         _pin = results[0].get("pinpoint")
+        # For case route: strip pinpoint from format_citation input (composed client-side,
+        # never reaches extracted_fields / LLM prompt).  Legislation/constitutional routes
+        # continue to pass pinpoint through (the LLM includes it in the citation text).
+        if route == "case_name" and _pin:
+            fmt_item = {k: v for k, v in results[0].items() if k != "pinpoint"}
+            citation = format_citation(_without_internal(fmt_item))
+        else:
+            citation = format_citation(_without_internal(results[0]))
+        _cit_data: dict = {"citation": citation, "source_type": route}
         if _pin:
             _cit_data["pinpoint"] = _pin
         debug = _collect_debug_info(route)
@@ -438,12 +479,17 @@ async def citation_select(body: CitationSelectInput):
     item = body.candidates[body.selected_index]
 
     try:
-        citation = format_citation(_without_internal(item))
+        # Strip pinpoint before format_citation (composed client-side)
+        _pin = item.get("pinpoint")
+        if _pin:
+            fmt_item = {k: v for k, v in item.items() if k != "pinpoint"}
+            citation = format_citation(_without_internal(fmt_item))
+        else:
+            citation = format_citation(_without_internal(item))
         # Bill candidates carry bill_session → use "bill" directly;
         # detect_type cannot classify LEGISinfo record keys.
         item_source_type = "bill" if item.get("bill_session") else detect_type(item)
         _cit_data: dict = {"citation": citation, "source_type": item_source_type}
-        _pin = item.get("pinpoint")
         if _pin:
             _cit_data["pinpoint"] = _pin
         debug = _collect_debug_info("select")
@@ -494,7 +540,6 @@ async def extract_file(file: UploadFile = File(...)):
             )
 
         doc_type = classify_document_type(fields.get("raw_text", ""))
-
         citation = format_citation(fields, doc_type=doc_type)
         debug = _collect_debug_info("file")
 
@@ -818,6 +863,23 @@ async def citation_assemble(body: AssemblyInput):
             True, body.type, "error", {},
             error={"reason": f"Assembly failed: {e}"},
         )
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Timing & first-request logging middleware (outermost — wraps all handlers)
+# ═══════════════════════════════════════════════════════════════════
+
+import time as _time
+
+@app.middleware("http")
+async def timing_middleware(request: Request, call_next):
+    _t0 = _time.perf_counter()
+    _is_first = _mark_first_request()
+    response = await call_next(request)
+    _elapsed = _time.perf_counter() - _t0
+    _first_tag = " [FIRST-REQUEST]" if _is_first else ""
+    _logger.debug("[TIMING] %s %s — %.1fms%s", request.method, request.url.path, _elapsed * 1000, _first_tag)
+    return response
 
 
 # ═══════════════════════════════════════════════════════════════════

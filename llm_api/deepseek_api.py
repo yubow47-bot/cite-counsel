@@ -1,16 +1,30 @@
 import os
 import re
 import json
+import time
 import logging
 import requests
 from profiling import timing
 from utils.json_util import parse_llm_json
+
+from local_tools.utils import deepseek_session, generic_session
 
 logger = logging.getLogger(__name__)
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_MODEL = os.getenv("LLM_DEFAULT_MODEL", "deepseek-v4-flash")
 URL_EXTRACT_FETCH_TIMEOUT = 5
+
+# ── Track first call (DNS + TLS setup on new connection) ──
+_first_deepseek_http = True
+
+
+def _mark_first_deepseek_http() -> bool:
+    global _first_deepseek_http
+    if _first_deepseek_http:
+        _first_deepseek_http = False
+        return True
+    return False
 
 
 def _load_env():
@@ -42,6 +56,9 @@ def _get_api_key() -> str:
 
 def _call_deepseek(messages: list, temperature: float = 0, model: str | None = None) -> str:
     """Internal: call DeepSeek API with messages, return response text."""
+    _http_t0 = time.perf_counter()
+    _is_first = _mark_first_deepseek_http()
+
     api_key = _get_api_key()
     if not api_key:
         raise ValueError(
@@ -50,8 +67,11 @@ def _call_deepseek(messages: list, temperature: float = 0, model: str | None = N
         )
     actual_model = model or DEEPSEEK_MODEL
 
+    if _is_first:
+        logger.debug("[DUR] DeepSeek HTTP — FIRST request (cold DNS + TCP + TLS)")
+
     with timing.measure("http.deepseek", model=actual_model):
-        response = requests.post(
+        response = deepseek_session.post(
             DEEPSEEK_API_URL,
             headers={
                 "Authorization": f"Bearer {api_key}",
@@ -64,6 +84,8 @@ def _call_deepseek(messages: list, temperature: float = 0, model: str | None = N
             },
             timeout=30,
         )
+    _http_elapsed = time.perf_counter() - _http_t0
+    logger.debug("[DUR] DeepSeek _call_deepseek HTTP — %.1fms  first=%s", _http_elapsed * 1000, _is_first)
     response.raise_for_status()
     data = response.json()
 
@@ -95,7 +117,7 @@ def fetch_url_content(url: str) -> str:
     """Fetch and extract plain text from a URL."""
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
-        resp = requests.get(url, headers=headers, timeout=8)
+        resp = generic_session.get(url, headers=headers, timeout=8)
         resp.raise_for_status()
         text = re.sub(r"<[^>]+>", "", resp.text)
         text = re.sub(r"\s+", " ", text).strip()
@@ -155,7 +177,7 @@ def extract_from_url(url: str) -> dict:
             return {"url": url, "error": "trafilatura could not extract content from this page"}
         meta = parse_llm_json(result)
     except Exception as e:
-        print(f"[JSON解析] extract_from_url 失败: {e}  len={len(result) if result else 0}  result[:300]={result[:300]!r}")
+        logger.warning("[JSON] extract_from_url failed: %s  len=%d", e, len(result) if result else 0)
         return {"url": url, "error": f"Content extraction failed: {e}"}
 
     # 从 hostname 推断来源名称（去掉 .com/.org 等后缀）

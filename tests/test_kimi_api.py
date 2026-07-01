@@ -166,7 +166,7 @@ def test_align_fallback_website():
 #  extract_from_image (mocked HTTP)
 # ═══════════════════════════════════════════════════════════════════
 
-@patch("llm_api.kimi_api.requests.post")
+@patch("llm_api.kimi_api.kimi_session.post")
 def test_extract_from_image_success(mock_post, tmp_path):
     """Happy path: Kimi returns valid JSON → aligned fields returned."""
     img = tmp_path / "test.png"
@@ -189,7 +189,7 @@ def test_extract_from_image_success(mock_post, tmp_path):
     assert result["raw_text"] == EXPECTED_FIELDS["raw_text"]
 
 
-@patch("llm_api.kimi_api.requests.post")
+@patch("llm_api.kimi_api.kimi_session.post")
 def test_extract_from_image_api_failure(mock_post, tmp_path):
     """HTTP failure → returns {"error": ...}."""
     img = tmp_path / "test.png"
@@ -201,7 +201,7 @@ def test_extract_from_image_api_failure(mock_post, tmp_path):
     assert "error" in result
 
 
-@patch("llm_api.kimi_api.requests.post")
+@patch("llm_api.kimi_api.kimi_session.post")
 def test_extract_from_image_bad_json(mock_post, tmp_path):
     """Bad JSON from API → returns {"error": ...}."""
     img = tmp_path / "test.png"
@@ -217,7 +217,7 @@ def test_extract_from_image_bad_json(mock_post, tmp_path):
     assert "error" in result
 
 
-@patch("llm_api.kimi_api.requests.post")
+@patch("llm_api.kimi_api.kimi_session.post")
 def test_extract_from_image_non_dict_json(mock_post, tmp_path):
     """Valid JSON but not a dict → returns {"error": ...}."""
     img = tmp_path / "test.png"
@@ -237,7 +237,7 @@ def test_extract_from_image_non_dict_json(mock_post, tmp_path):
 #  extract_from_images (mocked HTTP)
 # ═══════════════════════════════════════════════════════════════════
 
-@patch("llm_api.kimi_api.requests.post")
+@patch("llm_api.kimi_api.kimi_session.post")
 def test_extract_from_images_success(mock_post, tmp_path):
     """Multi-page: all images sent in one call, result aligned."""
     paths = []
@@ -264,7 +264,7 @@ def test_extract_from_images_empty():
     assert "error" in result
 
 
-@patch("llm_api.kimi_api.requests.post")
+@patch("llm_api.kimi_api.kimi_session.post")
 def test_extract_from_images_kimi_key_not_set(mock_post, tmp_path):
     """When KIMI_API_KEY is missing → raise ValueError (caught by extract_from_image)."""
     img = tmp_path / "test.png"

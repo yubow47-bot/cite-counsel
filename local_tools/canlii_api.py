@@ -1,12 +1,27 @@
 import os
 import time
+import logging
 
 import requests
 
 from local_tools import timing_util as timing
+from local_tools.utils import canlii_session
 from profiling import timing as prof
 
+logger = logging.getLogger(__name__)
+
 CANLII_BASE = "https://api.canlii.org/v1"
+
+# ── Track first HTTP call to CanLII ──
+_first_canlii_call = True
+
+
+def _mark_first_canlii() -> bool:
+    global _first_canlii_call
+    if _first_canlii_call:
+        _first_canlii_call = False
+        return True
+    return False
 
 
 def get_case_databases(language: str = "en") -> dict:
@@ -22,7 +37,7 @@ def get_case_databases(language: str = "en") -> dict:
     try:
         t0 = time.time()
         with prof.measure("http.canlii_case_databases", endpoint="/caseBrowse/{language}/"):
-            response = requests.get(
+            response = canlii_session.get(
                 f"{CANLII_BASE}/caseBrowse/{language}/",
                 params={"api_key": key},
                 timeout=15,
@@ -64,7 +79,7 @@ def browse_cases(
     try:
         t0 = time.time()
         with prof.measure("http.canlii_browse_cases", endpoint="/caseBrowse/{language}/{database_id}/"):
-            response = requests.get(
+            response = canlii_session.get(
                 f"{CANLII_BASE}/caseBrowse/{language}/{database_id}/",
                 params={
                     "offset": offset,
@@ -117,7 +132,7 @@ def get_case_metadata(
     try:
         t0 = time.time()
         with prof.measure("http.canlii_case_metadata", endpoint="/caseBrowse/{language}/{database_id}/{case_id}/"):
-            response = requests.get(
+            response = canlii_session.get(
                 f"{CANLII_BASE}/caseBrowse/{language}/{database_id}/{case_id}/",
                 params={"api_key": key},
                 timeout=15,
@@ -146,7 +161,7 @@ def get_legislation_databases(language: str = "en") -> dict:
     try:
         t0 = time.time()
         with prof.measure("http.canlii_legislation_databases", endpoint="/legislationBrowse/{language}/"):
-            response = requests.get(
+            response = canlii_session.get(
                 f"{CANLII_BASE}/legislationBrowse/{language}/",
                 params={"api_key": key},
                 timeout=15,
@@ -184,13 +199,18 @@ def browse_legislation_in_database(
         return {"error": "CANLII_API_KEY not configured"}
 
     try:
-        t0 = time.time()
+        _is_first = _mark_first_canlii()
+        if _is_first:
+            logger.debug("[DUR] CanLII browse_legislation_in_database — FIRST call (DNS + TCP setup expected)")
+        _http_t0 = time.perf_counter()
         with prof.measure("http.canlii_legislation_browse", endpoint="/legislationBrowse/{language}/{database_id}/"):
-            response = requests.get(
+            response = canlii_session.get(
                 f"{CANLII_BASE}/legislationBrowse/{language}/{database_id}/",
                 params={"api_key": key},
                 timeout=30,
             )
+        _http_elapsed = time.perf_counter() - _http_t0
+        logger.debug("[DUR] CanLII browse_legislation_in_database(%s) — %.1fms  first=%s", database_id, _http_elapsed * 1000, _is_first)
         if timing.ENABLE_TIMING:
             timing.report().add_a2aj(
                 f"browse_legislation_in_database({database_id})",

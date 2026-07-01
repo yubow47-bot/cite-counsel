@@ -1,26 +1,46 @@
 import re
 import time
+import logging
 
 import requests
+from local_tools.utils import a2aj_session
 
 from local_tools import timing_util as timing
 from profiling import timing as prof
 
+logger = logging.getLogger(__name__)
+
 A2AJ_BASE = "https://api.a2aj.ca"
+
+# ── Track first HTTP call to A2AJ ──
+_first_a2aj_call = True
+
+
+def _mark_first_a2aj() -> bool:
+    global _first_a2aj_call
+    if _first_a2aj_call:
+        _first_a2aj_call = False
+        return True
+    return False
 
 
 def fetch_by_citation(citation: str, doc_type: str = "cases") -> dict:
     """按 citation 直接查询，返回结构化字段。"""
     try:
-        t0 = time.time()
+        _is_first = _mark_first_a2aj()
+        if _is_first:
+            logger.debug("[DUR] A2AJ fetch_by_citation — FIRST call (DNS + TCP setup expected)")
+        _http_t0 = time.perf_counter()
         with prof.measure("http.a2aj_fetch", endpoint="/fetch", doc_type=doc_type):
-            response = requests.get(
+            response = a2aj_session.get(
                 f"{A2AJ_BASE}/fetch",
                 params={"citation": citation, "doc_type": doc_type},
                 timeout=15
             )
+        _http_elapsed = time.perf_counter() - _http_t0
+        logger.debug("[DUR] A2AJ fetch_by_citation — %.1fms  first=%s", _http_elapsed * 1000, _is_first)
         if timing.ENABLE_TIMING:
-            timing.report().add_a2aj(f"fetch({doc_type}) {citation[:40]}", time.time() - t0)
+            timing.report().add_a2aj(f"fetch({doc_type}) {citation[:40]}", _http_elapsed)
         response.raise_for_status()
         data = response.json()
         results = data.get("results", [])
@@ -32,7 +52,7 @@ def fetch_by_citation(citation: str, doc_type: str = "cases") -> dict:
                 try:
                     t0 = time.time()
                     with prof.measure("http.a2aj_fetch_fallback", endpoint="/fetch", doc_type="legislation"):
-                        response = requests.get(
+                        response = a2aj_session.get(
                             f"{A2AJ_BASE}/fetch",
                             params={"citation": citation, "doc_type": "legislation"},
                             timeout=15
@@ -109,15 +129,11 @@ def search_cases_multi(query: str, size: int = 45,
                        search_type: str = "name",
                        start_date: str | None = None,
                        end_date: str | None = None) -> list:
-    """按名称搜索案件（A2AJ /search），返回结果列表。
-
-    Args:
-        query: 案件名（会自动提取年份并清理输入）
-        size: 返回条数，最大 50（A2AJ API 限制）
-        search_type: "name" 按标题或 "full_text" 按全文
-        start_date: 开始日期 YYYY-MM-DD
-        end_date: 结束日期 YYYY-MM-DD
-    """
+    """按名称搜索案件（A2AJ /search），返回结果列表。"""
+    _is_first = _mark_first_a2aj()
+    if _is_first:
+        logger.debug("[DUR] A2AJ search_cases_multi — FIRST call (DNS + TCP setup expected)")
+    _http_t0 = time.perf_counter()
     # 从 query 中提取年份并清洗
     clean_query, year = _extract_year(query)
     if year and not start_date and not end_date:
@@ -135,15 +151,16 @@ def search_cases_multi(query: str, size: int = 45,
     if end_date:
         params["end_date"] = end_date
     try:
-        t0 = time.time()
         with prof.measure("http.a2aj_search_query", endpoint="/search"):
-            resp = requests.get(
+            resp = a2aj_session.get(
                 f"{A2AJ_BASE}/search",
                 params=params,
                 timeout=15
             )
+        _http_elapsed = time.perf_counter() - _http_t0
+        logger.debug("[DUR] A2AJ search_cases_multi — %.1fms  first=%s", _http_elapsed * 1000, _is_first)
         if timing.ENABLE_TIMING:
-            timing.report().add_a2aj(f"search_cases_multi /search ({clean_query[:30]})", time.time() - t0)
+            timing.report().add_a2aj(f"search_cases_multi /search ({clean_query[:30]})", _http_elapsed)
         resp.raise_for_status()
         return resp.json().get("results", [])
     except requests.exceptions.RequestException:

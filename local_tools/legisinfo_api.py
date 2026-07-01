@@ -7,10 +7,14 @@ import re
 import json
 import os
 import time
+import logging
 import requests
 from datetime import datetime
 
 from local_tools.format_util import _wrap_italic
+from local_tools.utils import legisinfo_session
+
+logger = logging.getLogger(__name__)
 
 CACHE_TTL = 3600  # 1 hour — bills change throughout session
 
@@ -18,6 +22,17 @@ BILLS_URL = "https://www.parl.ca/legisinfo/en/bills/json"
 
 _CACHE: dict[str, list | None] = {}
 _CACHE_TIME: dict[str, float] = {}
+
+# ── Track first-ever LEGISinfo fetch (cache miss + HTTP) ──
+_first_legisinfo_fetch = True
+
+
+def _mark_first_legisinfo_fetch() -> bool:
+    global _first_legisinfo_fetch
+    if _first_legisinfo_fetch:
+        _first_legisinfo_fetch = False
+        return True
+    return False
 
 # ── Parliamentary session date ranges (hardcoded, 1994–present) ──
 SESSION_MAP: dict[str, tuple[int | None, int | None]] = {
@@ -79,7 +94,7 @@ def _fetch_json(session: str | None = None) -> list | None:
         url = BILLS_URL
         if session:
             url = f"{BILLS_URL}?parlsession={session}"
-        resp = requests.get(url, timeout=30, verify=False)
+        resp = legisinfo_session.get(url, timeout=30, verify=False)
         resp.raise_for_status()
         data = resp.json()
         if isinstance(data, list):
@@ -101,12 +116,28 @@ def fetch_legisinfo_bills(force_refresh: bool = False, session: str | None = Non
     global _CACHE, _CACHE_TIME
     key = session or "_default"
     now = time.time()
+
+    # Check cache hit
     if not force_refresh and key in _CACHE and _CACHE[key] is not None and (now - _CACHE_TIME.get(key, 0)) < CACHE_TTL:
+        _age = now - _CACHE_TIME.get(key, now)
+        logger.debug("[DUR] LEGISinfo fetch_legisinfo_bills — CACHE HIT (key=%s, age=%.0fs)", key, _age)
         return _CACHE[key]
+
+    _is_first = _mark_first_legisinfo_fetch()
+    _fetch_t0 = time.perf_counter()
+    if _is_first:
+        logger.debug("[DUR] LEGISinfo fetch_legisinfo_bills — FIRST fetch (cold cache, HTTP + JSON parse)")
+
     data = _fetch_json(session=session)
+    _fetch_elapsed = time.perf_counter() - _fetch_t0
+
     if data is not None:
         _CACHE[key] = data
         _CACHE_TIME[key] = now
+        logger.debug("[DUR] LEGISinfo fetch_legisinfo_bills — CACHE MISS, fetched %d bills in %.1fms  first=%s", len(data), _fetch_elapsed * 1000, _is_first)
+    else:
+        logger.debug("[DUR] LEGISinfo fetch_legisinfo_bills — FETCH FAILED in %.1fms  first=%s", _fetch_elapsed * 1000, _is_first)
+
     return _CACHE.get(key) or []
 
 
@@ -196,7 +227,7 @@ def find_bills(bill_number: str, year: int | None = None) -> list[dict]:
                     results.append(b)
 
     if failed_sessions:
-        print(f"[LEGISinfo] failed sessions for bill {bill_number}: {failed_sessions}")
+        logger.warning("[LEGISinfo] failed sessions for bill %s: %s", bill_number, failed_sessions)
 
     return results
 
