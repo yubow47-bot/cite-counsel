@@ -26,7 +26,7 @@ def test_browse_legislation_in_database_returns_json_on_success():
     mock_get = MagicMock(return_value=mock_resp)
 
     with patch("os.environ.get", return_value="test-api-key"), \
-         patch("local_tools.canlii_api.canlii_session.get", mock_get), \
+         patch("local_tools.canlii_api.canlii_session.request", mock_get), \
          patch("profiling.timing.ENABLED", False):
         result = browse_legislation_in_database("abs")
 
@@ -47,7 +47,7 @@ def test_browse_legislation_in_database_returns_json_on_success():
 def test_browse_legislation_in_database_empty_database_id():
     """Empty database_id returns error dict immediately, no API call."""
     mock_get = MagicMock()
-    with patch("local_tools.canlii_api.canlii_session.get", mock_get):
+    with patch("local_tools.canlii_api.canlii_session.request", mock_get):
         result = browse_legislation_in_database("")
     assert result == {"error": "database_id required"}
     mock_get.assert_not_called()
@@ -56,7 +56,7 @@ def test_browse_legislation_in_database_empty_database_id():
 def test_browse_legislation_in_database_whitespace_database_id():
     """Whitespace-only database_id returns error dict immediately, no API call."""
     mock_get = MagicMock()
-    with patch("local_tools.canlii_api.canlii_session.get", mock_get):
+    with patch("local_tools.canlii_api.canlii_session.request", mock_get):
         result = browse_legislation_in_database("   ")
     assert result == {"error": "database_id required"}
     mock_get.assert_not_called()
@@ -66,7 +66,7 @@ def test_browse_legislation_in_database_no_api_key():
     """Missing CANLII_API_KEY returns error dict immediately, no API call."""
     mock_get = MagicMock()
     with patch("os.environ.get", return_value=None), \
-         patch("local_tools.canlii_api.canlii_session.get", mock_get):
+         patch("local_tools.canlii_api.canlii_session.request", mock_get):
         result = browse_legislation_in_database("abs")
     assert result == {"error": "CANLII_API_KEY not configured"}
     mock_get.assert_not_called()
@@ -79,7 +79,7 @@ def test_browse_legislation_in_database_http_error():
     mock_get = MagicMock(return_value=mock_resp)
 
     with patch("os.environ.get", return_value="test-api-key"), \
-         patch("local_tools.canlii_api.canlii_session.get", mock_get), \
+         patch("local_tools.canlii_api.canlii_session.request", mock_get), \
          patch("local_tools.timing_util.ENABLE_TIMING", False), \
          patch("profiling.timing.ENABLED", False):
         result = browse_legislation_in_database("abs")

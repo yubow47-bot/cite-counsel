@@ -3,7 +3,7 @@ import time
 import logging
 
 import requests
-from local_tools.utils import a2aj_session
+from local_tools.utils import a2aj_session, request_with_retry
 
 from local_tools import timing_util as timing
 from profiling import timing as prof
@@ -32,10 +32,11 @@ def fetch_by_citation(citation: str, doc_type: str = "cases") -> dict:
             logger.debug("[DUR] A2AJ fetch_by_citation — FIRST call (DNS + TCP setup expected)")
         _http_t0 = time.perf_counter()
         with prof.measure("http.a2aj_fetch", endpoint="/fetch", doc_type=doc_type):
-            response = a2aj_session.get(
+            response = request_with_retry(
+                a2aj_session, "GET",
                 f"{A2AJ_BASE}/fetch",
                 params={"citation": citation, "doc_type": doc_type},
-                timeout=15
+                read_timeout=15,
             )
         _http_elapsed = time.perf_counter() - _http_t0
         logger.debug("[DUR] A2AJ fetch_by_citation — %.1fms  first=%s", _http_elapsed * 1000, _is_first)
@@ -52,10 +53,11 @@ def fetch_by_citation(citation: str, doc_type: str = "cases") -> dict:
                 try:
                     t0 = time.time()
                     with prof.measure("http.a2aj_fetch_fallback", endpoint="/fetch", doc_type="legislation"):
-                        response = a2aj_session.get(
+                        response = request_with_retry(
+                            a2aj_session, "GET",
                             f"{A2AJ_BASE}/fetch",
                             params={"citation": citation, "doc_type": "legislation"},
-                            timeout=15
+                            read_timeout=15,
                         )
                     if timing.ENABLE_TIMING:
                         timing.report().add_a2aj(f"fetch(legislation fallback) {citation[:40]}", time.time() - t0)
@@ -152,10 +154,11 @@ def search_cases_multi(query: str, size: int = 45,
         params["end_date"] = end_date
     try:
         with prof.measure("http.a2aj_search_query", endpoint="/search"):
-            resp = a2aj_session.get(
+            resp = request_with_retry(
+                a2aj_session, "GET",
                 f"{A2AJ_BASE}/search",
                 params=params,
-                timeout=15
+                read_timeout=15,
             )
         _http_elapsed = time.perf_counter() - _http_t0
         logger.debug("[DUR] A2AJ search_cases_multi — %.1fms  first=%s", _http_elapsed * 1000, _is_first)

@@ -188,7 +188,7 @@ Rules:
         """验证法规候选：标准化 → A2AJ /fetch(doc_type=laws)。
         与 search_citation() legislation 路由做法一致。
         """
-        from local_tools.utils import a2aj_session
+        from local_tools.utils import a2aj_session, request_with_retry
         import os as _os
 
         entry = {"verified": False}
@@ -228,10 +228,11 @@ Rules:
         # 3. A2AJ /fetch(doc_type="laws")
         try:
             _t0 = time.time()
-            resp = a2aj_session.get(
+            resp = request_with_retry(
+                a2aj_session, "GET",
                 "https://api.a2aj.ca/fetch",
                 params={"citation": base_citation, "doc_type": "laws"},
-                timeout=15
+                read_timeout=15,
             )
             if timing.ENABLE_TIMING:
                 timing.report().add_a2aj(f"expand_concept legislation verify ({base_citation[:30]})", time.time() - _t0)
@@ -567,7 +568,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                     "verified": True,
                 }]
 
-        from local_tools.utils import a2aj_session
+        from local_tools.utils import a2aj_session, request_with_retry
 
         # 从标准化文本中提取基础引用号
         # 匹配 SC/RSC/SOR 等编号（去掉法条名和条款部分）
@@ -601,10 +602,11 @@ def search_citation(query: str, classification: dict | None = None) -> list:
             try:
                 t0 = time.time()
                 with prof.measure("http.a2aj_legislation", endpoint="/fetch", doc_type="laws"):
-                    resp = a2aj_session.get(
+                    resp = request_with_retry(
+                        a2aj_session, "GET",
                         "https://api.a2aj.ca/fetch",
                         params={"citation": base_citation, "doc_type": "laws"},
-                        timeout=15
+                        read_timeout=15,
                     )
                 if timing.ENABLE_TIMING:
                     timing.report().add_a2aj(f"legislation fetch({base_citation[:30]})", time.time() - t0)

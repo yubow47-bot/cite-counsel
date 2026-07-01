@@ -12,7 +12,7 @@ import requests
 from datetime import datetime
 
 from local_tools.format_util import _wrap_italic
-from local_tools.utils import legisinfo_session
+from local_tools.utils import legisinfo_session, request_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ def _fetch_json(session: str | None = None) -> list | None:
         url = BILLS_URL
         if session:
             url = f"{BILLS_URL}?parlsession={session}"
-        resp = legisinfo_session.get(url, timeout=30, verify=False)
+        resp = request_with_retry(legisinfo_session, "GET", url, read_timeout=30, verify=False)
         resp.raise_for_status()
         data = resp.json()
         if isinstance(data, list):

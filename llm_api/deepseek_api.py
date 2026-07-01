@@ -7,7 +7,7 @@ import requests
 from profiling import timing
 from utils.json_util import parse_llm_json
 
-from local_tools.utils import deepseek_session, generic_session
+from local_tools.utils import deepseek_session, generic_session, request_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +71,12 @@ def _call_deepseek(messages: list, temperature: float = 0, model: str | None = N
         logger.debug("[DUR] DeepSeek HTTP — FIRST request (cold DNS + TCP + TLS)")
 
     with timing.measure("http.deepseek", model=actual_model):
-        response = deepseek_session.post(
+        response = request_with_retry(
+            deepseek_session, "POST",
             DEEPSEEK_API_URL,
+            # retries=0: POST is not idempotent — a read-timeout retry could
+            # duplicate a completed LLM call and double-charge.
+            retries=0,
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -82,7 +86,7 @@ def _call_deepseek(messages: list, temperature: float = 0, model: str | None = N
                 "messages": messages,
                 "temperature": temperature,
             },
-            timeout=30,
+            read_timeout=30,
         )
     _http_elapsed = time.perf_counter() - _http_t0
     logger.debug("[DUR] DeepSeek _call_deepseek HTTP — %.1fms  first=%s", _http_elapsed * 1000, _is_first)
