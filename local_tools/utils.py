@@ -1,6 +1,8 @@
 """Shared utility functions for citation processing."""
 
 import re
+import time
+
 import requests as _requests
 
 # ── Shared HTTP session for connection pooling ──────────────────────────────
@@ -28,6 +30,64 @@ gemini_session = _requests.Session()
 kimi_session = _requests.Session()
 discord_session = _requests.Session()
 generic_session = _requests.Session()
+
+
+# ── Shared retry helper for external HTTP calls ──────────────────────────────
+#
+# Provides split connect/read timeouts and a single automatic retry on
+# transient network errors (connection drops, DNS resolution failures,
+# server-side timeouts).  Does NOT retry on HTTP error status codes.
+def request_with_retry(
+    session,
+    method,
+    url,
+    connect_timeout=2.7,
+    read_timeout=30,
+    retries=1,
+    backoff=0.3,
+    **kwargs,
+):
+    """Call ``session.request(method, url, timeout=(connect_timeout,
+    read_timeout), **kwargs)``.  On ``requests.exceptions.ConnectionError`` or
+    ``requests.exceptions.Timeout``, retry up to ``retries`` additional times
+    with ``backoff`` seconds between attempts.  Does **not** retry on HTTP
+    error status codes (caller remains responsible for ``raise_for_status()``).
+    Re-raises the last exception if all attempts fail.
+
+    Parameters
+    ----------
+    session : requests.Session
+        The shared session to use.
+    method : str
+        HTTP method (``"GET"``, ``"POST"``, …).
+    url : str
+        Target URL.
+    connect_timeout : float
+        Seconds to wait for connection establishment.
+    read_timeout : float
+        Seconds to wait for a response once connected.
+    retries : int
+        Number of *additional* attempts after the first failure.
+    backoff : float
+        Seconds to sleep between attempts.
+    **kwargs
+        Passed verbatim to ``session.request()`` (``params``, ``json``,
+        ``headers``, ``verify``, …).
+    """
+    timeout = (connect_timeout, read_timeout)
+    last_exc = None
+
+    for attempt in range(retries + 1):
+        try:
+            return session.request(method, url, timeout=timeout, **kwargs)
+        except (_requests.exceptions.ConnectionError, _requests.exceptions.Timeout) as exc:
+            last_exc = exc
+            if attempt < retries:
+                time.sleep(backoff)
+        # Any other exception (HTTPError, ValueError, …) propagates immediately.
+
+    raise last_exc  # type: ignore[misc]
+
 
 # Matches a base legal citation like "RSC 1985, c C-46", "SC 2002, c 1", "SOR/2000-111"
 _CITATION_REGEX = re.compile(

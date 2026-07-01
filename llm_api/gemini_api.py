@@ -11,7 +11,7 @@ import os
 import re
 import requests
 
-from local_tools.utils import gemini_session
+from local_tools.utils import gemini_session, request_with_retry
 from profiling import timing as prof
 from utils.json_util import parse_llm_json
 
@@ -104,14 +104,18 @@ def _call_gemini(image_paths: list[str]) -> dict | None:
 
     try:
         with prof.measure("http.gemini", model=model):
-            resp = gemini_session.post(
+            resp = request_with_retry(
+                gemini_session, "POST",
                 url,
+                # retries=0: POST is not idempotent — a read-timeout retry could
+                # duplicate a completed LLM call and double-charge.
+                retries=0,
                 headers={
                     "X-goog-api-key": api_key,
                     "Content-Type": "application/json",
                 },
                 json=body,
-                timeout=30,
+                read_timeout=30,
             )
         resp.raise_for_status()
         data = resp.json()

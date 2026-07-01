@@ -193,7 +193,7 @@ def test_cit_match_hit_unchanged():
 
     with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
          patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii), \
-         patch("local_tools.utils.a2aj_session.get", mock_get):
+         patch("local_tools.utils.a2aj_session.request", mock_get):
         result = search_citation(
             "Criminal Code, RSC 1985, c C-46",
             CLASSIFICATION_CRIMINAL_CODE,
