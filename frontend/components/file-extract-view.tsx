@@ -24,7 +24,7 @@ export function FileExtractView() {
       case "unsupported":
         setView({
           kind: "unsupported",
-          reason: env.data.reason ?? "This file type is not yet supported.",
+          reason: env.error?.reason ?? "This file type is not yet supported.",
         })
         break
       case "error":
