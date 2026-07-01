@@ -57,6 +57,9 @@ ALLOWED_ORIGINS = [
 ]
 
 
+_USER_FACING_ERROR = "We couldn't process this request. Please try again in a moment."
+
+
 def _without_internal(d: dict) -> dict:
     """Strip known internal diagnostic keys from a result dict before user-facing use.
 
@@ -322,7 +325,8 @@ async def citation_query(body: CitationInput, request: Request):
     try:
         classified = classify_and_normalize(query)
     except Exception as e:
-        return _envelope(False, "", "error", {}, error={"reason": f"Classification failed: {e}"})
+        _logger.warning("Classification failed: %s", e)
+        return _envelope(False, "", "error", {}, error={"reason": _USER_FACING_ERROR})
 
     route = classified["type"]
 
@@ -330,8 +334,9 @@ async def citation_query(body: CitationInput, request: Request):
     try:
         results = search_citation(query, classification=classified)
     except Exception as e:
+        _logger.warning("Search failed: %s", e)
         return _envelope(
-            False, route, "error", {}, error={"reason": f"Search failed: {e}"}
+            False, route, "error", {}, error={"reason": _USER_FACING_ERROR}
         )
 
     if not results:
@@ -402,9 +407,10 @@ async def citation_query(body: CitationInput, request: Request):
             debug=debug,
         )
     except Exception as e:
+        _logger.warning("Formatting failed for route=%s: %s", route, e)
         return _envelope(
             True, route, "error", {},
-            error={"reason": f"Formatting failed: {e}"},
+            error={"reason": _USER_FACING_ERROR},
         )
 
 
@@ -451,9 +457,10 @@ def _handle_concept(results: list) -> dict:
             debug=debug,
         )
     except Exception as e:
+        _logger.warning("Formatting failed for concept: %s", e)
         return _envelope(
             True, "concept", "error", {},
-            error={"reason": f"Formatting failed: {e}"},
+            error={"reason": _USER_FACING_ERROR},
         )
 
 
@@ -499,9 +506,10 @@ async def citation_select(body: CitationSelectInput):
             debug=debug,
         )
     except Exception as e:
+        _logger.warning("Formatting failed for select: %s", e)
         return _envelope(
             True, "select", "error", {},
-            error={"reason": f"Formatting failed: {e}"},
+            error={"reason": _USER_FACING_ERROR},
         )
 
 
@@ -549,9 +557,10 @@ async def extract_file(file: UploadFile = File(...)):
         }, debug=debug)
 
     except Exception as e:
+        _logger.warning("File processing failed: %s", e)
         return _envelope(
             True, "file", "error", {},
-            error={"reason": f"File processing failed: {e}"},
+            error={"reason": _USER_FACING_ERROR},
         )
     finally:
         try:
@@ -594,18 +603,20 @@ async def extract_url(body: UrlInput):
             }, debug=debug)
         except ValueError as e:
             msg = str(e)
+            _logger.warning("DOI processing failed: %s", e)
             # Auto-detect ISBN entered in the DOI field
             if "valid DOI" in msg and extract_isbn(doi):
                 isbn = doi  # fall through to ISBN block below
             else:
                 return _envelope(
                     True, "url", "unsupported", {},
-                    error={"reason": msg},
+                    error={"reason": "We couldn't process this DOI. Please try again or enter the details manually."},
                 )
         except Exception as e:
+            _logger.warning("DOI processing failed: %s", e)
             return _envelope(
                 True, "url", "error", {},
-                error={"reason": f"DOI processing failed: {e}"},
+                error={"reason": _USER_FACING_ERROR},
             )
 
     # ── ISBN → book (Open Library deterministic path) ──
@@ -619,19 +630,21 @@ async def extract_url(body: UrlInput):
             }, debug=debug)
         except ValueError as e:
             msg = str(e)
+            _logger.warning("ISBN processing failed: %s", e)
             if "invalid" in msg:
                 return _envelope(
                     True, "url", "error", {},
-                    error={"reason": msg},
+                    error={"reason": "We couldn't process this ISBN. Please check the number and try again."},
                 )
             return _envelope(
                 True, "url", "unsupported", {},
-                error={"reason": msg},
+                error={"reason": "We couldn't process this ISBN. Please try again or enter the details manually."},
             )
         except Exception as e:
+            _logger.warning("ISBN processing failed: %s", e)
             return _envelope(
                 True, "url", "error", {},
-                error={"reason": f"ISBN processing failed: {e}"},
+                error={"reason": _USER_FACING_ERROR},
             )
 
     # ── URL-only — scaffold or unsupported when extraction fails ──
@@ -675,9 +688,10 @@ async def extract_url(body: UrlInput):
         }, debug=debug)
 
     except Exception as e:
+        _logger.warning("URL processing failed: %s", e)
         return _envelope(
             True, "url", "error", {},
-            error={"reason": f"URL processing failed: {e}"},
+            error={"reason": _USER_FACING_ERROR},
         )
 
 
@@ -700,9 +714,10 @@ async def chat(body: ChatInput):
         reply = chat_deepseek(messages)
         return _envelope(True, "chat", "done", {"reply": reply})
     except Exception as e:
+        _logger.warning("Chat failed: %s", e)
         return _envelope(
             True, "chat", "error", {},
-            error={"reason": f"Chat failed: {e}"},
+            error={"reason": _USER_FACING_ERROR},
         )
 
 
@@ -756,9 +771,10 @@ async def feedback(body: FeedbackInput):
         with open(FEEDBACK_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception as e:
+        _logger.warning("Feedback save failed: %s", e)
         return _envelope(
             True, body.route or "", "error", {},
-            error={"reason": f"Feedback save failed: {e}"},
+            error={"reason": _USER_FACING_ERROR},
         )
 
     # ── Background delivery (HF Dataset + Discord) ──
@@ -859,9 +875,10 @@ async def citation_assemble(body: AssemblyInput):
             "citations": [{"citation": citation, "verified": False, "source_type": body.type}],
         })
     except Exception as e:
+        _logger.warning("Assembly failed for type=%s: %s", body.type, e)
         return _envelope(
             True, body.type, "error", {},
-            error={"reason": f"Assembly failed: {e}"},
+            error={"reason": _USER_FACING_ERROR},
         )
 
 
