@@ -840,6 +840,13 @@ _WARMUP_TARGETS: list[tuple[str, object, str]] = [
     ("gemini",     gemini_session,     "https://generativelanguage.googleapis.com"),
 ]
 
+# ── Process-level cooldown: the endpoint warms a shared process-wide
+#    connection pool, so a process-wide cooldown is the correct mechanism
+#    (not per-IP rate limiting, which would be wrong for this use case).
+_last_warmup_result: dict | None = None
+_last_warmup_ts: float = 0.0
+_WARMUP_COOLDOWN_SECONDS = 120
+
 
 @app.get("/api/warmup")
 async def warmup():
@@ -849,21 +856,35 @@ async def warmup():
     Each provider is tried independently — one failure does not block the
     others.  Uses ``retries=0`` (single attempt) and a 3-second read timeout
     to stay lightweight.  Always returns 200.
+
+    Cached for ``_WARMUP_COOLDOWN_SECONDS`` at process level — subsequent
+    calls within that window return the previous result without re-probing.
     """
     import asyncio
+    import time as _time
+
+    global _last_warmup_result, _last_warmup_ts
+
+    now = _time.time()
+    if _last_warmup_result is not None and now - _last_warmup_ts < _WARMUP_COOLDOWN_SECONDS:
+        return _last_warmup_result
 
     async def _probe(name: str, session, url: str) -> str | None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
-            await loop.run_in_executor(
+            resp = await loop.run_in_executor(
                 None,
                 lambda: request_with_retry(
                     session, "GET", url, retries=0, read_timeout=3,
                 ),
             )
+            # Consume the response to release the connection back to the pool
+            resp.content
+            resp.close()
             return None  # success
         except Exception as exc:
-            return str(exc)  # failure reason
+            _logger.warning("Warmup probe failed for %s (%s): %s", name, url, exc)
+            return "warmup_failed"  # generic marker, never raw exception text
 
     warmed: list[str] = []
     failed: list[dict] = []
@@ -871,12 +892,16 @@ async def warmup():
         *(_probe(n, s, u) for n, s, u in _WARMUP_TARGETS),
         return_exceptions=False,
     )
-    for (name, _, _), exc_text in zip(_WARMUP_TARGETS, results):
-        if exc_text is None:
+    for (name, _, _), marker in zip(_WARMUP_TARGETS, results):
+        if marker is None:
             warmed.append(name)
         else:
-            failed.append({"provider": name, "reason": exc_text})
-    return {"warmed": warmed, "failed": failed}
+            failed.append({"provider": name, "reason": marker})
+
+    result = {"warmed": warmed, "failed": failed}
+    _last_warmup_result = result
+    _last_warmup_ts = now
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════
