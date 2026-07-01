@@ -166,6 +166,7 @@ def extract_from_url(url: str) -> dict:
     if not html:
         return {"url": url, "error": "This website blocked automatic fetching (anti-scraping). Please fill in the citation fields manually."}
 
+    result = None
     try:
         result = trafilatura.extract(
             html,

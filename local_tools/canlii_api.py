@@ -214,7 +214,7 @@ def browse_legislation_in_database(
         if timing.ENABLE_TIMING:
             timing.report().add_a2aj(
                 f"browse_legislation_in_database({database_id})",
-                time.time() - t0,
+                _http_elapsed,
             )
         response.raise_for_status()
         return response.json()

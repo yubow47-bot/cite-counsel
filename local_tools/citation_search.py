@@ -71,6 +71,7 @@ def classify_and_normalize(query: str) -> dict:
 
 用户输入：{query}"""
 
+    content = None
     try:
         t0 = time.time()
         _is_first_ds = _mark_first_deepseek_call()
@@ -88,7 +89,7 @@ def classify_and_normalize(query: str) -> dict:
             logger.debug("[DUR] classify_and_normalize END (llm_path) — %.1fms  llm=%.1fms", _fn_elapsed * 1000, _ds_elapsed * 1000)
             return result
     except Exception as e:
-        logger.warning("[JSON] classify_and_normalize failed: %s  len=%d", e, len(content))
+        logger.warning("[JSON] classify_and_normalize failed: %s  len=%d", e, len(content) if content is not None else 0)
     _fn_elapsed = time.perf_counter() - _fn_t0
     logger.debug("[DUR] classify_and_normalize END (fallback) — %.1fms", _fn_elapsed * 1000)
     return {"type": "case_name", "normalized": query, "original": query}
