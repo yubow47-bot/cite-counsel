@@ -41,6 +41,16 @@ from local_tools.file_extractor import extract_from_file, classify_document_type
 from local_tools.openlibrary_api import extract_isbn
 from llm_api.deepseek_api import extract_from_url, chat_deepseek
 from core.mcgill_engine import format_citation, get_last_debug, detect_type, get_rules
+from local_tools.utils import (
+    legisinfo_session,
+    a2aj_session,
+    canlii_session,
+    crossref_session,
+    openlibrary_session,
+    deepseek_session,
+    gemini_session,
+    request_with_retry,
+)
 
 # ═══════════════════════════════════════════════════════════════════
 #  App setup
@@ -817,7 +827,60 @@ def _notify_discord(record: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  7. GET /api/health  —  Health check / wake-up ping
+#  7. GET /api/warmup  —  Lightweight connection warm-up (page load)
+# ═══════════════════════════════════════════════════════════════════
+
+_WARMUP_TARGETS: list[tuple[str, object, str]] = [
+    ("legisinfo",  legisinfo_session,  "https://www.parl.ca"),
+    ("a2aj",       a2aj_session,       "https://api.a2aj.ca"),
+    ("canlii",     canlii_session,     "https://api.canlii.org/v1"),
+    ("crossref",   crossref_session,   "https://api.crossref.org"),
+    ("openlibrary", openlibrary_session, "https://openlibrary.org"),
+    ("deepseek",   deepseek_session,   "https://api.deepseek.com"),
+    ("gemini",     gemini_session,     "https://generativelanguage.googleapis.com"),
+]
+
+
+@app.get("/api/warmup")
+async def warmup():
+    """Ping all provider endpoints to warm connection pools (cold-start
+    mitigation for serverless / auto-scaling deployments).
+
+    Each provider is tried independently — one failure does not block the
+    others.  Uses ``retries=0`` (single attempt) and a 3-second read timeout
+    to stay lightweight.  Always returns 200.
+    """
+    import asyncio
+
+    async def _probe(name: str, session, url: str) -> str | None:
+        loop = asyncio.get_event_loop()
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda: request_with_retry(
+                    session, "GET", url, retries=0, read_timeout=3,
+                ),
+            )
+            return None  # success
+        except Exception as exc:
+            return str(exc)  # failure reason
+
+    warmed: list[str] = []
+    failed: list[dict] = []
+    results = await asyncio.gather(
+        *(_probe(n, s, u) for n, s, u in _WARMUP_TARGETS),
+        return_exceptions=False,
+    )
+    for (name, _, _), exc_text in zip(_WARMUP_TARGETS, results):
+        if exc_text is None:
+            warmed.append(name)
+        else:
+            failed.append({"provider": name, "reason": exc_text})
+    return {"warmed": warmed, "failed": failed}
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  8. GET /api/health  —  Health check / wake-up ping
 # ═══════════════════════════════════════════════════════════════════
 
 @app.get("/api/health")
@@ -906,7 +969,7 @@ async def timing_middleware(request: Request, call_next):
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     # Free endpoints — no rate limiting
-    free_paths = {"/api/health", "/api/feedback", "/api/scaffold/config", "/api/citation/assemble"}
+    free_paths = {"/api/health", "/api/warmup", "/api/feedback", "/api/scaffold/config", "/api/citation/assemble"}
     if request.url.path in free_paths:
         return await call_next(request)
 

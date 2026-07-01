@@ -3,6 +3,7 @@ import type { Metadata, Viewport } from "next"
 import localFont from "next/font/local"
 import { GeistSans } from "geist/font/sans"
 import { GeistMono } from "geist/font/mono"
+import WarmupPing from "@/components/warmup"
 import "./globals.css"
 
 /* Lora — self-hosted variable woff2 (committed in-repo) */
@@ -90,6 +91,7 @@ export default function RootLayout({
         />
         {children}
         {process.env.NODE_ENV === "production" && <Analytics />}
+        <WarmupPing />
       </body>
     </html>
   )
