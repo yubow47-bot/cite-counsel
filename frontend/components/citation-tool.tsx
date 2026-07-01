@@ -61,7 +61,7 @@ export function CitationTool({ autoFocus }: { autoFocus?: boolean }) {
         setView({
           kind: "unsupported",
           reason:
-            env.data.reason ?? "This type of citation isn't supported yet.",
+            env.error?.reason ?? "This type of citation isn't supported yet.",
           suggestedType: env.data.type,
         })
         break
