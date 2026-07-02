@@ -17,7 +17,8 @@ client = TestClient(app)
 
 def test_url_extract_fetch_uses_tight_timeout():
     """JS-rendered/blocked pages should not wait on the old 15s timeout."""
-    with patch("curl_cffi.requests.get") as mock_get:
+    with patch("curl_cffi.requests.get") as mock_get, \
+         patch("llm_api.deepseek_api.request_with_retry", side_effect=TimeoutError("fallback also fails")):
         mock_get.side_effect = TimeoutError("simulated timeout")
 
         start = time.perf_counter()
