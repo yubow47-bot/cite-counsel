@@ -74,6 +74,7 @@ def _append_record(record: dict, filename: str, repo: str, token: str) -> bool:
         return False
     try:
         from huggingface_hub import HfApi
+        from huggingface_hub.utils import EntryNotFoundError
         api = HfApi(endpoint="https://huggingface.co")
         line = json.dumps(record, ensure_ascii=False) + "\n"
 
@@ -92,8 +93,12 @@ def _append_record(record: dict, filename: str, repo: str, token: str) -> bool:
                 repo_type="dataset",
                 token=token,
             )
-        except Exception:
-            # File doesn't exist yet — create it
+        except EntryNotFoundError:
+            # File doesn't exist yet — create it fresh (single record).
+            # Any OTHER exception (network/auth/rate-limit) propagates to
+            # the outer try/except, which logs a warning and returns False
+            # — never fall through to the create-new-file path on a
+            # transient error, which would silently destroy prior history.
             api.upload_file(
                 path_or_fileobj=line.encode(),
                 path_in_repo=filename,
