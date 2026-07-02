@@ -282,6 +282,11 @@ _SCAFFOLD_DISABLED_MSG_URL = (
     "Try uploading a full-page screenshot instead."
 )
 
+_JUR_NONE_MSG = (
+    "We couldn't tell which province or territory this applies to. "
+    "Try adding it to your search — for example 'Family Law Act Ontario'."
+)
+
 
 def _scaffold_response(
     route: str,
@@ -376,12 +381,17 @@ async def citation_query(body: CitationInput, request: Request):
         if not item.get("verified"):
             prefill = build_prefill(route, query, partial=item)
             suggested = SUGGESTED_TYPE_MAP.get(route, route)
+            disabled_msg = (
+                _JUR_NONE_MSG
+                if route == "legislation" and item.get("_match_path") == "jur_none"
+                else _SCAFFOLD_DISABLED_MSG
+            )
             return _scaffold_response(
                 route,
                 "Could not verify against our databases. Fill in the fields below to generate a McGill 10th citation.",
                 prefill=prefill,
                 suggested_type=suggested,
-                disabled_message=_SCAFFOLD_DISABLED_MSG,
+                disabled_message=disabled_msg,
             )
 
     # ── bill / case_name / legislation with multiple candidates → needs_selection ──
