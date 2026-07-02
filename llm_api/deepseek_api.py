@@ -7,7 +7,7 @@ import requests
 from profiling import timing
 from utils.json_util import parse_llm_json
 
-from local_tools.utils import deepseek_session, generic_session, request_with_retry
+from local_tools.utils import deepseek_session, request_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -115,26 +115,6 @@ def ask_deepseek(prompt: str, model: str | None = None) -> str:
 def chat_deepseek(messages: list) -> str:
     """Multi-turn chat, replaces chat_ollama."""
     return _call_deepseek(messages, temperature=0.7)
-
-
-def fetch_url_content(url: str) -> str:
-    """Fetch and extract plain text from a URL."""
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        resp = generic_session.get(url, headers=headers, timeout=8)
-        resp.raise_for_status()
-        text = re.sub(r"<[^>]+>", "", resp.text)
-        text = re.sub(r"\s+", " ", text).strip()
-        return text[:8000]
-    except requests.exceptions.ConnectTimeout:
-        return "Failed to fetch URL: Connection timed out"
-    except requests.exceptions.ConnectionError:
-        return "Failed to fetch URL: Connection refused"
-    except requests.exceptions.ReadTimeout:
-        return "Failed to fetch URL: Server took too long to respond"
-    except Exception as e:
-        logger.warning("fetch_url_content failed: %s", e)
-        return "Failed to fetch this URL."
 
 
 def fetch_html(url: str, timeout: int = 15) -> str | None:

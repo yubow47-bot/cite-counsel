@@ -364,10 +364,6 @@ def detect_type(extracted_fields: dict) -> str:
     if has("issuing_body", "government_jurisdiction"):
         return "government_docs"
 
-    # 11. Legislation fallback (只有 title + jurisdiction/chapter 之一)
-    if has("statute_title", "title") and (has("jurisdiction") or has("chapter")):
-        return "legislation"
-
     return "general_rules"
 
 

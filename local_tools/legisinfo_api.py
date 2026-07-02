@@ -277,9 +277,3 @@ def build_bill_citation(record: dict, pinpoint: str | None = None) -> str:
     citation += "."
 
     return citation
-
-
-def build_bill_scaffold(bill_number: str) -> str:
-    """Return a scaffold McGill citation for a bill number not found in any session."""
-    num = _normalize_bill_number(bill_number)
-    return f"Bill {num}, [Full Title], [Session Ordinal] Sess, [Parliament Ordinal] Parl, [Year]."
