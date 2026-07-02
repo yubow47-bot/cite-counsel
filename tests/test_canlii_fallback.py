@@ -989,3 +989,194 @@ def test_verify_legislation_no_citmatch_fallback():
     )
     # should have a warning (A2AJ returned no results)
     assert "warning" in leg
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  REGRESSION: year-stripped Direction-A match — CanLII title carries a
+#  trailing year as part of its official name (e.g. "Taxation Act, 2007"),
+#  making it invisible to exact match and Direction-A substring match.
+# ═════════════════════════════════════════════════════════════════════════════
+
+RECORD_TAXATION_2007 = {
+    "databaseId": "ons", "legislationId": "so-tax-2007",
+    "title": "Taxation Act, 2007",
+    "citation": "SO 2007, c 11", "type": "STATUTE",
+}
+
+RECORD_TAXATION_1997 = {
+    "databaseId": "ons", "legislationId": "so-tax-1997",
+    "title": "Taxation Act, 1997",
+    "citation": "SO 1997, c 1", "type": "STATUTE",
+}
+
+RECORD_PROVINCIAL_LAND_TAX = {
+    "databaseId": "ons", "legislationId": "so-plt",
+    "title": "Provincial Land Tax Act",
+    "citation": "RSO 1990, c P.31", "type": "STATUTE",
+}
+
+RECORD_PROVINCIAL_LAND_TAX_2006 = {
+    "databaseId": "ons", "legislationId": "so-plt-2006",
+    "title": "Provincial Land Tax Act, 2006",
+    "citation": "SO 2006, c 1", "type": "STATUTE",
+}
+
+RECORD_ESTATE_TAX_1998 = {
+    "databaseId": "ons", "legislationId": "so-eta-1998",
+    "title": "Estate Administration Tax Act, 1998",
+    "citation": "SO 1998, c 1", "type": "STATUTE",
+}
+
+RECORD_LIQUOR_TAX_1996 = {
+    "databaseId": "ons", "legislationId": "so-lta-1996",
+    "title": "Liquor Tax Act, 1996",
+    "citation": "SO 1996, c 1", "type": "STATUTE",
+}
+
+# Titles with a year mid-string (negative guard — must not be stripped)
+RECORD_CANNABIS_2019 = {
+    "databaseId": "ons", "legislationId": "so-cannabis",
+    "title": "Cannabis Taxation Coordination Act, 2019",
+    "citation": "SO 2019, c 1", "type": "STATUTE",
+}
+
+RECORD_SOME_OTHER = {
+    "databaseId": "ons", "legislationId": "so-other",
+    "title": "Some Other Act",
+    "citation": "RSO 1990, c O-1", "type": "STATUTE",
+}
+
+
+def test_year_stripped_single_match():
+    """Query 'Taxation Act', CanLII has 'Taxation Act, 2007' -> verified=True via year-stripped."""
+    mock_canlii = MagicMock(return_value=_canlii_resp(
+        RECORD_TAXATION_2007, RECORD_SOME_OTHER,
+    ))
+    mock_infer = MagicMock(side_effect=Exception("LLM should not be called"))
+
+    classification = {
+        "type": "legislation",
+        "normalized": "Taxation Act",
+        "original": "tax act ontario",
+    }
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("tax act ontario", classification)
+
+    assert len(result) == 1
+    r = result[0]
+    assert r["verified"] is True, (
+        f"Expected verified=True for year-stripped match, got verified={r['verified']!r} "
+        f"_match_path={r['_match_path']!r}"
+    )
+    assert r["_match_path"] == "year_stripped_match", (
+        f"Expected _match_path='year_stripped_match', got {r['_match_path']!r}"
+    )
+    assert r["statute_title"] == "Taxation Act, 2007", (
+        f"Must match the full official title with year, got {r['statute_title']!r}"
+    )
+    assert r["jurisdiction"] == "ON"
+    assert r["warning"] == ""
+    mock_infer.assert_not_called()
+
+
+def test_year_stripped_multi_match_degrade():
+    """'Provincial Land Tax Act, 2006' and 'Provincial Land Tax Act, 1998'
+    both collapse to same year-stripped form 'Provincial Land Tax Act' ->
+    returns candidates list (not a single guess)."""
+    rec_plt_1998 = dict(RECORD_PROVINCIAL_LAND_TAX_2006)
+    rec_plt_1998["title"] = "Provincial Land Tax Act, 1998"
+    rec_plt_1998["citation"] = "SO 1998, c 1"
+    rec_plt_1998["legislationId"] = "so-plt-1998"
+    mock_canlii = MagicMock(return_value=_canlii_resp(
+        rec_plt_1998, RECORD_PROVINCIAL_LAND_TAX_2006,
+    ))
+    mock_infer = MagicMock(return_value="on")
+
+    classification = {
+        "type": "legislation",
+        "normalized": "Provincial Land Tax Act",
+        "original": "Provincial Land Tax Act",
+    }
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("Provincial Land Tax Act", classification)
+
+    # Must return multiple candidates (same degrade as Direction-A multi-match)
+    assert len(result) >= 2, (
+        f"Expected >= 2 candidates for ambiguous year-stripped match, got {len(result)}"
+    )
+    for r in result:
+        assert r["verified"] is True
+        assert r["source"] == "canlii"
+
+
+def test_year_stripped_negative_mid_title_year():
+    """A title with text after the year (not end-anchored) is NOT stripped.
+    'Some Act, 2007 and Related Amendments' has text after the year -> no match."""
+    import re
+    _TRAILING_YEAR_RE = re.compile(r',\s*\d{4}\s*$')
+    title = "Some Act, 2007 and Related Amendments"
+    m = _TRAILING_YEAR_RE.search(title)
+    assert m is None, (
+        "Year not at end of string must NOT match the trailing-year regex"
+    )
+    # Also confirm a valid trailing-year title DOES match (sanity check on the regex)
+    valid = "Some Act, 2007"
+    m2 = _TRAILING_YEAR_RE.search(valid)
+    assert m2 is not None, (
+        "Trailing year must match the regex"
+    )
+
+
+def test_year_stripped_generalizes():
+    """Multiple trailing-year statutes resolve via year-stripped match."""
+    mock_canlii = MagicMock(return_value=_canlii_resp(
+        RECORD_ESTATE_TAX_1998, RECORD_LIQUOR_TAX_1996, RECORD_SOME_OTHER,
+    ))
+    mock_infer = MagicMock(return_value="on")
+
+    classification = {
+        "type": "legislation",
+        "normalized": "Estate Administration Tax Act",
+        "original": "Estate Administration Tax Act",
+    }
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("Estate Administration Tax Act", classification)
+
+    assert len(result) == 1
+    r = result[0]
+    assert r["verified"] is True, (
+        f"Expected verified=True, got {r['verified']!r} _match_path={r['_match_path']!r}"
+    )
+    assert r["_match_path"] == "year_stripped_match"
+    assert r["statute_title"] == "Estate Administration Tax Act, 1998"
+    assert r["jurisdiction"] == "ON"
+
+
+def test_exact_match_still_works_with_year_stripped():
+    """Existing exact-match and Direction-A tests remain unchanged.
+    'Family Law Act' against 'Family Law Act' must still match exactly."""
+    mock_canlii = MagicMock(return_value=_canlii_resp(RECORD_FAMILY_LAW))
+    mock_infer = MagicMock(side_effect=Exception("LLM should not be called"))
+
+    classification = {
+        "type": "legislation",
+        "normalized": "Family Law Act",
+        "original": "family law act ontario",
+    }
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("family law act ontario", classification)
+
+    assert len(result) == 1
+    r = result[0]
+    assert r["verified"] is True
+    assert r["_match_path"] == "exact"
+    assert r["statute_title"] == "Family Law Act"
+    assert r["jurisdiction"] == "ON"

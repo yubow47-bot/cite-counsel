@@ -386,6 +386,11 @@ _CITATION_SUFFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Pattern: a trailing comma + 4-digit year as part of the official title
+# (e.g. "Taxation Act, 2007") — stripped for year-stripped Direction-A
+# matching when the user query omits the year suffix.
+_TRAILING_YEAR_RE = re.compile(r',\s*\d{4}\s*$')
+
 
 def _strip_citation_suffix_for_title_match(s: str) -> str:
     """Strip a trailing citation-year suffix for CanLII title matching.
@@ -831,7 +836,55 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                                     if canlii_cit:
                                         ch_match = re.search(r'(c\s[\w.-]+)', canlii_cit)
                                         chapter = ch_match.group(1) if ch_match else None
-                                # else: 0 条模糊匹配 → 保持 verified=False，走现有 warning
+                                else:
+                                    # 0 fuzzy matches — try year-stripped Direction-A
+                                    # Some official CanLII titles carry a trailing year
+                                    # as part of the name (e.g. "Taxation Act, 2007").
+                                    # Strip that year and check the shorter form.
+                                    year_stripped = []
+                                    for item in legislations:
+                                        title = item.get("title", "")
+                                        m = _TRAILING_YEAR_RE.search(title)
+                                        if not m:
+                                            continue
+                                        stripped = title[:m.start()].strip()
+                                        item_norm = _normalize_for_match(stripped)
+                                        if item_norm in norm_target:
+                                            residual = norm_target.replace(item_norm, '', 1).strip()
+                                            res_tokens = residual.split()
+                                            if not residual or all(t in _JURISDICTION_ARTICLE_SET for t in res_tokens):
+                                                year_stripped.append(item)
+                                    if len(year_stripped) >= 2:
+                                        # 多候选 → 返回列表让用户选择
+                                        candidates = []
+                                        for item in year_stripped:
+                                            canlii_cit = item.get("citation", "")
+                                            ch = None
+                                            if canlii_cit:
+                                                ch_m = re.search(r'(c\s[\w.-]+)', canlii_cit)
+                                                ch = ch_m.group(1) if ch_m else None
+                                            candidates.append({
+                                                "statute_title": item.get("title", normalized),
+                                                "jurisdiction": jur.upper(),
+                                                "chapter": ch,
+                                                "pinpoint": pinpoint,
+                                                "citation": canlii_cit,
+                                                "verified": True,
+                                                "source": "canlii",
+                                            })
+                                        return candidates
+                                    elif len(year_stripped) == 1:
+                                        item = year_stripped[0]
+                                        _match_path = "year_stripped_match"
+                                        verified = True
+                                        statute_title = item.get("title", normalized)
+                                        canlii_cit = item.get("citation", "")
+                                        citation = canlii_cit
+                                        jurisdiction = jur.upper()
+                                        if canlii_cit:
+                                            ch_match = re.search(r'(c\s[\w.-]+)', canlii_cit)
+                                            chapter = ch_match.group(1) if ch_match else None
+                                    # else: 0 year-stripped matches → 保持 verified=False
                             # else: ≥2 条精确匹配 → 保持 verified=False，不猜
                             # _match_path is diagnostic-only; stripped at API boundary via _without_internal
                             if not verified:

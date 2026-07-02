@@ -7,13 +7,13 @@ import requests
 from profiling import timing
 from utils.json_util import parse_llm_json
 
-from local_tools.utils import deepseek_session, request_with_retry
+from local_tools.utils import deepseek_session, generic_session, request_with_retry
 
 logger = logging.getLogger(__name__)
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_MODEL = os.getenv("LLM_DEFAULT_MODEL", "deepseek-v4-flash")
-URL_EXTRACT_FETCH_TIMEOUT = 5
+URL_EXTRACT_FETCH_TIMEOUT = 8
 
 # ── Track first call (DNS + TLS setup on new connection) ──
 _first_deepseek_http = True
@@ -118,12 +118,41 @@ def chat_deepseek(messages: list) -> str:
 
 
 def fetch_html(url: str, timeout: int = 15) -> str | None:
-    """用 curl_cffi 伪装 Chrome TLS 指纹抓 HTML，失败返回 None。"""
+    """Fetch HTML: try curl_cffi first, fall back to plain requests if it fails.
+
+    curl_cffi with impersonate="chrome" sometimes times out on sites that
+    respond fine to a plain requests.get() with a standard User-Agent.
+    The fallback catches that case.
+    """
     import curl_cffi.requests as cffi_requests
+
+    # ── Primary attempt: curl_cffi (Chrome TLS fingerprint) ──
     try:
         r = cffi_requests.get(url, impersonate="chrome", timeout=timeout)
         r.raise_for_status()
         return r.text
+    except Exception:
+        pass
+
+    # ── Fallback: plain requests with standard browser User-Agent ──
+    _UA = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
+    try:
+        resp = request_with_retry(
+            generic_session, "GET", url,
+            connect_timeout=2.7, read_timeout=5, retries=0,
+            headers={"User-Agent": _UA},
+        )
+        try:
+            resp.raise_for_status()
+            return resp.text
+        except requests.exceptions.HTTPError:
+            return None
+        finally:
+            resp.close()
     except Exception:
         return None
 
@@ -149,7 +178,7 @@ def extract_from_url(url: str) -> dict:
 
     html = fetch_html(url, timeout=URL_EXTRACT_FETCH_TIMEOUT)
     if not html:
-        return {"url": url, "error": "This website blocked automatic fetching (anti-scraping). Please fill in the citation fields manually."}
+        return {"url": url, "error": "We couldn't fetch this page. It may be blocking automated access, or the request may have timed out. Please fill in the citation fields manually."}
 
     result = None
     try:
