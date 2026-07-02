@@ -54,7 +54,7 @@ def _get_api_key() -> str:
     return key
 
 
-def _call_deepseek(messages: list, temperature: float = 0, model: str | None = None) -> str:
+def _call_deepseek(messages: list, temperature: float = 0, model: str | None = None, disable_thinking: bool = False) -> str:
     """Internal: call DeepSeek API with messages, return response text."""
     _http_t0 = time.perf_counter()
     _is_first = _mark_first_deepseek_http()
@@ -70,6 +70,14 @@ def _call_deepseek(messages: list, temperature: float = 0, model: str | None = N
     if _is_first:
         logger.debug("[DUR] DeepSeek HTTP — FIRST request (cold DNS + TCP + TLS)")
 
+    body: dict = {
+        "model": actual_model,
+        "messages": messages,
+        "temperature": temperature,
+    }
+    if disable_thinking:
+        body["thinking"] = {"type": "disabled"}
+
     with timing.measure("http.deepseek", model=actual_model):
         response = request_with_retry(
             deepseek_session, "POST",
@@ -81,11 +89,7 @@ def _call_deepseek(messages: list, temperature: float = 0, model: str | None = N
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            json={
-                "model": actual_model,
-                "messages": messages,
-                "temperature": temperature,
-            },
+            json=body,
             read_timeout=30,
         )
     _http_elapsed = time.perf_counter() - _http_t0
@@ -107,9 +111,9 @@ def _call_deepseek(messages: list, temperature: float = 0, model: str | None = N
     return data["choices"][0]["message"]["content"]
 
 
-def ask_deepseek(prompt: str, model: str | None = None) -> str:
+def ask_deepseek(prompt: str, model: str | None = None, disable_thinking: bool = False) -> str:
     """Single-turn prompt."""
-    return _call_deepseek([{"role": "user", "content": prompt}], model=model)
+    return _call_deepseek([{"role": "user", "content": prompt}], model=model, disable_thinking=disable_thinking)
 
 
 def chat_deepseek(messages: list) -> str:

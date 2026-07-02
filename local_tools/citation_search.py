@@ -120,7 +120,7 @@ def classify_and_normalize(query: str) -> dict:
         if _is_first_ds:
             logger.debug("[DUR] classify_and_normalize — first call to DeepSeek API (DNS + TLS setup expected)")
         with prof.measure("llm.classify", model=os.getenv("LLM_DEFAULT_MODEL", "deepseek-v4-flash")):
-            content = ask_deepseek(prompt)
+            content = ask_deepseek(prompt, disable_thinking=True)
         if timing.ENABLE_TIMING:
             timing.report().add_llm("classify_and_normalize", time.time() - t0)
         _ds_elapsed = time.time() - t0
@@ -485,7 +485,7 @@ xx 必须是以下之一：on, bc, ab, sk, mb, qc, ns, nb, pe, nl, yt, nt, nu, c
     try:
         t0 = time.time()
         with prof.measure("llm.infer_jurisdiction"):
-            content = ask_deepseek(prompt)
+            content = ask_deepseek(prompt, disable_thinking=True)
         if timing.ENABLE_TIMING:
             timing.report().add_llm("_infer_jurisdiction_canlii", time.time() - t0)
         result = parse_llm_json(content)
