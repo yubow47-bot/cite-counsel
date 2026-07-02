@@ -176,3 +176,15 @@ class TestDisableThinking:
         assert kwargs.get("disable_thinking") is True, (
             f"Expected disable_thinking=True, got {kwargs.get('disable_thinking')!r}"
         )
+
+    def test_format_citation_passes_disable_thinking(self):
+        """format_citation calls ask_deepseek with disable_thinking=True."""
+        from core.mcgill_engine import format_citation
+        with patch("core.mcgill_engine.ask_deepseek", return_value="test citation.") as m_ask:
+            result = format_citation({"statute_title": "Criminal Code", "jurisdiction": "Canada", "chapter": "c C-46"})
+
+        assert result == "test citation."
+        _, kwargs = m_ask.call_args
+        assert kwargs.get("disable_thinking") is True, (
+            f"Expected disable_thinking=True, got {kwargs.get('disable_thinking')!r}"
+        )
