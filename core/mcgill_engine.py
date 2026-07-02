@@ -719,7 +719,7 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
 
     t0 = time.time()
     with prof.measure("llm.format", model=os.getenv("LLM_DEFAULT_MODEL", "deepseek-v4-flash")):
-        result = ask_deepseek(prompt)
+        result = ask_deepseek(prompt, disable_thinking=True)
     if timing.ENABLE_TIMING:
         timing.report().add_llm("format_citation", time.time() - t0)
     _last_prompt = prompt
