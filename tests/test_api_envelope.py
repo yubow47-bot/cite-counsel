@@ -99,3 +99,126 @@ def test_other_match_path_shows_generic_message():
     assert body["error"]["reason"] == _SCAFFOLD_DISABLED_MSG, (
         f"Expected generic disabled message, got {body['error']['reason']!r}"
     )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  REGRESSION: pinpoint field returned only when stripped before formatting
+# ═════════════════════════════════════════════════════════════════════════════
+
+_CLASSIFICATION_LEGISLATION = {
+    "type": "legislation", "normalized": "Criminal Code, RSC 1985, c C-46, s 718.2(e)",
+    "original": "Criminal Code",
+}
+
+_CLASSIFICATION_CASE = {
+    "type": "case_name", "normalized": "R v Gladue", "original": "R v Gladue",
+}
+
+_CLASSIFICATION_CONCEPT = {
+    "type": "concept", "normalized": "gladue principle", "original": "gladue principle",
+}
+
+_LEGISLATION_RESULT_WITH_PIN = {
+    "verified": True, "statute_title": "Criminal Code",
+    "neutral_citation": "RSC 1985, c C-46", "pinpoint": "s 718.2(e)",
+    "_match_path": "exact", "warning": "",
+}
+
+_CASE_RESULT_WITH_PIN = {
+    "verified": True, "name": "R v Gladue",
+    "neutral_citation": "[1999] 1 SCR 688", "pinpoint": "at para 47",
+}
+
+_CONCEPT_RESULT_LEGISLATION = {
+    "verified": True, "name": "Criminal Code, RSC 1985, c C-46",
+    "neutral_citation": "RSC 1985, c C-46", "pinpoint": "s 718.2(e)",
+    "role": "legislation", "statute_title": "Criminal Code",
+}
+
+_CIT_LEGISLATION_WITH_PIN = "Criminal Code, RSC 1985, c C-46, s 718.2(e)."
+_CIT_CASE_WITHOUT_PIN = "R v Gladue, [1999] 1 SCR 688."
+_CIT_CONCEPT_WITH_PIN = "Criminal Code, RSC 1985, c C-46, s 718.2(e)."
+
+
+def test_legislation_route_no_pinpoint_field():
+    """Legislation route: pinpoint is embedded in citation text, NOT returned separately."""
+    with patch("api.main.classify_and_normalize", return_value=_CLASSIFICATION_LEGISLATION), \
+         patch("api.main.search_citation", return_value=[_LEGISLATION_RESULT_WITH_PIN]), \
+         patch("api.main.format_citation", return_value=_CIT_LEGISLATION_WITH_PIN):
+        resp = client.post("/api/citation", json={"input": "Criminal Code"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "done"
+    cit = body["data"]["citations"][0]
+    assert "pinpoint" not in cit, (
+        f"Legislation route must NOT return pinpoint separately, got {cit.get('pinpoint')!r}"
+    )
+    assert "s 718.2(e)" in cit["citation"], (
+        "Pinpoint must be embedded in the citation text"
+    )
+
+
+def test_case_route_has_pinpoint_field():
+    """Case_name route: pinpoint is stripped before formatting, returned separately."""
+    with patch("api.main.classify_and_normalize", return_value=_CLASSIFICATION_CASE), \
+         patch("api.main.search_citation", return_value=[_CASE_RESULT_WITH_PIN]), \
+         patch("api.main.format_citation", return_value=_CIT_CASE_WITHOUT_PIN):
+        resp = client.post("/api/citation", json={"input": "R v Gladue"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "done"
+    cit = body["data"]["citations"][0]
+    assert cit.get("pinpoint") == "at para 47", (
+        f"Case route must return pinpoint separately, got {cit.get('pinpoint')!r}"
+    )
+    assert "at para 47" not in cit["citation"], (
+        "Case route citation text must NOT contain pinpoint (it's handled client-side)"
+    )
+
+
+def test_concept_route_no_pinpoint_field():
+    """Concept route with single legislation result: pinpoint is embedded, NOT returned separately.
+    This is the direct regression test for the 'gladue principle' duplicate bug."""
+    with patch("api.main.classify_and_normalize", return_value=_CLASSIFICATION_CONCEPT), \
+         patch("api.main.search_citation", return_value=[_CONCEPT_RESULT_LEGISLATION]), \
+         patch("api.main.format_citation", return_value=_CIT_CONCEPT_WITH_PIN):
+        resp = client.post("/api/citation", json={"input": "gladue principle"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "done"
+    cit = body["data"]["citations"][0]
+    assert "pinpoint" not in cit, (
+        f"Concept route must NOT return pinpoint separately, got {cit.get('pinpoint')!r}"
+    )
+    assert "s 718.2(e)" in cit["citation"], (
+        "Pinpoint must be embedded in the citation text"
+    )
+
+
+def test_citation_select_has_pinpoint_field():
+    """citation_select strips pinpoint before formatting, returns it separately."""
+    candidate = {
+        "name": "R v Gladue",
+        "neutral_citation": "[1999] 1 SCR 688",
+        "pinpoint": "at para 47",
+    }
+    with patch("api.main.format_citation", return_value=_CIT_CASE_WITHOUT_PIN):
+        resp = client.post("/api/citation/select", json={
+            "candidates": [candidate],
+            "selected_index": 0,
+        })
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "done"
+    cit = body["data"]["citations"][0]
+    # citation_select strips pinpoint before formatting → returned separately
+    assert cit.get("pinpoint") == "at para 47", (
+        f"citation_select must return pinpoint separately, got {cit.get('pinpoint')!r}"
+    )
+    assert "at para 47" not in cit["citation"], (
+        "citation_select citation text must NOT contain pinpoint (it was stripped before formatting)"
+    )

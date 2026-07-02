@@ -418,7 +418,12 @@ async def citation_query(body: CitationInput, request: Request):
         else:
             citation = format_citation(_without_internal(results[0]))
         _cit_data: dict = {"citation": citation, "source_type": route}
-        if _pin:
+        # Only return pinpoint as a separate field when it was stripped
+        # before formatting (case_name route).  For legislation/concept/
+        # citation_number/bill routes the pinpoint is already embedded in
+        # the citation text by format_citation — returning it separately
+        # would cause a duplicate.
+        if route == "case_name" and _pin:
             _cit_data["pinpoint"] = _pin
         debug = _collect_debug_info(route)
         return _envelope(
@@ -467,9 +472,6 @@ def _handle_concept(results: list) -> dict:
     try:
         citation = format_citation(_without_internal(results[0]))
         _cit_data: dict = {"citation": citation, "source_type": "concept"}
-        _pin = results[0].get("pinpoint")
-        if _pin:
-            _cit_data["pinpoint"] = _pin
         debug = _collect_debug_info("concept")
         return _envelope(
             True, "concept", "done",
