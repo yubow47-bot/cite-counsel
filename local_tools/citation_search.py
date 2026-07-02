@@ -266,6 +266,10 @@ Rules:
         _pin = extract_pinpoint(normalized)
         if _pin:
             entry["pinpoint"] = _pin
+        # Strip the pinpoint suffix from name so format_citation doesn't
+        # include it both via the embedded text and the standalone field.
+        if _pin and cit_match:
+            entry["name"] = normalized[:cit_match.end()].strip().rstrip(',').strip()
 
         # 3. A2AJ /fetch(doc_type="laws")
         try:
