@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from local_tools.citation_search import (
     search_citation,
+    expand_concept,
     _normalize_for_match,
     _strip_citation_suffix_for_title_match,
 )
@@ -873,3 +874,118 @@ def test_legitimate_comma_not_truncated():
         f"got verified={r['verified']!r} (if True the title was incorrectly truncated)"
     )
     assert "建议在 CanLII 手动确认" in r["warning"]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  REGRESSION: concept-route legislation — pinpoint duplication
+#  _verify_legislation strips the pinpoint suffix from entry["name"]
+#  when it's separately extracted into entry["pinpoint"].
+# ═════════════════════════════════════════════════════════════════════════════
+
+_LLM_RESP_PINPOINT = (
+    '{"candidates": ['
+    '{"name": "Criminal Code, RSC 1985, c C-46, s 718.2(e)", "type": "legislation"},'
+    '{"name": "R v Ipeelee", "citation": "2012 SCC 13", "type": "case"}'
+    "]}"
+)
+
+_LLM_RESP_NO_PINPOINT = (
+    '{"candidates": ['
+    '{"name": "Criminal Code, RSC 1985, c C-46", "type": "legislation"},'
+    '{"name": "R v Ipeelee", "citation": "2012 SCC 13", "type": "case"}'
+    "]}"
+)
+
+_LLM_RESP_NO_CITMATCH = (
+    '{"candidates": ['
+    '{"name": "Some Non-existent Act, s 5", "type": "legislation"}'
+    "]}"
+)
+
+_A2AJ_OK_RESPONSE = {
+    "results": [{
+        "name_en": "Criminal Code",
+        "citation_en": "RSC 1985, c C-46",
+        "dataset": "FED",
+    }]
+}
+
+_A2AJ_EMPTY_RESPONSE = {"results": []}
+
+
+def _mock_a2aj_response(data: dict):
+    """Build a mock for request_with_retry that returns a given JSON body."""
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = data
+    return mock_resp
+
+
+def test_verify_legislation_strips_pinpoint_from_name():
+    """Expanded concept with pinpoint suffix: name is cleaned, pinpoint extracted separately."""
+    mock_llm = MagicMock(return_value=_LLM_RESP_PINPOINT)
+    mock_a2aj = MagicMock(return_value=_mock_a2aj_response(_A2AJ_OK_RESPONSE))
+
+    with patch("local_tools.citation_search.ask_deepseek", mock_llm), \
+         patch("local_tools.utils.request_with_retry", mock_a2aj):
+        results = expand_concept("gladue principle")
+
+    # Find the legislation candidate
+    leg = [r for r in results if r.get("role") == "legislation"]
+    assert len(leg) == 1, f"Expected 1 legislation candidate, got {len(leg)}"
+    leg = leg[0]
+
+    # name must be clean (no pinpoint suffix)
+    assert leg["name"] == "Criminal Code, RSC 1985, c C-46", (
+        f"Expected name without pinpoint suffix, got {leg['name']!r}"
+    )
+    # pinpoint must be extracted separately
+    assert leg["pinpoint"] == "s 718.2(e)", (
+        f"Expected pinpoint='s 718.2(e)', got {leg.get('pinpoint')!r}"
+    )
+    assert leg["verified"] is True
+
+
+def test_verify_legislation_no_pinpoint_unchanged():
+    """Candidate without pinpoint: name unchanged, no pinpoint field."""
+    mock_llm = MagicMock(return_value=_LLM_RESP_NO_PINPOINT)
+    mock_a2aj = MagicMock(return_value=_mock_a2aj_response(_A2AJ_OK_RESPONSE))
+
+    with patch("local_tools.citation_search.ask_deepseek", mock_llm), \
+         patch("local_tools.utils.request_with_retry", mock_a2aj):
+        results = expand_concept("gladue principle")
+
+    leg = [r for r in results if r.get("role") == "legislation"]
+    assert len(leg) == 1
+    leg = leg[0]
+
+    # name unchanged (no pinpoint to strip)
+    assert leg["name"] == "Criminal Code, RSC 1985, c C-46", (
+        f"Expected name unchanged, got {leg['name']!r}"
+    )
+    # no pinpoint field should be present
+    assert "pinpoint" not in leg or not leg["pinpoint"], (
+        f"Did not expect pinpoint field, got {leg.get('pinpoint')!r}"
+    )
+    assert leg["verified"] is True
+
+
+def test_verify_legislation_no_citmatch_fallback():
+    """Candidate where cit_match doesn't match: name stays as original string."""
+    mock_llm = MagicMock(return_value=_LLM_RESP_NO_CITMATCH)
+    mock_a2aj = MagicMock(return_value=_mock_a2aj_response(_A2AJ_EMPTY_RESPONSE))
+
+    with patch("local_tools.citation_search.ask_deepseek", mock_llm), \
+         patch("local_tools.utils.request_with_retry", mock_a2aj):
+        results = expand_concept("gladue principle")
+
+    leg = [r for r in results if r.get("role") == "legislation"]
+    assert len(leg) == 1
+    leg = leg[0]
+
+    # name must be the original string (no cit_match → no cleanup)
+    assert leg["name"] == "Some Non-existent Act, s 5", (
+        f"Expected original name, got {leg['name']!r}"
+    )
+    # should have a warning (A2AJ returned no results)
+    assert "warning" in leg
