@@ -373,6 +373,40 @@ _JURISDICTION_ARTICLE_SET = {
 
 _LEADING_ARTICLE_RE = re.compile(r'^(the|a|an)\s+', re.IGNORECASE)
 
+# Pattern: a comma followed by an all-caps statute-citation abbreviation
+# (letters only, 2-6 chars) followed by a 4-digit year, optionally capped
+# with a ", c …" chapter clause, anchored to end of string — e.g.
+# ", RSO 1990", ", RSO 1990, c F.3", ", RSA 2000, c C-12".
+_CITATION_SUFFIX_RE = re.compile(
+    r',\s*[A-Z]{2,6}\s+\d{4}(?:,\s*c\s+[^,]+)?\s*$',
+    re.IGNORECASE,
+)
+
+
+def _strip_citation_suffix_for_title_match(s: str) -> str:
+    """Strip a trailing citation-year suffix for CanLII title matching.
+
+    Detects a comma followed by a statute-citation abbreviation
+    (letters only, 2-6 characters) and a 4-digit year, optionally followed
+    by a ", c …" chapter clause, anchored to the end of the string — the
+    canonical shape of a provincial revised-statute prefix that cit_match
+    does not recognize (e.g. RSO, RSA, RSBC, RSM, RSNS, SM, SO, SBC, etc.).
+
+    "Family Law Act, RSO 1990, c F.3"  → "Family Law Act"
+    "Family Law Act, RSO 1990"         → "Family Law Act"
+    "Some Act, ABC 1990 Historical Review Act"  → unchanged (embedded, not trailing)
+    "Legislation, Regulation and Rules Act"  → unchanged  (no year after abbrev)
+    "Constitution Act, 1867"           → unchanged  (no abbreviation before year)
+    ""                                 → ""
+    """
+    if not s:
+        return s
+    m = _CITATION_SUFFIX_RE.search(s)
+    if m:
+        return s[:m.start()].strip()
+    return s
+
+
 def _normalize_for_match(s: str) -> str:
     """规范化文本用于精确比较：lowercase、去标点、collapse 空格，去掉前置冠词。"""
     s = s.lower()
@@ -717,7 +751,9 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                         canlii_result = browse_legislation_in_database(db_id)
                         if "error" not in canlii_result:
                             legislations = canlii_result.get("legislations", [])
-                            # Strip pinpoint from normalized for title matching
+                            # Strip pinpoint from normalized for title matching,
+                            # then strip any trailing citation-year suffix (e.g.
+                            # ", RSO 1990") that cit_match didn't recognize.
                             title_for_match = normalized
                             if pinpoint:
                                 title_for_match = re.sub(
@@ -726,6 +762,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                                     title_for_match,
                                     flags=re.IGNORECASE
                                 ).strip().rstrip(',').strip()
+                            title_for_match = _strip_citation_suffix_for_title_match(title_for_match)
                             norm_target = _normalize_for_match(title_for_match)
                             matches = [
                                 item for item in legislations

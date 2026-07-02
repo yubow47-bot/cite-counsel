@@ -9,7 +9,11 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from local_tools.citation_search import search_citation, _normalize_for_match
+from local_tools.citation_search import (
+    search_citation,
+    _normalize_for_match,
+    _strip_citation_suffix_for_title_match,
+)
 
 # ── Realistic CanLII record matching Step 1 verified field structure ──
 
@@ -596,3 +600,276 @@ def test_canlii_error_sets_match_path():
     assert r["verified"] is False
     assert r["_match_path"] == "canlii_error"
     assert "failed through A2AJ" in r["warning"] or "建议在 CanLII 手动确认" in r["warning"]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  TEST SUITE: _strip_citation_suffix_for_title_match unit tests
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def test_strip_suffix_rso():
+    """', RSO 1990' is stripped (Ontario)."""
+    result = _strip_citation_suffix_for_title_match("Family Law Act, RSO 1990")
+    assert result == "Family Law Act"
+
+
+def test_strip_suffix_rso_with_chapter():
+    """', RSO 1990, c F.3' — strips at the comma before RSO."""
+    result = _strip_citation_suffix_for_title_match("Family Law Act, RSO 1990, c F.3")
+    assert result == "Family Law Act"
+
+
+def test_strip_suffix_rsa():
+    """', RSA 2000' is stripped (Alberta)."""
+    result = _strip_citation_suffix_for_title_match("Child and Youth Care Act, RSA 2000, c C-12")
+    assert result == "Child and Youth Care Act"
+
+
+def test_strip_suffix_rsbc():
+    """', RSBC 1996' is stripped (British Columbia)."""
+    result = _strip_citation_suffix_for_title_match("Family Law Act, RSBC 1996, c 128")
+    assert result == "Family Law Act"
+
+
+def test_strip_suffix_rsm():
+    """', RSM 1987' is stripped (Manitoba)."""
+    result = _strip_citation_suffix_for_title_match("The Child and Family Services Act, RSM 1987, c C80")
+    assert result == "The Child and Family Services Act"
+
+
+def test_strip_suffix_sc():
+    """', SC 2002' is stripped (federal)."""
+    result = _strip_citation_suffix_for_title_match("Youth Criminal Justice Act, SC 2002, c 1")
+    assert result == "Youth Criminal Justice Act"
+
+
+def test_strip_suffix_no_change_legitimate_comma():
+    """Title with a legitimate comma (no year after an all-caps abbrev) is unchanged."""
+    result = _strip_citation_suffix_for_title_match("Legislation, Regulation and Rules Act")
+    assert result == "Legislation, Regulation and Rules Act"
+
+
+def test_strip_suffix_no_change_constitution():
+    """"Constitution Act, 1867" — year but no abbreviation before it, unchanged."""
+    result = _strip_citation_suffix_for_title_match("Constitution Act, 1867")
+    assert result == "Constitution Act, 1867"
+
+
+def test_strip_suffix_empty():
+    """Empty string returns empty."""
+    assert _strip_citation_suffix_for_title_match("") == ""
+
+
+def test_strip_suffix_no_comma():
+    """No comma at all — unchanged."""
+    result = _strip_citation_suffix_for_title_match("Family Law Act")
+    assert result == "Family Law Act"
+
+
+def test_strip_suffix_embedded_not_trailing():
+    """Embedded ', ABC 1990' substring NOT at end of string — must remain unchanged.
+    The anchored regex (with $) prevents stripping mid-title patterns."""
+    result = _strip_citation_suffix_for_title_match("Some Act, ABC 1990 Historical Review Act")
+    assert result == "Some Act, ABC 1990 Historical Review Act"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  REGRESSION: bug fix — classify_and_normalize expands statute name into full
+#  citation that cit_match's regex doesn't recognize (e.g. RSO), causing
+#  CanLII title-match failure.  _strip_citation_suffix_for_title_match should
+#  remedy this before norm_target is computed.
+# ═════════════════════════════════════════════════════════════════════════════
+
+FLA_RECORD = {
+    "databaseId": "ons", "legislationId": "so-fla",
+    "title": "Family Law Act",
+    "citation": "RSO 1990, c F.3", "type": "STATUTE",
+}
+
+CLASSIFICATION_FLA_EXPANDED = {
+    "type": "legislation",
+    "normalized": "Family Law Act, RSO 1990, c F.3",
+    "original": "family law act ontario",
+}
+
+CLASSIFICATION_FLA_PLAIN = {
+    "type": "legislation",
+    "normalized": "Family Law Act",
+    "original": "family law act ontario",
+}
+
+
+def test_rso_expanded_exact_match():
+    """Reproduce the reported bug: expanded 'Family Law Act, RSO 1990, c F.3'
+    now matches 'Family Law Act' exactly via the citation-suffix strip."""
+    mock_canlii = MagicMock(return_value=_canlii_resp(FLA_RECORD))
+    mock_infer = MagicMock(side_effect=Exception("LLM should not be called"))
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("family law act ontario", CLASSIFICATION_FLA_EXPANDED)
+
+    assert len(result) == 1
+    r = result[0]
+    assert r["verified"] is True, (
+        f"Expected verified=True for expanded FLA, got verified={r['verified']!r} "
+        f"with _match_path={r['_match_path']!r}"
+    )
+    assert r["_match_path"] == "exact", (
+        f"Expected _match_path='exact', got {r['_match_path']!r}"
+    )
+    assert r["statute_title"] == "Family Law Act"
+    assert r["chapter"] == "c F.3"
+    assert r["jurisdiction"] == "ON"
+    assert r["warning"] == ""
+    mock_canlii.assert_called_once()
+    mock_infer.assert_not_called()
+
+
+def test_fla_plain_still_works():
+    """Non-expanded 'Family Law Act' still matches exactly (regression guard)."""
+    mock_canlii = MagicMock(return_value=_canlii_resp(FLA_RECORD))
+    mock_infer = MagicMock(side_effect=Exception("LLM should not be called"))
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("family law act ontario", CLASSIFICATION_FLA_PLAIN)
+
+    assert len(result) == 1
+    r = result[0]
+    assert r["verified"] is True
+    assert r["_match_path"] == "exact"
+    assert r["statute_title"] == "Family Law Act"
+    assert r["chapter"] == "c F.3"
+    assert r["jurisdiction"] == "ON"
+    assert r["warning"] == ""
+    mock_infer.assert_not_called()
+
+
+# ── Provincial abbreviation variants ──
+
+CYCARE_RECORD = {
+    "databaseId": "abs", "legislationId": "rsa-2000-c-c-12",
+    "title": "Child and Youth Care Act",
+    "citation": "RSA 2000, c C-12", "type": "STATUTE",
+}
+
+CLASSIFICATION_CYCARE_RSA = {
+    "type": "legislation",
+    "normalized": "Child and Youth Care Act, RSA 2000, c C-12",
+    "original": "alberta child and youth care act",
+}
+
+FLA_BC_RECORD = {
+    "databaseId": "bcs", "legislationId": "sbc-2011-c-25",
+    "title": "Family Law Act",
+    "citation": "SBC 2011, c 25", "type": "STATUTE",
+}
+
+CLASSIFICATION_FLA_RSBC = {
+    "type": "legislation",
+    "normalized": "Family Law Act, RSBC 1996, c 128",
+    "original": "british columbia family law act",
+}
+
+CFS_RECORD = {
+    "databaseId": "mbs", "legislationId": "csm-c80",
+    "title": "The Child and Family Services Act",
+    "citation": "CCSM, c C80", "type": "STATUTE",
+}
+
+CLASSIFICATION_CFS_RSM = {
+    "type": "legislation",
+    "normalized": "The Child and Family Services Act, RSM 1987, c C80",
+    "original": "manitoba child and family services act",
+}
+
+
+def test_rsa_expanded_exact_match():
+    """RSA (Alberta) expanded citation strips correctly -> exact match."""
+    mock_canlii = MagicMock(return_value=_canlii_resp(CYCARE_RECORD))
+    mock_infer = MagicMock(side_effect=Exception("LLM should not be called"))
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("alberta child and youth care act", CLASSIFICATION_CYCARE_RSA)
+
+    assert len(result) == 1
+    r = result[0]
+    assert r["verified"] is True, (
+        f"RSA test failed: verified={r['verified']!r} _match_path={r['_match_path']!r}"
+    )
+    assert r["_match_path"] == "exact"
+    assert r["statute_title"] == "Child and Youth Care Act"
+    mock_infer.assert_not_called()
+
+
+def test_rsbc_expanded_exact_match():
+    """RSBC (British Columbia) expanded citation strips correctly -> exact match."""
+    mock_canlii = MagicMock(return_value=_canlii_resp(FLA_BC_RECORD))
+    mock_infer = MagicMock(side_effect=Exception("LLM should not be called"))
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("british columbia family law act", CLASSIFICATION_FLA_RSBC)
+
+    assert len(result) == 1
+    r = result[0]
+    assert r["verified"] is True, (
+        f"RSBC test failed: verified={r['verified']!r} _match_path={r['match_path']!r}"
+    )
+    assert r["_match_path"] == "exact"
+    assert r["statute_title"] == "Family Law Act"
+    mock_infer.assert_not_called()
+
+
+def test_rsm_expanded_exact_match():
+    """RSM (Manitoba) expanded citation strips correctly -> exact match."""
+    mock_canlii = MagicMock(return_value=_canlii_resp(CFS_RECORD))
+    mock_infer = MagicMock(side_effect=Exception("LLM should not be called"))
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("manitoba child and family services act", CLASSIFICATION_CFS_RSM)
+
+    assert len(result) == 1
+    r = result[0]
+    assert r["verified"] is True, (
+        f"RSM test failed: verified={r['verified']!r} _match_path={r['_match_path']!r}"
+    )
+    assert r["_match_path"] == "exact"
+    assert r["statute_title"] == "The Child and Family Services Act"
+    mock_infer.assert_not_called()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  REGRESSION: negative case — legitimate comma in title must NOT be truncated
+# ═════════════════════════════════════════════════════════════════════════════
+
+CLASSIFICATION_LEGIT_COMMA = {
+    "type": "legislation",
+    "normalized": "Legislation, Regulation and Rules Act",
+    "original": "Legislation, Regulation and Rules Act",
+}
+
+
+def test_legitimate_comma_not_truncated():
+    """Title with a legitimate comma (no citation-year suffix) is NOT truncated,
+    and falls through correctly (verified=False since no matching record)."""
+    mock_canlii = MagicMock(return_value=_canlii_resp(CYCARE_RECORD))
+    mock_infer = MagicMock(return_value="ab")
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("Legislation, Regulation and Rules Act", CLASSIFICATION_LEGIT_COMMA)
+
+    assert len(result) == 1
+    r = result[0]
+    # The title has a legitimate comma; it must NOT be stripped by the regex.
+    # "Regulation" (10 chars) doesn't match [A-Z]{2,6} so the suffix pattern
+    # doesn't fire.  Since no CanLII record matches, verified should be False.
+    assert r["verified"] is False, (
+        f"Expected verified=False for unmatched title with legitimate comma, "
+        f"got verified={r['verified']!r} (if True the title was incorrectly truncated)"
+    )
+    assert "建议在 CanLII 手动确认" in r["warning"]
