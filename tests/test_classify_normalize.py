@@ -62,22 +62,6 @@ def test_bill_fastpath_no_hyphen():
 # 2.  Gemini primary path — expected success cases
 # ═════════════════════════════════════════════════════════════════════════════
 
-def test_vancouver_charter_classifies_as_legislation():
-    """"Vancouver charter" -> legislation (Vancouver Charter is a real BC statute, SBC 1953 c 55)."""
-    fake_gemini_response = _make_gemini_response(
-        '{"type": "legislation", "normalized": "Vancouver Charter", "original": "Vancouver charter"}'
-    )
-    mock_ds = MagicMock()
-    with patch("local_tools.citation_search.call_gemini_text", return_value=fake_gemini_response), \
-         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
-         _TIMING_PATCH:
-        result = classify_and_normalize("Vancouver charter")
-
-    assert result["type"] == "legislation"
-    assert "Vancouver" in result["normalized"]
-    mock_ds.assert_not_called()  # Gemini succeeded, no fallback
-
-
 def test_ccc_expands_to_criminal_code():
     """"CCC" -> legislation, expanded to Criminal Code (regression: hallucinated under DeepSeek-no-thinking)."""
     fake_gemini_response = _make_gemini_response(
@@ -408,3 +392,117 @@ def test_gemini_malformed_json_logs_and_falls_back_to_deepseek(caplog):
     assert any("json_parse" in rec.getMessage() for rec in caplog.records), (
         "Expected a WARNING log with [json_parse] for malformed JSON"
     )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 8.  Legislation abbreviation over-expansion guard
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_taxation_act_ontario_no_invented_citation():
+    """"taxation act ontario" -> clean title, no invented citation number."""
+    fake_gemini_response = _make_gemini_response(
+        '{"type": "legislation", "normalized": "Taxation Act, Ontario", "original": "taxation act ontario"}'
+    )
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text", return_value=fake_gemini_response), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("taxation act ontario")
+
+    assert result["type"] == "legislation"
+    # MUST NOT contain invented citation tokens like "SO", "c", "Sch", or year
+    assert "SO" not in result["normalized"]
+    assert "c " not in result["normalized"]
+    assert "Sch" not in result["normalized"]
+    assert "2007" not in result["normalized"]
+    mock_ds.assert_not_called()
+
+
+def test_ccc_abbreviation_still_expands():
+    """"CCC" (known abbreviation) -> still expands to full citation (regression guard)."""
+    fake_gemini_response = _make_gemini_response(
+        '{"type": "legislation", "normalized": "Criminal Code, RSC 1985, c C-46", "original": "CCC"}'
+    )
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text", return_value=fake_gemini_response), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("CCC")
+
+    assert result["type"] == "legislation"
+    assert "Criminal Code" in result["normalized"]
+    assert "RSC" in result["normalized"]
+    mock_ds.assert_not_called()
+
+
+def test_ccc_with_pinpoint_still_expands():
+    """"CCC s.718.2(e)" (known abbreviation + pinpoint) -> expands correctly."""
+    fake_gemini_response = _make_gemini_response(
+        '{"type": "legislation", "normalized": "Criminal Code, RSC 1985, c C-46, s 718.2(e)", '
+        '"original": "CCC s.718.2(e)"}'
+    )
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text", return_value=fake_gemini_response), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("CCC s.718.2(e)")
+
+    assert result["type"] == "legislation"
+    assert "Criminal Code" in result["normalized"]
+    assert "RSC" in result["normalized"]
+    assert "s 718.2(e)" in result["normalized"]
+    mock_ds.assert_not_called()
+
+
+def test_vancouver_charter_unaffected():
+    """"Vancouver charter" -> legislation (clean title, no invented citation)."""
+    fake_gemini_response = _make_gemini_response(
+        '{"type": "legislation", "normalized": "Vancouver Charter", "original": "Vancouver charter"}'
+    )
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text", return_value=fake_gemini_response), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("Vancouver charter")
+
+    assert result["type"] == "legislation"
+    assert "Vancouver" in result["normalized"]
+    mock_ds.assert_not_called()
+
+
+def test_family_law_act_ontario_clean_title():
+    """"family law act ontario" -> clean title, no invented citation."""
+    fake_gemini_response = _make_gemini_response(
+        '{"type": "legislation", "normalized": "Family Law Act, Ontario", "original": "family law act ontario"}'
+    )
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text", return_value=fake_gemini_response), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("family law act ontario")
+
+    assert result["type"] == "legislation"
+    # Check no invented citation tokens
+    assert "RSO" not in result["normalized"]
+    assert "SO " not in result["normalized"]
+    assert "c " not in result["normalized"]
+    mock_ds.assert_not_called()
+
+
+def test_residential_tenancies_act_bc_clean_title():
+    """"residential tenancies act bc" -> clean title, no invented citation."""
+    fake_gemini_response = _make_gemini_response(
+        '{"type": "legislation", "normalized": "Residential Tenancies Act, BC", '
+        '"original": "residential tenancies act bc"}'
+    )
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text", return_value=fake_gemini_response), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("residential tenancies act bc")
+
+    assert result["type"] == "legislation"
+    assert "RSBC" not in result["normalized"]
+    assert "SBC" not in result["normalized"]
+    assert "c " not in result["normalized"]
+    mock_ds.assert_not_called()
