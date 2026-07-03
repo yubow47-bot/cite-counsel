@@ -153,10 +153,11 @@ class TestDisableThinking:
         )
 
     def test_classify_and_normalize_passes_disable_thinking(self):
-        """classify_and_normalize calls ask_deepseek with disable_thinking=True."""
+        """classify_and_normalize fallback calls ask_deepseek with disable_thinking=True."""
         from local_tools.citation_search import classify_and_normalize
-        # Patch at the import site (citation_search holds its own reference)
-        with patch("local_tools.citation_search.ask_deepseek", return_value='{"type": "case_name", "normalized": "test", "original": "test"}') as m_ask:
+        # Mock Gemini failure to exercise the DeepSeek fallback path
+        with patch("local_tools.citation_search.call_gemini_text", return_value=None), \
+             patch("local_tools.citation_search.ask_deepseek", return_value='{"type": "case_name", "normalized": "test", "original": "test"}') as m_ask:
             result = classify_and_normalize("test query")
 
         assert result["type"] == "case_name"

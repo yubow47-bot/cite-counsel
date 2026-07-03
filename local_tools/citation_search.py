@@ -5,6 +5,7 @@ import time
 import logging
 
 from llm_api.deepseek_api import ask_deepseek
+from llm_api.gemini_api import call_gemini_text
 from local_tools.a2aj_api import fetch_by_citation, search_cases_multi, _map_fields, _extract_year, _extract_jurisdiction
 from local_tools.utils import extract_case_pinpoint, extract_pinpoint
 from utils.json_util import parse_llm_json
@@ -114,24 +115,51 @@ def classify_and_normalize(query: str) -> dict:
 用户输入：{query}"""
 
     content = None
+    gemini_succeeded = False
+
+    # ── Primary: Gemini 2.5 Flash (thinking disabled, JSON mode) ──
     try:
         t0 = time.time()
         _is_first_ds = _mark_first_deepseek_call()
         if _is_first_ds:
-            logger.debug("[DUR] classify_and_normalize — first call to DeepSeek API (DNS + TLS setup expected)")
-        with prof.measure("llm.classify", model=os.getenv("LLM_DEFAULT_MODEL", "deepseek-v4-flash")):
-            content = ask_deepseek(prompt, disable_thinking=True)
+            logger.debug("[DUR] classify_and_normalize — first call to Gemini API (DNS + TLS setup expected)")
+        with prof.measure("llm.classify", model="gemini-2.5-flash"):
+            content = call_gemini_text(prompt)
         if timing.ENABLE_TIMING:
             timing.report().add_llm("classify_and_normalize", time.time() - t0)
-        _ds_elapsed = time.time() - t0
-        logger.debug("[DUR] DeepSeek classify_and_normalize LLM call — %.1fms  first=%s", _ds_elapsed * 1000, _is_first_ds)
-        result = parse_llm_json(content)
-        if result.get("type") in ("citation_number", "case_name", "legislation", "bill", "concept"):
-            _fn_elapsed = time.perf_counter() - _fn_t0
-            logger.debug("[DUR] classify_and_normalize END (llm_path) — %.1fms  llm=%.1fms", _fn_elapsed * 1000, _ds_elapsed * 1000)
-            return result
+        _gemini_elapsed = time.time() - t0
+        logger.debug("[DUR] Gemini classify_and_normalize — %.1fms  first=%s", _gemini_elapsed * 1000, _is_first_ds)
+
+        if content is not None:
+            result = parse_llm_json(content)
+            if result.get("type") in ("citation_number", "case_name", "legislation", "bill", "concept"):
+                gemini_succeeded = True
+                _fn_elapsed = time.perf_counter() - _fn_t0
+                logger.debug("[DUR] classify_and_normalize END (gemini_path) — %.1fms  llm=%.1fms", _fn_elapsed * 1000, _gemini_elapsed * 1000)
+                return result
     except Exception as e:
-        logger.warning("[JSON] classify_and_normalize failed: %s  len=%d", e, len(content) if content is not None else 0)
+        logger.warning("[JSON] Gemini classify_and_normalize failed: %s  len=%d", e, len(content) if content is not None else 0)
+
+    # ── Fallback: DeepSeek (thinking disabled) ──
+    if not gemini_succeeded:
+        try:
+            t0 = time.time()
+            if _mark_first_deepseek_call():
+                logger.debug("[DUR] classify_and_normalize — fallback to DeepSeek API")
+            with prof.measure("llm.classify", model=os.getenv("LLM_DEFAULT_MODEL", "deepseek-v4-flash")):
+                content = ask_deepseek(prompt, disable_thinking=True)
+            if timing.ENABLE_TIMING:
+                timing.report().add_llm("classify_and_normalize", time.time() - t0)
+            _ds_elapsed = time.time() - t0
+            logger.debug("[DUR] DeepSeek classify_and_normalize fallback — %.1fms", _ds_elapsed * 1000)
+            result = parse_llm_json(content)
+            if result.get("type") in ("citation_number", "case_name", "legislation", "bill", "concept"):
+                _fn_elapsed = time.perf_counter() - _fn_t0
+                logger.debug("[DUR] classify_and_normalize END (deepseek_fallback) — %.1fms  llm=%.1fms", _fn_elapsed * 1000, _ds_elapsed * 1000)
+                return result
+        except Exception as e:
+            logger.warning("[JSON] classify_and_normalize deepseek fallback failed: %s  len=%d", e, len(content) if content is not None else 0)
+
     _fn_elapsed = time.perf_counter() - _fn_t0
     logger.debug("[DUR] classify_and_normalize END (fallback) — %.1fms", _fn_elapsed * 1000)
     return {"type": "case_name", "normalized": query, "original": query}

@@ -34,13 +34,14 @@ _PRICING: dict[str, dict[str, float]] = {
     "deepseek-v4-flash":      {"input": 1.0,  "output": 2.0},   # ¥1 / ¥2
     "deepseek-v4-pro":        {"input": 3.0,  "output": 6.0},   # ¥3 / ¥6
     "gemini-2.5-flash-lite":  {"input": 0.10, "output": 0.40},  # $0.10 / $0.40
+    "gemini-2.5-flash":       {"input": 0.30, "output": 2.50},  # $0.30 / $2.50
 }
 
 # Models priced in CNY (need FX conversion at spend time).
 _CNY_MODELS = {"deepseek-v4-flash", "deepseek-v4-pro"}
 
 # Fallback for unknown model: highest USD/Mtokens rate across all models.
-# Currently deepseek-v4-pro output: ¥6 × USD_PER_CNY ≈ $0.845.
+# Currently gemini-2.5-flash output: $2.50.
 _FALLBACK_RATE = max(
     max(m["input"], m["output"]) * (USD_PER_CNY if model in _CNY_MODELS else 1.0)
     for model, m in _PRICING.items()

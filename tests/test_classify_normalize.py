@@ -1,58 +1,410 @@
-"""Unit tests for classify_and_normalize() in citation_search.py.
+"""Unit tests for classify_and_normalize() in citation_search.py,
+plus supporting tests for call_gemini_text() logging and spend-tracker rates.
 
 Run: pytest tests/test_classify_normalize.py -v
 """
 
+import logging
 import os
 import sys
 from unittest.mock import patch, MagicMock
 
+import requests
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from local_tools.citation_search import classify_and_normalize
+from core.spend_tracker import spend_tracker
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Regression: Bug 2a — content unbound when ask_deepseek raises
+# Helpers
 # ═════════════════════════════════════════════════════════════════════════════
 
-def test_classify_and_normalize_deepseek_raises_connection_error():
-    """ask_deepseek raises ConnectionError -> fallback dict, no UnboundLocalError."""
-    with patch("local_tools.citation_search.ask_deepseek", side_effect=ConnectionError("Connection refused")), \
-         patch("profiling.timing.ENABLED", False):
-        result = classify_and_normalize("R v Gladue")
+def _make_gemini_response(text: str) -> str:
+    """Simulate a raw Gemini response text (the parsed JSON as string)."""
+    return text
 
-    assert result == {"type": "case_name", "normalized": "R v Gladue", "original": "R v Gladue"}
-
-
-def test_classify_and_normalize_deepseek_raises_timeout():
-    """ask_deepseek raises TimeoutError -> fallback dict, no UnboundLocalError."""
-    with patch("local_tools.citation_search.ask_deepseek", side_effect=TimeoutError("timed out")), \
-         patch("profiling.timing.ENABLED", False):
-        result = classify_and_normalize("R v Gladue")
-
-    assert result == {"type": "case_name", "normalized": "R v Gladue", "original": "R v Gladue"}
-
-
-def test_classify_and_normalize_deepseek_raises_generic_exception():
-    """ask_deepseek raises generic Exception -> fallback dict, no UnboundLocalError."""
-    with patch("local_tools.citation_search.ask_deepseek", side_effect=RuntimeError("API failure")), \
-         patch("profiling.timing.ENABLED", False):
-        result = classify_and_normalize("R v Gladue")
-
-    assert result == {"type": "case_name", "normalized": "R v Gladue", "original": "R v Gladue"}
+_GEMINI_NONE_PATCH = patch("local_tools.citation_search.call_gemini_text", return_value=None)
+_TIMING_PATCH = patch("profiling.timing.ENABLED", False)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Happy path: bill fast-path (no LLM call needed)
+# 1.  Bill fast-path (no LLM call at all, Gemini or DeepSeek)
 # ═════════════════════════════════════════════════════════════════════════════
 
-def test_classify_and_normalize_bill_fastpath():
-    """Bill prefix triggers regex fast-path, no LLM call."""
+def test_bill_fastpath():
+    """Bill C-22 -> regex fast-path, neither Gemini nor DeepSeek called."""
+    mock_gemini = MagicMock()
     mock_ds = MagicMock()
-    with patch("local_tools.citation_search.ask_deepseek", mock_ds):
+    with patch("local_tools.citation_search.call_gemini_text", mock_gemini), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds):
         result = classify_and_normalize("Bill C-22")
 
     assert result["type"] == "bill"
     assert result["normalized"] == "C-22"
+    mock_gemini.assert_not_called()
     mock_ds.assert_not_called()
+
+
+def test_bill_fastpath_no_hyphen():
+    """Bill c34 -> regex fast-path, normalised to C-34."""
+    mock_gemini = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text", mock_gemini):
+        result = classify_and_normalize("bill c34")
+
+    assert result["type"] == "bill"
+    assert result["normalized"] == "C-34"
+    mock_gemini.assert_not_called()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 2.  Gemini primary path — expected success cases
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_vancouver_charter_classifies_as_legislation():
+    """"Vancouver charter" -> legislation (Vancouver Charter is a real BC statute, SBC 1953 c 55)."""
+    fake_gemini_response = _make_gemini_response(
+        '{"type": "legislation", "normalized": "Vancouver Charter", "original": "Vancouver charter"}'
+    )
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text", return_value=fake_gemini_response), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("Vancouver charter")
+
+    assert result["type"] == "legislation"
+    assert "Vancouver" in result["normalized"]
+    mock_ds.assert_not_called()  # Gemini succeeded, no fallback
+
+
+def test_ccc_expands_to_criminal_code():
+    """"CCC" -> legislation, expanded to Criminal Code (regression: hallucinated under DeepSeek-no-thinking)."""
+    fake_gemini_response = _make_gemini_response(
+        '{"type": "legislation", "normalized": "Criminal Code, RSC 1985, c C-46", "original": "CCC"}'
+    )
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text", return_value=fake_gemini_response), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("CCC")
+
+    assert result["type"] == "legislation"
+    assert "Criminal Code" in result["normalized"]
+    assert "RSC" in result["normalized"]
+    mock_ds.assert_not_called()
+
+
+def test_charter_expands():
+    """"Charter" -> legislation, expanded (regression: hallucinated incorrect expansion under DeepSeek-no-thinking)."""
+    fake_gemini_response = _make_gemini_response(
+        '{"type": "legislation", "normalized": "Canadian Charter of Rights and Freedoms", "original": "Charter"}'
+    )
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text", return_value=fake_gemini_response), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("Charter")
+
+    assert result["type"] == "legislation"
+    assert "Charter" in result["normalized"]
+    assert "Rights" in result["normalized"]
+    mock_ds.assert_not_called()
+
+
+def test_mixed_case_input_normalised():
+    """"R. v. ShARM'a" -> case_name, consistent casing (R v, no dots)."""
+    fake_gemini_response = _make_gemini_response(
+        '{"type": "case_name", "normalized": "R v Sharma", "original": "R. v. ShARM\'a"}'
+    )
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text", return_value=fake_gemini_response), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("R. v. ShARM'a")
+
+    assert result["type"] == "case_name"
+    assert result["normalized"] == "R v Sharma"
+    mock_ds.assert_not_called()
+
+
+def test_citation_number_recognised():
+    """"2022 SCC 39" -> citation_number (Gemini path)."""
+    fake_gemini_response = _make_gemini_response(
+        '{"type": "citation_number", "normalized": "2022 SCC 39", "original": "2022 SCC 39"}'
+    )
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text", return_value=fake_gemini_response), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("2022 SCC 39")
+
+    assert result["type"] == "citation_number"
+    mock_ds.assert_not_called()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 3.  Gemini failure -> fallback to DeepSeek
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_gemini_returns_none_falls_back_to_deepseek():
+    """Gemini returns None (network error) -> DeepSeek fallback executes."""
+    fake_ds_response = _make_gemini_response(
+        '{"type": "case_name", "normalized": "R v Gladue", "original": "R v Gladue"}'
+    )
+    with patch("local_tools.citation_search.call_gemini_text", return_value=None), \
+         patch("local_tools.citation_search.ask_deepseek", return_value=fake_ds_response), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("R v Gladue")
+
+    assert result["type"] == "case_name"
+    assert result["normalized"] == "R v Gladue"
+
+
+def test_gemini_non_json_response_falls_back():
+    """Gemini returns non-JSON text -> DeepSeek fallback executes."""
+    with patch("local_tools.citation_search.call_gemini_text", return_value="some plain text, not JSON"), \
+         patch("local_tools.citation_search.ask_deepseek", return_value=(
+             '{"type": "case_name", "normalized": "R v Gladue", "original": "R v Gladue"}'
+         )), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("R v Gladue")
+
+    assert result["type"] == "case_name"
+    assert result["normalized"] == "R v Gladue"
+
+
+def test_gemini_wrong_type_falls_back():
+    """Gemini returns valid JSON but invalid type -> DeepSeek fallback executes."""
+    with patch("local_tools.citation_search.call_gemini_text", return_value=(
+        '{"type": "invalid_type", "normalized": "R v Gladue", "original": "R v Gladue"}'
+    )), \
+         patch("local_tools.citation_search.ask_deepseek", return_value=(
+             '{"type": "case_name", "normalized": "R v Gladue", "original": "R v Gladue"}'
+         )), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("R v Gladue")
+
+    assert result["type"] == "case_name"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 4.  Both fail -> final fallback dict
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_both_llms_fail_returns_fallback():
+    """Gemini fails AND DeepSeek raises -> fallback dict returned."""
+    with patch("local_tools.citation_search.call_gemini_text", return_value=None), \
+         patch("local_tools.citation_search.ask_deepseek", side_effect=RuntimeError("DS down")), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("R v Gladue")
+
+    assert result == {"type": "case_name", "normalized": "R v Gladue", "original": "R v Gladue"}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 5.  Existing regression: DeepSeek error handling preserved (now via Gemini
+#     failure + DeepSeek mock)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_deepseek_raises_connection_error():
+    """Gemini fails, then ask_deepseek raises ConnectionError -> fallback dict."""
+    with patch("local_tools.citation_search.call_gemini_text", return_value=None), \
+         patch("local_tools.citation_search.ask_deepseek", side_effect=ConnectionError("Connection refused")), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("R v Gladue")
+
+    assert result == {"type": "case_name", "normalized": "R v Gladue", "original": "R v Gladue"}
+
+
+def test_deepseek_raises_timeout():
+    """Gemini fails, then ask_deepseek raises TimeoutError -> fallback dict."""
+    with patch("local_tools.citation_search.call_gemini_text", return_value=None), \
+         patch("local_tools.citation_search.ask_deepseek", side_effect=TimeoutError("timed out")), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("R v Gladue")
+
+    assert result == {"type": "case_name", "normalized": "R v Gladue", "original": "R v Gladue"}
+
+
+def test_deepseek_raises_generic_exception():
+    """Gemini fails, then ask_deepseek raises generic Exception -> fallback dict."""
+    with patch("local_tools.citation_search.call_gemini_text", return_value=None), \
+         patch("local_tools.citation_search.ask_deepseek", side_effect=RuntimeError("API failure")), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("R v Gladue")
+
+    assert result == {"type": "case_name", "normalized": "R v Gladue", "original": "R v Gladue"}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 6.  Spend tracker rate for gemini-2.5-flash
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_gemini_25_flash_rate_in_table():
+    """gemini-2.5-flash has a dedicated rate entry (not using fallback)."""
+    # _compute_cost is a pure method — no side effects, safe to call directly
+    cost_input = spend_tracker._compute_cost("gemini", "gemini-2.5-flash", 1_000_000, 0)
+    cost_output = spend_tracker._compute_cost("gemini", "gemini-2.5-flash", 0, 1_000_000)
+
+    assert cost_input == 0.30, f"Expected $0.30 for 1M input tokens, got ${cost_input}"
+    assert cost_output == 2.50, f"Expected $2.50 for 1M output tokens, got ${cost_output}"
+
+
+def test_gemini_25_flash_rate_cheaper_than_fallback():
+    """gemini-2.5-flash rate is lower than the unknown-model fallback."""
+    # Before the rate was added, the fallback $0.8451 was used.
+    # Now the dedicated rate is $0.30/$2.50, so an output-heavy call
+    # should still be cheaper than using the fallback rate on input.
+    cost_input = spend_tracker._compute_cost("gemini", "gemini-2.5-flash", 1_000_000, 0)
+    from core.spend_tracker import _FALLBACK_RATE
+    assert cost_input < _FALLBACK_RATE, (
+        f"gemini-2.5-flash input rate ${cost_input} should be less than "
+        f"fallback rate ${_FALLBACK_RATE}"
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 7.  Logging categories in call_gemini_text()
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _make_http_resp(status_code: int = 200, json_data: dict | None = None) -> MagicMock:
+    """Build a minimal mock requests.Response."""
+    resp = MagicMock(spec=requests.Response)
+    resp.status_code = status_code
+    resp.raise_for_status.return_value = None
+    if json_data is not None:
+        resp.json.return_value = json_data
+    else:
+        resp.json.return_value = {}
+    return resp
+
+
+def test_call_gemini_timeout_logs_warning(caplog):
+    """Timeout -> 'network/timeout' category warning logged, returns None."""
+    caplog.set_level(logging.WARNING)
+
+    with patch("llm_api.gemini_api.request_with_retry", side_effect=requests.exceptions.Timeout("timed out")), \
+         _TIMING_PATCH:
+        from llm_api.gemini_api import call_gemini_text
+        result = call_gemini_text("test query")
+
+    assert result is None
+    assert any("network/timeout" in rec.getMessage() for rec in caplog.records), (
+        "Expected a WARNING log with [network/timeout] for timeout"
+    )
+
+
+def test_call_gemini_non_200_logs_warning(caplog):
+    """Non-200 HTTP status -> 'non-200' category warning logged, returns None."""
+    caplog.set_level(logging.WARNING)
+
+    mock_resp = _make_http_resp(status_code=429)
+    mock_resp.raise_for_status.side_effect = requests.exceptions.HTTPError(
+        response=mock_resp
+    )
+
+    with patch("llm_api.gemini_api.request_with_retry", return_value=mock_resp), \
+         _TIMING_PATCH:
+        from llm_api.gemini_api import call_gemini_text
+        result = call_gemini_text("test query")
+
+    assert result is None
+    assert any("non-200" in rec.getMessage() for rec in caplog.records), (
+        "Expected a WARNING log with [non-200] for HTTP 429"
+    )
+
+
+def test_call_gemini_malformed_json_logs_warning(caplog):
+    """Malformed JSON body -> 'json_parse' category warning logged, returns None."""
+    caplog.set_level(logging.WARNING)
+
+    mock_resp = _make_http_resp(status_code=200)
+    mock_resp.json.side_effect = ValueError("Invalid JSON")
+
+    with patch("llm_api.gemini_api.request_with_retry", return_value=mock_resp), \
+         _TIMING_PATCH:
+        from llm_api.gemini_api import call_gemini_text
+        result = call_gemini_text("test query")
+
+    assert result is None
+    assert any("json_parse" in rec.getMessage() for rec in caplog.records), (
+        "Expected a WARNING log with [json_parse] for malformed JSON"
+    )
+
+
+def test_call_gemini_bad_structure_logs_warning(caplog):
+    """Valid JSON but missing expected response keys -> 'json_parse' warning, returns None."""
+    caplog.set_level(logging.WARNING)
+
+    # Valid JSON but missing "candidates" key
+    mock_resp = _make_http_resp(status_code=200, json_data={"foo": "bar"})
+
+    with patch("llm_api.gemini_api.request_with_retry", return_value=mock_resp), \
+         _TIMING_PATCH:
+        from llm_api.gemini_api import call_gemini_text
+        result = call_gemini_text("test query")
+
+    assert result is None
+    assert any("json_parse" in rec.getMessage() for rec in caplog.records), (
+        "Expected a WARNING log with [json_parse] for bad response structure"
+    )
+
+
+def test_gemini_timeout_logs_and_falls_back_to_deepseek(caplog):
+    """Gemini timeout -> warning logged, DeepSeek fallback still executes."""
+    caplog.set_level(logging.WARNING)
+
+    with patch("llm_api.gemini_api.request_with_retry", side_effect=requests.exceptions.Timeout), \
+         patch("local_tools.citation_search.ask_deepseek",
+               return_value='{"type": "case_name", "normalized": "R v Gladue", "original": "R v Gladue"}'), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("R v Gladue")
+
+    assert result["type"] == "case_name"
+    assert result["normalized"] == "R v Gladue"
+    # Verify Gemini failure was logged
+    assert any("network/timeout" in rec.getMessage() for rec in caplog.records), (
+        "Expected a WARNING log with [network/timeout] on Gemini timeout, "
+        "but fallback to DeepSeek still returned correct result"
+    )
+
+
+def test_gemini_non_200_logs_and_falls_back_to_deepseek(caplog):
+    """Gemini HTTP 429 -> warning logged, DeepSeek fallback still executes."""
+    caplog.set_level(logging.WARNING)
+
+    mock_resp = _make_http_resp(status_code=429)
+    mock_resp.raise_for_status.side_effect = requests.exceptions.HTTPError(
+        response=mock_resp
+    )
+
+    with patch("llm_api.gemini_api.request_with_retry", return_value=mock_resp), \
+         patch("local_tools.citation_search.ask_deepseek",
+               return_value='{"type": "case_name", "normalized": "R v Gladue", "original": "R v Gladue"}'), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("R v Gladue")
+
+    assert result["type"] == "case_name"
+    assert any("non-200" in rec.getMessage() for rec in caplog.records), (
+        "Expected a WARNING log with [non-200] for HTTP 429"
+    )
+
+
+def test_gemini_malformed_json_logs_and_falls_back_to_deepseek(caplog):
+    """Gemini returns bad JSON -> warning logged, DeepSeek fallback still executes."""
+    caplog.set_level(logging.WARNING)
+
+    mock_resp = _make_http_resp(status_code=200)
+    mock_resp.json.side_effect = ValueError("bad json")
+
+    with patch("llm_api.gemini_api.request_with_retry", return_value=mock_resp), \
+         patch("local_tools.citation_search.ask_deepseek",
+               return_value='{"type": "case_name", "normalized": "R v Gladue", "original": "R v Gladue"}'), \
+         _TIMING_PATCH:
+        result = classify_and_normalize("R v Gladue")
+
+    assert result["type"] == "case_name"
+    assert any("json_parse" in rec.getMessage() for rec in caplog.records), (
+        "Expected a WARNING log with [json_parse] for malformed JSON"
+    )
