@@ -97,17 +97,25 @@ def classify_and_normalize(query: str) -> dict:
 1. 判断输入类型（只能是以下五种之一）：
    - citation_number：已知的引用号，如 "2022 SCC 39"、"[1999] 1 SCR 688"、"RSC 1985, c C-46"
    - case_name：案件名，如 "R v Gladue"、"R. v. Sharma"、"Regina v Jordan"
-   - legislation：法条名或法条缩写，如 "Criminal Code"、"CCC"、"Charter"、"CCC s.718.2(e)"
+   - legislation：法条名或法条缩写，如 "Criminal Code"、"CCC"、"Charter"、"CCC s.718.2(e)"、"Taxation Act"
    - bill：联邦法案编号，如 "bill c-22"、"bill c34"、"Bill S-2"、"Bill C 34"
    - concept：法律概念或原则，如 "gladue principle"、"right to housing"、"duty to consult"
 
 2. 标准化输入：
    - 案件名：去掉句号（R. v. → R v），Regina/The Queen → R，去掉末尾的 "case"
-   - 法条缩写：展开成完整引用（CCC → Criminal Code, RSC 1985, c C-46）
-   - 法条+条款混合：展开法条名，保留条款（CCC s.718.2(e) → Criminal Code, RSC 1985, c C-46, s 718.2(e)）
+   - 法条缩写（仅限已知缩写如 CCC、IRPA、CDSA、CCRF、Charter 等）：展开成完整引用
+     例：CCC → Criminal Code, RSC 1985, c C-46
+   - 法条缩写+条款混合（仅限已知缩写）：展开法条名，保留条款
+     例：CCC s.718.2(e) → Criminal Code, RSC 1985, c C-46, s 718.2(e)
+   - 完整法条名（非缩写）：直接返回规整后的名称，不要附加任何引用号、年份或章节
+     例："Criminal Code" → "Criminal Code"（不附加引用号）
+     例："Taxation Act Ontario" → "Taxation Act Ontario"（不附加引用号）
+     例："Family Law Act" → "Family Law Act"（不附加引用号）
    - 条款格式：s.718 → s 718（去掉句号）
    - 法案编号：统一归一为 L-DDDD 格式（去掉 Bill 前缀，大写字母，插入横杠 → C-34）
    - 法语输入同样处理（R. c. → R c）
+
+重要：永远不要从记忆中添加引用号、年份、章节等 citation 信息。如果你收到的是完整法条名（如 "Taxation Act"、"Family Law Act"、"Criminal Code" 等），直接规整名称后返回即可。把引用号的验证留给下游系统。
 
 只返回 JSON，不要任何解释：
 {{"type": "类型", "normalized": "标准化后的输入", "original": "原始输入"}}
