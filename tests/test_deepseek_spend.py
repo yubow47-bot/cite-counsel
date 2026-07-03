@@ -167,9 +167,11 @@ class TestDisableThinking:
         )
 
     def test_infer_jurisdiction_passes_disable_thinking(self):
-        """_infer_jurisdiction_canlii calls ask_deepseek with disable_thinking=True."""
+        """_infer_jurisdiction_canlii fallback calls ask_deepseek with disable_thinking=True."""
         from local_tools.citation_search import _infer_jurisdiction_canlii
-        with patch("local_tools.citation_search.ask_deepseek", return_value='{"jurisdiction": "on"}') as m_ask:
+        # Mock Gemini failure -> DeepSeek fallback exercised
+        with patch("local_tools.citation_search.call_gemini_text_structured", return_value=None), \
+             patch("local_tools.citation_search.ask_deepseek", return_value='{"jurisdiction": "on"}') as m_ask:
             result = _infer_jurisdiction_canlii("Ontario Family Law Act")
 
         assert result == "on"

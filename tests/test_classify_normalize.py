@@ -13,7 +13,7 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from local_tools.citation_search import classify_and_normalize
+from local_tools.citation_search import classify_and_normalize, _infer_jurisdiction_canlii
 from core.spend_tracker import spend_tracker
 
 
@@ -506,3 +506,117 @@ def test_residential_tenancies_act_bc_clean_title():
     assert "SBC" not in result["normalized"]
     assert "c " not in result["normalized"]
     mock_ds.assert_not_called()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 9.  _infer_jurisdiction_canlii — Gemini primary, ambiguous-input fix,
+#     DeepSeek fallback
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_infer_jurisdiction_no_signal_returns_none():
+    """No jurisdiction signal -> Gemini returns 'unknown' -> function returns None."""
+    mock_result = {"jurisdiction": "unknown"}
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value=mock_result), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds):
+        result = _infer_jurisdiction_canlii("Animal Protection Act")
+
+    assert result is None
+    mock_ds.assert_not_called()
+
+
+def test_infer_jurisdiction_federal_signal_returns_ca():
+    """Federal signal ('Criminal Code') -> Gemini returns 'ca' -> function returns 'ca'."""
+    mock_result = {"jurisdiction": "ca"}
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value=mock_result), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds):
+        result = _infer_jurisdiction_canlii("Criminal Code")
+
+    assert result == "ca"
+    mock_ds.assert_not_called()
+
+
+def test_infer_jurisdiction_ambiguous_returns_none():
+    """Another ambiguous input -> Gemini returns 'unknown' -> None."""
+    mock_result = {"jurisdiction": "unknown"}
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value=mock_result), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds):
+        result = _infer_jurisdiction_canlii("Environmental Protection Act")
+
+    assert result is None
+    mock_ds.assert_not_called()
+
+
+def test_infer_jurisdiction_ambiguous_returns_none_2():
+    """Extra ambiguous input -> None."""
+    mock_result = {"jurisdiction": "unknown"}
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value=mock_result), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds):
+        result = _infer_jurisdiction_canlii("Health Protection Act")
+
+    assert result is None
+    mock_ds.assert_not_called()
+
+
+def test_infer_jurisdiction_federal_case_mix():
+    """"FEDERAL Environmental Act" (uppercase signal) -> Gemini returns 'ca' -> 'ca'."""
+    mock_result = {"jurisdiction": "ca"}
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value=mock_result), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds):
+        result = _infer_jurisdiction_canlii("FEDERAL Environmental Act")
+
+    assert result == "ca"
+    mock_ds.assert_not_called()
+
+
+def test_infer_jurisdiction_province_signal_returns_code():
+    """Ontario signal -> Gemini returns 'on' -> 'on'."""
+    mock_result = {"jurisdiction": "on"}
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value=mock_result), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds):
+        result = _infer_jurisdiction_canlii("Ontario Family Law Act")
+
+    assert result == "on"
+    mock_ds.assert_not_called()
+
+
+def test_infer_jurisdiction_gemini_failure_falls_back_to_deepseek():
+    """Gemini returns None (failure) -> DeepSeek fallback executes -> 'on'."""
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value=None), \
+         patch("local_tools.citation_search.ask_deepseek", return_value='{"jurisdiction": "on"}'):
+        result = _infer_jurisdiction_canlii("Ontario Family Law Act")
+
+    assert result == "on"
+
+
+def test_infer_jurisdiction_gemini_out_of_enum_falls_back():
+    """Gemini returns jurisdiction outside enum -> ignored -> DeepSeek fallback."""
+    with patch("local_tools.citation_search.call_gemini_text_structured",
+               return_value={"jurisdiction": "invalid_value"}), \
+         patch("local_tools.citation_search.ask_deepseek", return_value='{"jurisdiction": "on"}'):
+        result = _infer_jurisdiction_canlii("Ontario Family Law Act")
+
+    assert result == "on"
+
+
+def test_infer_jurisdiction_deepseek_unknown_returns_none():
+    """Gemini fails, DeepSeek returns 'unknown' -> None."""
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value=None), \
+         patch("local_tools.citation_search.ask_deepseek", return_value='{"jurisdiction": "unknown"}'):
+        result = _infer_jurisdiction_canlii("Animal Protection Act")
+
+    assert result is None
+
+
+def test_infer_jurisdiction_both_fail_returns_none():
+    """Gemini fails AND DeepSeek raises -> None."""
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value=None), \
+         patch("local_tools.citation_search.ask_deepseek", side_effect=RuntimeError("DS down")):
+        result = _infer_jurisdiction_canlii("Animal Protection Act")
+
+    assert result is None

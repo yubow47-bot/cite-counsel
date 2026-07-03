@@ -300,3 +300,97 @@ def call_gemini_text(prompt: str) -> str | None:
         pass
 
     return text
+
+
+def call_gemini_text_structured(prompt: str, response_schema: dict) -> dict | None:
+    """Call Gemini 2.5 Flash with JSON mode + response schema enforcement.
+
+    Like ``call_gemini_text()`` but accepts a ``response_schema`` (JSON Schema)
+    that the Gemini API enforces on the output, reducing malformed-response
+    risk.  Returns the parsed JSON dict on success, or ``None`` on any failure.
+
+    ``retries=0``: POST is not idempotent — a read-timeout retry could
+    duplicate a completed LLM call and double-charge.
+    """
+    api_key = _get_api_key()
+    url = f"{GEMINI_BASE_URL}/{GEMINI_TEXT_MODEL}:generateContent"
+    body = {
+        "contents": [{
+            "parts": [{"text": prompt}],
+        }],
+        "generationConfig": {
+            "temperature": 0,
+            "maxOutputTokens": 4096,
+            "thinkingConfig": {
+                "thinkingBudget": 0,
+            },
+            "response_mime_type": "application/json",
+            "response_schema": response_schema,
+        },
+    }
+
+    # ── HTTP request ──
+    try:
+        with prof.measure("http.gemini_text", model=GEMINI_TEXT_MODEL):
+            resp = request_with_retry(
+                gemini_session, "POST",
+                url,
+                retries=0,
+                headers={
+                    "X-goog-api-key": api_key,
+                    "Content-Type": "application/json",
+                },
+                json=body,
+                read_timeout=30,
+            )
+    except requests.exceptions.ConnectionError as exc:
+        logger.warning("Gemini structured call failed [network/timeout]: %s — connection error", type(exc).__name__)
+        return None
+    except requests.exceptions.Timeout as exc:
+        logger.warning("Gemini structured call failed [network/timeout]: %s — request timed out", type(exc).__name__)
+        return None
+    except Exception as exc:
+        logger.warning("Gemini structured call failed [network/timeout]: %s — unexpected HTTP error", type(exc).__name__)
+        return None
+
+    # ── HTTP status check ──
+    try:
+        resp.raise_for_status()
+    except requests.exceptions.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else 0
+        logger.warning("Gemini structured call failed [non-200]: HTTP %d", status)
+        return None
+
+    # ── Parse response body ──
+    try:
+        data = resp.json()
+    except Exception:
+        logger.warning("Gemini structured call failed [json_parse]: response body is not valid JSON")
+        return None
+
+    # ── Extract text from expected structure ──
+    try:
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError):
+        logger.warning("Gemini structured call failed [json_parse]: unexpected response structure — missing candidates/content/parts")
+        return None
+
+    # ── Parse the JSON content inside the response text ──
+    try:
+        result = parse_llm_json(text)
+    except Exception:
+        logger.warning("Gemini structured call failed [json_parse]: content text is not valid JSON")
+        return None
+
+    # ── Track token spend ──
+    try:
+        usage = data.get("usageMetadata", {})
+        in_tokens = usage.get("promptTokenCount", 0)
+        out_tokens = usage.get("candidatesTokenCount", 0)
+        if in_tokens or out_tokens:
+            from core.spend_tracker import spend_tracker
+            spend_tracker.record_cost("gemini", GEMINI_TEXT_MODEL, in_tokens, out_tokens)
+    except Exception:
+        pass
+
+    return result
