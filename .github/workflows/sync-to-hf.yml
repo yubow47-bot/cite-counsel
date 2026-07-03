@@ -48,5 +48,5 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_SPACE_ID: ${{ vars.HF_SPACE_ID }}
         run: |
-          pip install -U huggingface_hub
+          pip install huggingface_hub==1.20.1
           python .github/scripts/sync_upload.py
