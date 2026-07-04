@@ -408,7 +408,7 @@ Rules:
         with prof.measure("llm.expand", model="gemini-2.5-flash"):
             result = call_gemini_text_structured(
                 prompt, _CONCEPT_SCHEMA,
-                connect_timeout=5, read_timeout=12, thinking_budget=2048,
+                connect_timeout=5, read_timeout=12, thinking_budget=4096,
             )
         _gemini_elapsed = time.time() - t0
         logger.debug("[DUR] expand_concept Gemini — %.1fms  result=%s",
