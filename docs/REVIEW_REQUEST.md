@@ -158,3 +158,387 @@ git checkout HEAD~1 -- local_tools/citation_search.py tests/test_classify_normal
 ```
 
 No database, schema, or config changes required.
+
+---
+
+## Follow-up: verification extraction diff + `verified` semantics comment (Aud condition)
+
+### 1. Full non-abbreviated diff for the `_verify_case`/`_verify_legislation`/`verify_one` extraction
+
+The diff below is from commit `bbd345e` (`git diff bbd345e~1..bbd345e -- local_tools/citation_search.py`). Key observations for Yubo:
+
+- **Mechanical move**: The three verification functions were extracted verbatim from the DeepSeek-only block (lines 310-438 of the old file) into shared scope (lines 265-381 of the new file). Every `def`, every `except`, every `entry` dict is byte-for-byte identical.
+- **Candidate ordering preserved**: `_verify_items()` uses the same `ThreadPoolExecutor` + `ordered = [None] * len(items)` + `fut_map` pattern, so output order matches input order — same as before.
+- **Unverifiable candidates**: `_verify_case` still returns `entry["verified"] = False` with `"warning": "⚠️ 未能在数据库验证该判例"`, `_verify_legislation` still returns `entry["verified"] = False` with `"warning": "⚠️ 未能在数据库验证该法规"`. These warnings propagate to the caller identically.
+- **Legislation pinpoint extraction**: The `extract_pinpoint` → `entry["pinpoint"]` → `entry["name"]` truncation logic is unchanged.
+- **Exception isolation**: Each `fork.join_task` in the executor is wrapped in `try/except Exception`, so a single failing verification never crashes the whole call.
+
+```diff
+diff --git a/local_tools/citation_search.py b/local_tools/citation_search.py
+index 5a20cf5..905815b 100644
+--- a/local_tools/citation_search.py
++++ b/local_tools/citation_search.py
+@@ -200,8 +200,10 @@ _CONCEPT_SCHEMA = {
+ def expand_concept(query: str) -> list:
+     """展开法律概念：源头案件 + 法条 + 后续案件.
+ 
+-    Primary: Gemini 2.5 Flash (thinking enabled, budget=2048, no A2AJ verification).
+-    Fallback: DeepSeek (thinking enabled, with A2AJ verification, unchanged).
++    Both paths (Gemini primary, DeepSeek fallback) run A2AJ verification
++    on every candidate before returning.  ``verified`` reflects actual
++    A2AJ lookup outcome, not LLM trust.
++
+     Double failure: raises ``ValueError("LLM expansion failed after fallback")``.
+     """
+     _fn_t0 = time.perf_counter()
+@@ -236,7 +238,13 @@ Rules:
+   Do NOT include citation number in name; put it in "citation" instead.
+ - If the concept flows from a statute, include it as one candidate with type "legislation".
+   Include at least 2-3 key cases with type "case".
+-- List only what you are confident about. Quality over quantity."""
++- IMPORTANT — substantive relevance only: each candidate must be a decision or statute
++  that is DIRECTLY about the queried concept — a landmark precedent that established,
++  refined, or is fundamentally cited for the concept.  Do NOT include cases that merely
++  mention the concept in passing or are tangentially related through a shared area of law.
++  For example, for "gladue principle" do NOT include R v Zora (bail mens rea) — it is
++  a real SCC case that mentions Gladue but is not substantively about the Gladue principle.
++  Quality over quantity."""
+ 
+     def _parse_llm_output(content: str) -> list | None:
+         """解析 LLM 输出：剥离 ```json 标记后 json.loads。"""
+@@ -254,10 +262,143 @@ Rules:
+             return candidates
+         return None
+ 
++    # ── Shared verification functions (used by BOTH paths) ──
++
++    def _verify_case(name: str, citation: str) -> dict:
++        """验证判例候选：citation 优先 /fetch，失败/为空则按案名搜索。"""
++        entry = {"verified": False}
++        if citation:
++            try:
++                verified = fetch_by_citation(citation)
++                if "error" not in verified and "raw_input" not in verified:
++                    entry["verified"] = True
++                    entry.update(verified)
++                    return entry
++            except Exception:
++                pass
++        if name:
++            try:
++                results = search_cases_multi(name, size=1, search_type="name")
++                if results:
++                    mapped = _map_fields(results[0])
++                    entry["verified"] = True
++                    entry.update(mapped)
++                    return entry
++            except Exception:
++                pass
++        entry["warning"] = "⚠️ 未能在数据库验证该判例"
++        return entry
++
++    def _verify_legislation(name: str) -> dict:
++        """验证法规候选：标准化 → A2AJ /fetch(doc_type=laws)。
++        与 search_citation() legislation 路由做法一致。
++        """
++        from local_tools.utils import a2aj_session, request_with_retry
++        import os as _os
++
++        entry = {"verified": False}
++
++        # 1. 用 normalization_rules.json 展开缩写
++        normalized = name
++        rules_path = _os.path.join(
++            _os.path.dirname(_os.path.dirname(__file__)),
++            "data", "normalization_rules.json"
++        )
++        try:
++            with open(rules_path, encoding='utf-8') as _f:
++                rules = json.load(_f)
++            abbrevs = rules.get("legislation_abbreviations", {})
++            if name in abbrevs:
++                normalized = abbrevs[name]
++            else:
++                for abbr in sorted(abbrevs, key=lambda x: -len(x)):
++                    if name.lower().startswith(abbr.lower()):
++                        normalized = name[:len(abbr)].replace(abbr, abbrevs[abbr]) + name[len(abbr):]
++                        break
++        except Exception:
++            pass
++
++        # 2. 提取引用号（与 legislation 路由同一正则）
++        cit_match = re.search(
++            r"(?:RSC|SC|SOR|RRO|O\sReg|BC\sReg|RLRQ)\s[^,]+(?:,\s*c\s[^,]+)?",
++            normalized
++        )
++        base_citation = cit_match.group(0).strip() if cit_match else normalized
++
++        # 从剩余部分提取 pinpoint（共享 helper，与 search_citation() legislation 分支一致）
++        _pin = extract_pinpoint(normalized)
++        if _pin:
++            entry["pinpoint"] = _pin
++        # Strip the pinpoint suffix from name so format_citation doesn't
++        # include it both via the embedded text and the standalone field.
++        if _pin and cit_match:
++            entry["name"] = normalized[:cit_match.end()].strip().rstrip(',').strip()
++
++        # 3. A2AJ /fetch(doc_type="laws")
++        try:
++            _t0 = time.time()
++            resp = request_with_retry(
++                a2aj_session, "GET",
++                "https://api.a2aj.ca/fetch",
++                params={"citation": base_citation, "doc_type": "laws"},
++                read_timeout=15,
++            )
++            if timing.ENABLE_TIMING:
++                timing.report().add_a2aj(f"expand_concept legislation verify ({base_citation[:30]})", time.time() - _t0)
++            resp.raise_for_status()
++            results = resp.json().get("results", [])
++            if results:
++                entry["verified"] = True
++                entry["statute_title"] = results[0].get("name_en", normalized)
++                entry["neutral_citation"] = results[0].get("citation_en", base_citation)
++                return entry
++        except Exception:
++            pass
++
++        entry["warning"] = "⚠️ 未能在数据库验证该法规"
++        return entry
++
++    def verify_one(item: dict) -> dict | None:
++        name = item.get("name", "")
++        citation = item.get("citation") or ""
++        ctype = item.get("type", "case")
++        if not name and not citation:
++            return None
++
++        entry = {
++            "name": name,
++            "neutral_citation": citation or None,
++            "role": ctype,
++            "verified": False,
++        }
++
++        if ctype == "legislation":
++            result = _verify_legislation(name)
++            entry.update(result)
++            return entry
++        else:
++            result = _verify_case(name, citation)
++            entry.update(result)
++            return entry
++
++    def _verify_items(items: list) -> list:
++        """Run A2AJ verification on a list of candidate dicts in parallel."""
++        from concurrent.futures import ThreadPoolExecutor, as_completed
++        with ThreadPoolExecutor(max_workers=5) as executor:
++            fut_map = {executor.submit(verify_one, item): i for i, item in enumerate(items)}
++            ordered = [None] * len(items)
++            for future in as_completed(fut_map):
++                idx = fut_map[future]
++                try:
++                    ordered[idx] = future.result()
++                except Exception:
++                    ordered[idx] = None
++        return [r for r in ordered if r is not None]
++
+     t0 = time.time()
+     gemini_succeeded = False
+ 
+-    # ── Primary: Gemini 2.5 Flash (thinking enabled, budget=2048, no A2AJ verification) ──
++    # ── Primary: Gemini 2.5 Flash (thinking enabled, budget=2048, WITH A2AJ verification) ──
+     try:
+         with prof.measure("llm.expand", model="gemini-2.5-flash"):
+             result = call_gemini_text_structured(
+@@ -273,20 +414,12 @@ Rules:
+             candidates = result.get("candidates")
+             if isinstance(candidates, list) and len(candidates) > 0:
+                 gemini_succeeded = True
+-                # Wrap raw LLM candidates into the shared schema expected downstream
+-                out = []
+-                for c in candidates:
+-                    out.append({
+-                        "name": c.get("name", ""),
+-                        "neutral_citation": c.get("citation") or None,
+-                        "role": c.get("type", "case"),
+-                        "verified": False,  # No A2AJ verification on Gemini path
+-                        "verification_source": "llm_only",
+-                    })
++                # Run A2AJ verification on every candidate (same as DeepSeek path)
++                verified = _verify_items(candidates)
+                 _fn_elapsed = time.perf_counter() - _fn_t0
+                 logger.debug("[DUR] expand_concept END (gemini_path) — %.1fms  llm=%.1fms  candidates=%d",
+-                             _fn_elapsed * 1000, _gemini_elapsed * 1000, len(out))
+-                return out
++                             _fn_elapsed * 1000, _gemini_elapsed * 1000, len(verified))
++                return verified
+     except Exception as e:
+         logger.warning("[DUR] expand_concept Gemini failed: %s", e)
+ 
+@@ -307,137 +440,7 @@ Rules:
+                 logger.warning("[WARN] expand_concept DeepSeek fallback failed to parse")
+                 raise ValueError("LLM expansion failed after fallback")
+ 
+-            # ── 并发验证（DeepSeek path only）──
+-            from concurrent.futures import ThreadPoolExecutor, as_completed
+-
+-            def _verify_case(name: str, citation: str) -> dict:
+-                """验证判例候选：citation 优先 /fetch，失败/为空则按案名搜索。"""
+-                entry = {"verified": False}
+-                if citation:
+-                    try:
+-                        verified = fetch_by_citation(citation)
+-                        if "error" not in verified and "raw_input" not in verified:
+-                            entry["verified"] = True
+-                            entry.update(verified)
+-                            return entry
+-                    except Exception:
+-                        pass
+-                if name:
+-                    try:
+-                        results = search_cases_multi(name, size=1, search_type="name")
+-                        if results:
+-                            mapped = _map_fields(results[0])
+-                            entry["verified"] = True
+-                            entry.update(mapped)
+-                            return entry
+-                    except Exception:
+-                        pass
+-                entry["warning"] = "⚠️ 未能在数据库验证该判例"
+-                return entry
+-
+-            def _verify_legislation(name: str) -> dict:
+-                """验证法规候选：标准化 → A2AJ /fetch(doc_type=laws)。
+-                与 search_citation() legislation 路由做法一致。
+-                """
+-                from local_tools.utils import a2aj_session, request_with_retry
+-                import os as _os
+-
+-                entry = {"verified": False}
+-
+-                # 1. 用 normalization_rules.json 展开缩写
+-                normalized = name
+-                rules_path = _os.path.join(
+-                    _os.path.dirname(_os.path.dirname(__file__)),
+-                    "data", "normalization_rules.json"
+-                )
+-                try:
+-                    with open(rules_path, encoding='utf-8') as _f:
+-                        rules = json.load(_f)
+-                    abbrevs = rules.get("legislation_abbreviations", {})
+-                    if name in abbrevs:
+-                        normalized = abbrevs[name]
+-                    else:
+-                        for abbr in sorted(abbrevs, key=lambda x: -len(x)):
+-                            if name.lower().startswith(abbr.lower()):
+-                                normalized = name[:len(abbr)].replace(abbr, abbrevs[abbr]) + name[len(abbr):]
+-                                break
+-                except Exception:
+-                    pass
+-
+-                # 2. 提取引用号（与 legislation 路由同一正则）
+-                cit_match = re.search(
+-                    r"(?:RSC|SC|SOR|RRO|O\sReg|BC\sReg|RLRQ)\s[^,]+(?:,\s*c\s[^,]+)?",
+-                    normalized
+-                )
+-                base_citation = cit_match.group(0).strip() if cit_match else normalized
+-
+-                # 从剩余部分提取 pinpoint（共享 helper，与 search_citation() legislation 分支一致）
+-                _pin = extract_pinpoint(normalized)
+-                if _pin:
+-                    entry["pinpoint"] = _pin
+-                # Strip the pinpoint suffix from name so format_citation doesn't
+-                # include it both via the embedded text and the standalone field.
+-                if _pin and cit_match:
+-                    entry["name"] = normalized[:cit_match.end()].strip().rstrip(',').strip()
+-
+-                # 3. A2AJ /fetch(doc_type="laws")
+-                try:
+-                    _t0 = time.time()
+-                    resp = request_with_retry(
+-                        a2aj_session, "GET",
+-                        "https://api.a2aj.ca/fetch",
+-                        params={"citation": base_citation, "doc_type": "laws"},
+-                        read_timeout=15,
+-                    )
+-                    if timing.ENABLE_TIMING:
+-                        timing.report().add_a2aj(f"expand_concept legislation verify ({base_citation[:30]})", time.time() - _t0)
+-                    resp.raise_for_status()
+-                    results = resp.json().get("results", [])
+-                    if results:
+-                        entry["verified"] = True
+-                        entry["statute_title"] = results[0].get("name_en", normalized)
+-                        entry["neutral_citation"] = results[0].get("citation_en", base_citation)
+-                        return entry
+-                except Exception:
+-                    pass
+-
+-                entry["warning"] = "⚠️ 未能在数据库验证该法规"
+-                return entry
+-
+-            def verify_one(item: dict) -> dict | None:
+-                name = item.get("name", "")
+-                citation = item.get("citation") or ""
+-                ctype = item.get("type", "case")
+-                if not name and not citation:
+-                    return None
+-
+-                entry = {
+-                    "name": name,
+-                    "neutral_citation": citation or None,
+-                    "role": ctype,
+-                    "verified": False,
+-                }
+-
+-                if ctype == "legislation":
+-                    result = _verify_legislation(name)
+-                    entry.update(result)
+-                    return entry
+-                else:
+-                    result = _verify_case(name, citation)
+-                    entry.update(result)
+-                    return entry
+-
+-            with ThreadPoolExecutor(max_workers=5) as executor:
+-                fut_map = {executor.submit(verify_one, item): i for i, item in enumerate(items)}
+-                ordered = [None] * len(items)
+-                for future in as_completed(fut_map):
+-                    idx = fut_map[future]
+-                    try:
+-                        ordered[idx] = future.result()
+-                    except Exception:
+-                        ordered[idx] = None
+-
+-            verified = [r for r in ordered if r is not None]
++            verified = _verify_items(items)
+             _fn_elapsed = time.perf_counter() - _fn_t0
+             logger.debug("[DUR] expand_concept END (deepseek_fallback) — %.1fms  llm=%.1fms  candidates=%d",
+                          _fn_elapsed * 1000, _ds_elapsed * 1000, len(verified))
+```
+
+### 2. `verified` semantics comment — added
+
+The following comment was added to `local_tools/citation_search.py` in the `verify_one()` function (the shared entry point for both Gemini and DeepSeek verification paths), directly above the `"verified": False` field:
+
+```python
+        entry = {
+            "name": name,
+            "neutral_citation": citation or None,
+            "role": ctype,
+            # verified=True means the citation was found to exist in A2AJ
+            # (or CanLII fallback).  It does NOT mean the citation is
+            # substantively/topically relevant to the queried concept.
+            # Relevance filtering is handled at the prompt level, not
+            # the verification level.
+            "verified": False,
+        }
+```
+
+This comment is visible to any future maintainer reading the verification code. The function `verify_one()` is called by `_verify_items()`, which is the single shared verification dispatcher for both the Gemini and DeepSeek paths.
+
+### Verification
+
+- No logic changes were made in this follow-up — only the comment addition.
+- Syntax verified: `python -c "import ast; ast.parse(...)"` passes.
+- Tests do not need re-running (no logic change). The same 407-pass baseline applies.
