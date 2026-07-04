@@ -242,8 +242,18 @@ Rules:
   that is DIRECTLY about the queried concept — a landmark precedent that established,
   refined, or is fundamentally cited for the concept.  Do NOT include cases that merely
   mention the concept in passing or are tangentially related through a shared area of law.
-  For example, for "gladue principle" do NOT include R v Zora (bail mens rea) — it is
-  a real SCC case that mentions Gladue but is not substantively about the Gladue principle.
+- IMPORTANT — do NOT select candidates based on citation-number proximity, year proximity,
+  or SCC sequence-number similarity to another correct candidate.  Sharing a similar SCC
+  number, docket number, or being decided in the same year as a case you have correctly
+  identified is NOT a valid basis for inclusion.  Only substantive legal subject-matter
+  connection is valid.
+- EXCLUDED examples (real SCC cases, zero substantive connection to the queried concept):
+  * For "gladue principle": do NOT include R v Zora (bail mens rea), Fundy Settlement
+    v Canada (trust tax residency), or Barer v Knight Brothers LLC (international
+    arbitration award enforcement).  These are real cases with no substantive connection
+    to Indigenous sentencing / s.718.2(e).
+  * For any concept: if you cannot articulate which substantive legal doctrine the
+    candidate is cited for, exclude it.
   Quality over quantity."""
 
     def _parse_llm_output(content: str) -> list | None:
