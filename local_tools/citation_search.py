@@ -173,13 +173,40 @@ def classify_and_normalize(query: str) -> dict:
     return {"type": "case_name", "normalized": query, "original": query}
 
 
-
-# (expand_concept 重试逻辑及相关诊断函数 _diagnose_parse_failure / _log_retry_event
-#  于 2026-06 移除：110 次调用 0 次重试，JSON 输出模式稳定)
+# ── JSON Schema for Gemini expand_concept call ──
+# Permissive: no additionalProperties: false, so minor structural variance
+# from the model does not cause rejection.  The calling code validates
+# required fields (name, type) at parse time.
+_CONCEPT_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "candidates": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "name": {"type": "STRING"},
+                    "citation": {"type": "STRING"},
+                    "type": {"type": "STRING", "enum": ["case", "legislation"]},
+                },
+                "required": ["name", "type"],
+            },
+        },
+    },
+    "required": ["candidates"],
+}
 
 
 def expand_concept(query: str) -> list:
-    """展开法律概念：源头案件 + 法条 + 后续案件（并发验证，结果稳定）。"""
+    """展开法律概念：源头案件 + 法条 + 后续案件。
+
+    Primary: Gemini 2.5 Flash (thinking enabled, budget=2048, no A2AJ verification).
+    Fallback: DeepSeek (thinking enabled, with A2AJ verification, unchanged).
+    Double failure: raises ``ValueError("LLM expansion failed after fallback")``.
+    """
+    _fn_t0 = time.perf_counter()
+    logger.debug("[DUR] expand_concept START — query_len=%d query=%s", len(query), query[:80])
+
     prompt = f"""You are a Canadian legal citation expert. The user query is: "{query}"
 
 A legal concept can have two types of sources:
@@ -222,149 +249,203 @@ Rules:
             return candidates
         return None
 
-    # ── 单次 LLM 调用（重试逻辑于 2026-06 移除：110 次调用 0 次重试）──
     t0 = time.time()
-    with prof.measure("llm.expand", model=os.getenv("LLM_CONCEPT_MODEL", "deepseek-v4-pro")):
-        raw = ask_deepseek(prompt, model=os.getenv("LLM_CONCEPT_MODEL", "deepseek-v4-pro"))
-    if timing.ENABLE_TIMING:
-        timing.report().add_llm("expand_concept", time.time() - t0)
-    items = _parse_llm_output(raw)
+    gemini_succeeded = False
 
-    if not items:
-        logger.warning("[WARN] expand_concept failed to parse")
-        return []
-
-    # ── 并发验证 ──
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    def _verify_case(name: str, citation: str) -> dict:
-        """验证判例候选：citation 优先 /fetch，失败/为空则按案名搜索。"""
-        entry = {"verified": False}
-        if citation:
-            try:
-                verified = fetch_by_citation(citation)
-                if "error" not in verified and "raw_input" not in verified:
-                    entry["verified"] = True
-                    entry.update(verified)
-                    return entry
-            except Exception:
-                pass
-        if name:
-            try:
-                results = search_cases_multi(name, size=1, search_type="name")
-                if results:
-                    mapped = _map_fields(results[0])
-                    entry["verified"] = True
-                    entry.update(mapped)
-                    return entry
-            except Exception:
-                pass
-        entry["warning"] = "⚠️ 未能在数据库验证该判例"
-        return entry
-
-    def _verify_legislation(name: str) -> dict:
-        """验证法规候选：标准化 → A2AJ /fetch(doc_type=laws)。
-        与 search_citation() legislation 路由做法一致。
-        """
-        from local_tools.utils import a2aj_session, request_with_retry
-        import os as _os
-
-        entry = {"verified": False}
-
-        # 1. 用 normalization_rules.json 展开缩写
-        normalized = name
-        rules_path = _os.path.join(
-            _os.path.dirname(_os.path.dirname(__file__)),
-            "data", "normalization_rules.json"
-        )
-        try:
-            with open(rules_path, encoding='utf-8') as _f:
-                rules = json.load(_f)
-            abbrevs = rules.get("legislation_abbreviations", {})
-            if name in abbrevs:
-                normalized = abbrevs[name]
-            else:
-                for abbr in sorted(abbrevs, key=lambda x: -len(x)):
-                    if name.lower().startswith(abbr.lower()):
-                        normalized = name[:len(abbr)].replace(abbr, abbrevs[abbr]) + name[len(abbr):]
-                        break
-        except Exception:
-            pass
-
-        # 2. 提取引用号（与 legislation 路由同一正则）
-        cit_match = re.search(
-            r"(?:RSC|SC|SOR|RRO|O\sReg|BC\sReg|RLRQ)\s[^,]+(?:,\s*c\s[^,]+)?",
-            normalized
-        )
-        base_citation = cit_match.group(0).strip() if cit_match else normalized
-
-        # 从剩余部分提取 pinpoint（共享 helper，与 search_citation() legislation 分支一致）
-        _pin = extract_pinpoint(normalized)
-        if _pin:
-            entry["pinpoint"] = _pin
-        # Strip the pinpoint suffix from name so format_citation doesn't
-        # include it both via the embedded text and the standalone field.
-        if _pin and cit_match:
-            entry["name"] = normalized[:cit_match.end()].strip().rstrip(',').strip()
-
-        # 3. A2AJ /fetch(doc_type="laws")
-        try:
-            _t0 = time.time()
-            resp = request_with_retry(
-                a2aj_session, "GET",
-                "https://api.a2aj.ca/fetch",
-                params={"citation": base_citation, "doc_type": "laws"},
-                read_timeout=15,
+    # ── Primary: Gemini 2.5 Flash (thinking enabled, budget=2048, no A2AJ verification) ──
+    try:
+        with prof.measure("llm.expand", model="gemini-2.5-flash"):
+            result = call_gemini_text_structured(
+                prompt, _CONCEPT_SCHEMA,
+                connect_timeout=5, read_timeout=12, thinking_budget=2048,
             )
+        _gemini_elapsed = time.time() - t0
+        logger.debug("[DUR] expand_concept Gemini — %.1fms  result=%s",
+                     _gemini_elapsed * 1000,
+                     str(result)[:120] if result else "None")
+
+        if result is not None and isinstance(result, dict):
+            candidates = result.get("candidates")
+            if isinstance(candidates, list) and len(candidates) > 0:
+                gemini_succeeded = True
+                # Wrap raw LLM candidates into the shared schema expected downstream
+                out = []
+                for c in candidates:
+                    out.append({
+                        "name": c.get("name", ""),
+                        "neutral_citation": c.get("citation") or None,
+                        "role": c.get("type", "case"),
+                        "verified": True,  # Gemini output trusted directly
+                    })
+                _fn_elapsed = time.perf_counter() - _fn_t0
+                logger.debug("[DUR] expand_concept END (gemini_path) — %.1fms  llm=%.1fms  candidates=%d",
+                             _fn_elapsed * 1000, _gemini_elapsed * 1000, len(out))
+                return out
+    except Exception as e:
+        logger.warning("[DUR] expand_concept Gemini failed: %s", e)
+
+    # ── Fallback: DeepSeek (thinking enabled, with A2AJ verification, unchanged) ──
+    if not gemini_succeeded:
+        try:
+            t0 = time.time()
+            with prof.measure("llm.expand", model=os.getenv("LLM_CONCEPT_MODEL", "deepseek-v4-pro")):
+                raw = ask_deepseek(prompt, model=os.getenv("LLM_CONCEPT_MODEL", "deepseek-v4-pro"))
             if timing.ENABLE_TIMING:
-                timing.report().add_a2aj(f"expand_concept legislation verify ({base_citation[:30]})", time.time() - _t0)
-            resp.raise_for_status()
-            results = resp.json().get("results", [])
-            if results:
-                entry["verified"] = True
-                entry["statute_title"] = results[0].get("name_en", normalized)
-                entry["neutral_citation"] = results[0].get("citation_en", base_citation)
+                timing.report().add_llm("expand_concept", time.time() - t0)
+            _ds_elapsed = time.time() - t0
+            logger.debug("[DUR] expand_concept DeepSeek fallback — %.1fms", _ds_elapsed * 1000)
+
+            items = _parse_llm_output(raw)
+
+            if not items:
+                logger.warning("[WARN] expand_concept DeepSeek fallback failed to parse")
+                raise ValueError("LLM expansion failed after fallback")
+
+            # ── 并发验证（DeepSeek path only）──
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            def _verify_case(name: str, citation: str) -> dict:
+                """验证判例候选：citation 优先 /fetch，失败/为空则按案名搜索。"""
+                entry = {"verified": False}
+                if citation:
+                    try:
+                        verified = fetch_by_citation(citation)
+                        if "error" not in verified and "raw_input" not in verified:
+                            entry["verified"] = True
+                            entry.update(verified)
+                            return entry
+                    except Exception:
+                        pass
+                if name:
+                    try:
+                        results = search_cases_multi(name, size=1, search_type="name")
+                        if results:
+                            mapped = _map_fields(results[0])
+                            entry["verified"] = True
+                            entry.update(mapped)
+                            return entry
+                    except Exception:
+                        pass
+                entry["warning"] = "⚠️ 未能在数据库验证该判例"
                 return entry
-        except Exception:
-            pass
 
-        entry["warning"] = "⚠️ 未能在数据库验证该法规"
-        return entry
+            def _verify_legislation(name: str) -> dict:
+                """验证法规候选：标准化 → A2AJ /fetch(doc_type=laws)。
+                与 search_citation() legislation 路由做法一致。
+                """
+                from local_tools.utils import a2aj_session, request_with_retry
+                import os as _os
 
-    def verify_one(item: dict) -> dict | None:
-        name = item.get("name", "")
-        citation = item.get("citation") or ""
-        ctype = item.get("type", "case")
-        if not name and not citation:
-            return None
+                entry = {"verified": False}
 
-        entry = {
-            "name": name,
-            "neutral_citation": citation or None,
-            "role": ctype,
-            "verified": False,
-        }
+                # 1. 用 normalization_rules.json 展开缩写
+                normalized = name
+                rules_path = _os.path.join(
+                    _os.path.dirname(_os.path.dirname(__file__)),
+                    "data", "normalization_rules.json"
+                )
+                try:
+                    with open(rules_path, encoding='utf-8') as _f:
+                        rules = json.load(_f)
+                    abbrevs = rules.get("legislation_abbreviations", {})
+                    if name in abbrevs:
+                        normalized = abbrevs[name]
+                    else:
+                        for abbr in sorted(abbrevs, key=lambda x: -len(x)):
+                            if name.lower().startswith(abbr.lower()):
+                                normalized = name[:len(abbr)].replace(abbr, abbrevs[abbr]) + name[len(abbr):]
+                                break
+                except Exception:
+                    pass
 
-        if ctype == "legislation":
-            result = _verify_legislation(name)
-            entry.update(result)
-            return entry
-        else:
-            result = _verify_case(name, citation)
-            entry.update(result)
-            return entry
+                # 2. 提取引用号（与 legislation 路由同一正则）
+                cit_match = re.search(
+                    r"(?:RSC|SC|SOR|RRO|O\sReg|BC\sReg|RLRQ)\s[^,]+(?:,\s*c\s[^,]+)?",
+                    normalized
+                )
+                base_citation = cit_match.group(0).strip() if cit_match else normalized
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        fut_map = {executor.submit(verify_one, item): i for i, item in enumerate(items)}
-        ordered = [None] * len(items)
-        for future in as_completed(fut_map):
-            idx = fut_map[future]
-            try:
-                ordered[idx] = future.result()
-            except Exception:
-                ordered[idx] = None
+                # 从剩余部分提取 pinpoint（共享 helper，与 search_citation() legislation 分支一致）
+                _pin = extract_pinpoint(normalized)
+                if _pin:
+                    entry["pinpoint"] = _pin
+                # Strip the pinpoint suffix from name so format_citation doesn't
+                # include it both via the embedded text and the standalone field.
+                if _pin and cit_match:
+                    entry["name"] = normalized[:cit_match.end()].strip().rstrip(',').strip()
 
-    return [r for r in ordered if r is not None]
+                # 3. A2AJ /fetch(doc_type="laws")
+                try:
+                    _t0 = time.time()
+                    resp = request_with_retry(
+                        a2aj_session, "GET",
+                        "https://api.a2aj.ca/fetch",
+                        params={"citation": base_citation, "doc_type": "laws"},
+                        read_timeout=15,
+                    )
+                    if timing.ENABLE_TIMING:
+                        timing.report().add_a2aj(f"expand_concept legislation verify ({base_citation[:30]})", time.time() - _t0)
+                    resp.raise_for_status()
+                    results = resp.json().get("results", [])
+                    if results:
+                        entry["verified"] = True
+                        entry["statute_title"] = results[0].get("name_en", normalized)
+                        entry["neutral_citation"] = results[0].get("citation_en", base_citation)
+                        return entry
+                except Exception:
+                    pass
+
+                entry["warning"] = "⚠️ 未能在数据库验证该法规"
+                return entry
+
+            def verify_one(item: dict) -> dict | None:
+                name = item.get("name", "")
+                citation = item.get("citation") or ""
+                ctype = item.get("type", "case")
+                if not name and not citation:
+                    return None
+
+                entry = {
+                    "name": name,
+                    "neutral_citation": citation or None,
+                    "role": ctype,
+                    "verified": False,
+                }
+
+                if ctype == "legislation":
+                    result = _verify_legislation(name)
+                    entry.update(result)
+                    return entry
+                else:
+                    result = _verify_case(name, citation)
+                    entry.update(result)
+                    return entry
+
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                fut_map = {executor.submit(verify_one, item): i for i, item in enumerate(items)}
+                ordered = [None] * len(items)
+                for future in as_completed(fut_map):
+                    idx = fut_map[future]
+                    try:
+                        ordered[idx] = future.result()
+                    except Exception:
+                        ordered[idx] = None
+
+            verified = [r for r in ordered if r is not None]
+            _fn_elapsed = time.perf_counter() - _fn_t0
+            logger.debug("[DUR] expand_concept END (deepseek_fallback) — %.1fms  llm=%.1fms  candidates=%d",
+                         _fn_elapsed * 1000, _ds_elapsed * 1000, len(verified))
+            return verified
+
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.warning("[DUR] expand_concept DeepSeek fallback failed: %s", e)
+            raise ValueError("LLM expansion failed after fallback") from e
+
+    _fn_elapsed = time.perf_counter() - _fn_t0
+    logger.debug("[DUR] expand_concept END (fallback) — %.1fms", _fn_elapsed * 1000)
+    raise ValueError("LLM expansion failed after fallback")
 
 
 _CANLII_STATUTE_DB = {

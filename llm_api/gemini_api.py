@@ -302,12 +302,33 @@ def call_gemini_text(prompt: str) -> str | None:
     return text
 
 
-def call_gemini_text_structured(prompt: str, response_schema: dict) -> dict | None:
+def call_gemini_text_structured(
+    prompt: str,
+    response_schema: dict,
+    *,
+    connect_timeout: float = 2.7,
+    read_timeout: float = 30,
+    thinking_budget: int = 0,
+) -> dict | None:
     """Call Gemini 2.5 Flash with JSON mode + response schema enforcement.
 
     Like ``call_gemini_text()`` but accepts a ``response_schema`` (JSON Schema)
     that the Gemini API enforces on the output, reducing malformed-response
     risk.  Returns the parsed JSON dict on success, or ``None`` on any failure.
+
+    Parameters
+    ----------
+    prompt : str
+        The text prompt to send.
+    response_schema : dict
+        JSON Schema dict enforced by the Gemini API on the output.
+    connect_timeout : float
+        Seconds to wait for connection establishment (passed to ``request_with_retry``).
+    read_timeout : float
+        Seconds to wait for a response once connected.
+    thinking_budget : int
+        Gemini thinking budget in tokens.  0 = no thinking.  2048 recommended
+        for associative-reasoning tasks like concept expansion.
 
     ``retries=0``: POST is not idempotent — a read-timeout retry could
     duplicate a completed LLM call and double-charge.
@@ -320,9 +341,9 @@ def call_gemini_text_structured(prompt: str, response_schema: dict) -> dict | No
         }],
         "generationConfig": {
             "temperature": 0,
-            "maxOutputTokens": 4096,
+            "maxOutputTokens": 8192,
             "thinkingConfig": {
-                "thinkingBudget": 0,
+                "thinkingBudget": thinking_budget,
             },
             "response_mime_type": "application/json",
             "response_schema": response_schema,
@@ -335,13 +356,14 @@ def call_gemini_text_structured(prompt: str, response_schema: dict) -> dict | No
             resp = request_with_retry(
                 gemini_session, "POST",
                 url,
+                connect_timeout=connect_timeout,
+                read_timeout=read_timeout,
                 retries=0,
                 headers={
                     "X-goog-api-key": api_key,
                     "Content-Type": "application/json",
                 },
                 json=body,
-                read_timeout=30,
             )
     except requests.exceptions.ConnectionError as exc:
         logger.warning("Gemini structured call failed [network/timeout]: %s — connection error", type(exc).__name__)
