@@ -228,7 +228,12 @@ Rules:
   NOT the case name. If unsure, set to null.
 - For "legislation": "citation" should contain the statute citation (e.g. "RSC 1985, c C-46").
   If unsure, set to null; the system will search by name instead.
-- "name" must be the full case name or statute title. Do NOT include citation number in name.
+- For LEGISLATION candidates: "name" must be the FULL descriptive name including the statute
+  citation and section/pinpoint when the concept maps to a specific provision.
+  Example for "gladue principle": "Criminal Code, RSC 1985, c C-46, s 718.2(e)" — NOT just
+  "Criminal Code". Include the section number in "name", not in "citation".
+- For CASE candidates: "name" is the full case name only (e.g. "R v Gladue").
+  Do NOT include citation number in name; put it in "citation" instead.
 - If the concept flows from a statute, include it as one candidate with type "legislation".
   Include at least 2-3 key cases with type "case".
 - List only what you are confident about. Quality over quantity."""
@@ -275,7 +280,8 @@ Rules:
                         "name": c.get("name", ""),
                         "neutral_citation": c.get("citation") or None,
                         "role": c.get("type", "case"),
-                        "verified": True,  # Gemini output trusted directly
+                        "verified": False,  # No A2AJ verification on Gemini path
+                        "verification_source": "llm_only",
                     })
                 _fn_elapsed = time.perf_counter() - _fn_t0
                 logger.debug("[DUR] expand_concept END (gemini_path) — %.1fms  llm=%.1fms  candidates=%d",
