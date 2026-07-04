@@ -369,6 +369,11 @@ Rules:
             "name": name,
             "neutral_citation": citation or None,
             "role": ctype,
+            # verified=True means the citation was found to exist in A2AJ
+            # (or CanLII fallback).  It does NOT mean the citation is
+            # substantively/topically relevant to the queried concept.
+            # Relevance filtering is handled at the prompt level, not
+            # the verification level.
             "verified": False,
         }
 
