@@ -138,3 +138,23 @@ git checkout HEAD~1 -- local_tools/citation_search.py
 ```
 
 No database, schema, or config changes required.
+
+---
+
+## Follow-up: thinking_budget comment added
+
+A code comment was added to `local_tools/citation_search.py` directly above the `thinking_budget=4096` parameter in the `expand_concept()` Gemini call (line 409–416):
+
+```python
+                # thinking_budget=4096 was tuned to reduce (not eliminate)
+                # real-but-topically-irrelevant candidate cases in concept
+                # expansion (e.g. Fundy Settlement v Canada, R v Zora were
+                # observed at budget=2048).  This is a quality mitigation, not
+                # a deterministic correctness guarantee — A2AJ verification
+                # (via _verify_items) confirms citation EXISTENCE, not
+                # substantive relevance, and must remain active regardless of
+                # thinking budget.
+                connect_timeout=5, read_timeout=12, thinking_budget=4096,
+```
+
+The comment documents the budget's purpose, its limits, and the critical distinction between verification (existence) vs relevance filtering (prompt + budget level). No other code changes were made.
