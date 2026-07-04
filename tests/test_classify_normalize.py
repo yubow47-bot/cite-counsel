@@ -634,7 +634,7 @@ def test_infer_jurisdiction_both_fail_returns_none():
 # ═════════════════════════════════════════════════════════════════════════════
 
 def test_expand_concept_gladue_principle():
-    """"gladue principle" -> Gemini returns Criminal Code, s718, R v Gladue, R v Ipeelee."""
+    """"gladue principle" -> Gemini + A2AJ verification -> returned with proper verified labels."""
     fake_gemini_result = {
         "candidates": [
             {"name": "Criminal Code, RSC 1985, c C-46, s 718.2(e)", "citation": None, "type": "legislation"},
@@ -644,7 +644,14 @@ def test_expand_concept_gladue_principle():
     }
     mock_ds = MagicMock()
     with patch("local_tools.citation_search.call_gemini_text_structured", return_value=fake_gemini_result), \
-         patch("local_tools.citation_search.ask_deepseek", mock_ds):
+         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
+         patch("local_tools.citation_search.fetch_by_citation", return_value={
+             "style_of_cause": "R v Gladue", "neutral_citation": "[1999] 1 SCR 688"}), \
+         patch("local_tools.utils.request_with_retry") as mock_a2aj_req:
+        mock_a2aj_req.return_value.raise_for_status.return_value = None
+        mock_a2aj_req.return_value.json.return_value = {
+            "results": [{"name_en": "Criminal Code", "citation_en": "RSC 1985, c C-46"}]
+        }
         results = expand_concept("gladue principle")
 
     assert len(results) >= 3
@@ -652,25 +659,22 @@ def test_expand_concept_gladue_principle():
     citations = [r.get("neutral_citation") or "" for r in results]
     all_text = " ".join(names + citations)
     assert "Criminal Code" in all_text, f"Missing Criminal Code in {names}"
-    assert "s 718" in all_text or "718.2" in all_text, f"Missing s718 in {names}"
     assert "R v Gladue" in all_text, f"Missing R v Gladue in {names}"
     assert "R v Ipeelee" in all_text, f"Missing R v Ipeelee in {names}"
-    # Legislation candidate must include full pinpoint, not bare "Criminal Code"
+    # Legislation candidate: pinpoint extracted into separate field by existing A2AJ logic
     leg = [r for r in results if r.get("role") == "legislation"]
     if leg:
-        assert "s 718.2(e)" in leg[0].get("name", ""), (
-            f"Legislation candidate must include full section reference, got: {leg[0].get('name')}"
+        assert leg[0].get("pinpoint") == "s 718.2(e)", (
+            f"Expected pinpoint=s 718.2(e) on legislation candidate, got {leg[0].get('pinpoint')}"
         )
+    # With A2AJ verification restored, root-canon candidates should be verified=True
     for r in results:
-        assert r.get("verified") is False, f"Expected verified=False for Gemini-only path, got {r}"
-        assert r.get("verification_source") == "llm_only", (
-            f"Expected verification_source=llm_only, got {r.get('verification_source')}"
-        )
+        assert r.get("verified") is True, f"Expected verified=True after A2AJ, got {r}"
     mock_ds.assert_not_called()
 
 
 def test_expand_concept_oakes_test():
-    """"oakes test" -> Gemini returns Charter, s 1, R v Oakes."""
+    """"oakes test" -> Gemini + A2AJ verification -> verified=True."""
     fake_gemini_result = {
         "candidates": [
             {"name": "Canadian Charter of Rights and Freedoms, s 1", "citation": None, "type": "legislation"},
@@ -680,7 +684,14 @@ def test_expand_concept_oakes_test():
     }
     mock_ds = MagicMock()
     with patch("local_tools.citation_search.call_gemini_text_structured", return_value=fake_gemini_result), \
-         patch("local_tools.citation_search.ask_deepseek", mock_ds):
+         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
+         patch("local_tools.citation_search.fetch_by_citation", return_value={
+             "style_of_cause": "R v Oakes", "neutral_citation": "[1986] 1 SCR 103"}), \
+         patch("local_tools.utils.request_with_retry") as mock_a2aj_req:
+        mock_a2aj_req.return_value.raise_for_status.return_value = None
+        mock_a2aj_req.return_value.json.return_value = {
+            "results": [{"name_en": "Charter", "citation_en": ""}]
+        }
         results = expand_concept("oakes test")
 
     assert len(results) >= 2
@@ -691,13 +702,12 @@ def test_expand_concept_oakes_test():
     assert "s 1" in all_text or "section 1" in all_text.lower(), f"Missing s 1 in {names}"
     assert "R v Oakes" in all_text, f"Missing R v Oakes in {names}"
     for r in results:
-        assert r.get("verified") is False
-        assert r.get("verification_source") == "llm_only"
+        assert r.get("verified") is True
     mock_ds.assert_not_called()
 
 
 def test_expand_concept_reasonable_limits():
-    """"reasonable limits" -> Gemini returns candidates."""
+    """"reasonable limits" -> Gemini + A2AJ -> verified=True."""
     fake_gemini_result = {
         "candidates": [
             {"name": "Canadian Charter of Rights and Freedoms, s 1", "citation": None, "type": "legislation"},
@@ -706,17 +716,23 @@ def test_expand_concept_reasonable_limits():
     }
     mock_ds = MagicMock()
     with patch("local_tools.citation_search.call_gemini_text_structured", return_value=fake_gemini_result), \
-         patch("local_tools.citation_search.ask_deepseek", mock_ds):
+         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
+         patch("local_tools.citation_search.fetch_by_citation", return_value={
+             "style_of_cause": "R v Oakes", "neutral_citation": "[1986] 1 SCR 103"}), \
+         patch("local_tools.utils.request_with_retry") as mock_a2aj_req:
+        mock_a2aj_req.return_value.raise_for_status.return_value = None
+        mock_a2aj_req.return_value.json.return_value = {
+            "results": [{"name_en": "Charter", "citation_en": ""}]
+        }
         results = expand_concept("reasonable limits")
 
     assert len(results) >= 1
-    assert results[0].get("verified") is False
-    assert results[0].get("verification_source") == "llm_only"
+    assert results[0].get("verified") is True
     mock_ds.assert_not_called()
 
 
 def test_expand_concept_duty_of_care():
-    """"duty of care" -> Gemini returns candidates."""
+    """"duty of care" -> Gemini + A2AJ -> verified=True."""
     fake_gemini_result = {
         "candidates": [
             {"name": "Donoghue v Stevenson", "citation": "[1932] AC 562", "type": "case"},
@@ -725,12 +741,13 @@ def test_expand_concept_duty_of_care():
     }
     mock_ds = MagicMock()
     with patch("local_tools.citation_search.call_gemini_text_structured", return_value=fake_gemini_result), \
-         patch("local_tools.citation_search.ask_deepseek", mock_ds):
+         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
+         patch("local_tools.citation_search.fetch_by_citation", return_value={
+             "style_of_cause": "Donoghue v Stevenson", "neutral_citation": "[1932] AC 562"}):
         results = expand_concept("duty of care")
 
     assert len(results) >= 1
-    assert results[0].get("verified") is False
-    assert results[0].get("verification_source") == "llm_only"
+    assert results[0].get("verified") is True
     mock_ds.assert_not_called()
 
 
