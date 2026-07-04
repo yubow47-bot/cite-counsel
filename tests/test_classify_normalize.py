@@ -655,8 +655,17 @@ def test_expand_concept_gladue_principle():
     assert "s 718" in all_text or "718.2" in all_text, f"Missing s718 in {names}"
     assert "R v Gladue" in all_text, f"Missing R v Gladue in {names}"
     assert "R v Ipeelee" in all_text, f"Missing R v Ipeelee in {names}"
+    # Legislation candidate must include full pinpoint, not bare "Criminal Code"
+    leg = [r for r in results if r.get("role") == "legislation"]
+    if leg:
+        assert "s 718.2(e)" in leg[0].get("name", ""), (
+            f"Legislation candidate must include full section reference, got: {leg[0].get('name')}"
+        )
     for r in results:
-        assert r.get("verified") is True
+        assert r.get("verified") is False, f"Expected verified=False for Gemini-only path, got {r}"
+        assert r.get("verification_source") == "llm_only", (
+            f"Expected verification_source=llm_only, got {r.get('verification_source')}"
+        )
     mock_ds.assert_not_called()
 
 
@@ -682,7 +691,8 @@ def test_expand_concept_oakes_test():
     assert "s 1" in all_text or "section 1" in all_text.lower(), f"Missing s 1 in {names}"
     assert "R v Oakes" in all_text, f"Missing R v Oakes in {names}"
     for r in results:
-        assert r.get("verified") is True
+        assert r.get("verified") is False
+        assert r.get("verification_source") == "llm_only"
     mock_ds.assert_not_called()
 
 
@@ -700,7 +710,8 @@ def test_expand_concept_reasonable_limits():
         results = expand_concept("reasonable limits")
 
     assert len(results) >= 1
-    assert results[0].get("verified") is True
+    assert results[0].get("verified") is False
+    assert results[0].get("verification_source") == "llm_only"
     mock_ds.assert_not_called()
 
 
@@ -718,7 +729,8 @@ def test_expand_concept_duty_of_care():
         results = expand_concept("duty of care")
 
     assert len(results) >= 1
-    assert results[0].get("verified") is True
+    assert results[0].get("verified") is False
+    assert results[0].get("verification_source") == "llm_only"
     mock_ds.assert_not_called()
 
 
