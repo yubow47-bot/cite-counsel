@@ -408,6 +408,14 @@ Rules:
         with prof.measure("llm.expand", model="gemini-2.5-flash"):
             result = call_gemini_text_structured(
                 prompt, _CONCEPT_SCHEMA,
+                # thinking_budget=4096 was tuned to reduce (not eliminate)
+                # real-but-topically-irrelevant candidate cases in concept
+                # expansion (e.g. Fundy Settlement v Canada, R v Zora were
+                # observed at budget=2048).  This is a quality mitigation, not
+                # a deterministic correctness guarantee — A2AJ verification
+                # (via _verify_items) confirms citation EXISTENCE, not
+                # substantive relevance, and must remain active regardless of
+                # thinking budget.
                 connect_timeout=5, read_timeout=12, thinking_budget=4096,
             )
         _gemini_elapsed = time.time() - t0
