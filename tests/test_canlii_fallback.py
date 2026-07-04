@@ -926,7 +926,8 @@ def test_verify_legislation_strips_pinpoint_from_name():
     mock_llm = MagicMock(return_value=_LLM_RESP_PINPOINT)
     mock_a2aj = MagicMock(return_value=_mock_a2aj_response(_A2AJ_OK_RESPONSE))
 
-    with patch("local_tools.citation_search.ask_deepseek", mock_llm), \
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value=None), \
+         patch("local_tools.citation_search.ask_deepseek", mock_llm), \
          patch("local_tools.utils.request_with_retry", mock_a2aj):
         results = expand_concept("gladue principle")
 
@@ -951,7 +952,8 @@ def test_verify_legislation_no_pinpoint_unchanged():
     mock_llm = MagicMock(return_value=_LLM_RESP_NO_PINPOINT)
     mock_a2aj = MagicMock(return_value=_mock_a2aj_response(_A2AJ_OK_RESPONSE))
 
-    with patch("local_tools.citation_search.ask_deepseek", mock_llm), \
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value=None), \
+         patch("local_tools.citation_search.ask_deepseek", mock_llm), \
          patch("local_tools.utils.request_with_retry", mock_a2aj):
         results = expand_concept("gladue principle")
 
@@ -975,7 +977,8 @@ def test_verify_legislation_no_citmatch_fallback():
     mock_llm = MagicMock(return_value=_LLM_RESP_NO_CITMATCH)
     mock_a2aj = MagicMock(return_value=_mock_a2aj_response(_A2AJ_EMPTY_RESPONSE))
 
-    with patch("local_tools.citation_search.ask_deepseek", mock_llm), \
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value=None), \
+         patch("local_tools.citation_search.ask_deepseek", mock_llm), \
          patch("local_tools.utils.request_with_retry", mock_a2aj):
         results = expand_concept("gladue principle")
 

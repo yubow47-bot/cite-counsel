@@ -9,11 +9,17 @@ import os
 import sys
 from unittest.mock import patch, MagicMock
 
+import pytest
+
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from local_tools.citation_search import classify_and_normalize, _infer_jurisdiction_canlii
+from local_tools.citation_search import (
+    classify_and_normalize,
+    _infer_jurisdiction_canlii,
+    expand_concept,
+)
 from core.spend_tracker import spend_tracker
 
 
@@ -620,3 +626,174 @@ def test_infer_jurisdiction_both_fail_returns_none():
         result = _infer_jurisdiction_canlii("Animal Protection Act")
 
     assert result is None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 10.  expand_concept — Gemini primary (thinking enabled, no A2AJ),
+#      DeepSeek fallback (with A2AJ verification), double-failure ValueError
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_expand_concept_gladue_principle():
+    """"gladue principle" -> Gemini returns Criminal Code, s718, R v Gladue, R v Ipeelee."""
+    fake_gemini_result = {
+        "candidates": [
+            {"name": "Criminal Code, RSC 1985, c C-46, s 718.2(e)", "citation": None, "type": "legislation"},
+            {"name": "R v Gladue", "citation": "[1999] 1 SCR 688", "type": "case"},
+            {"name": "R v Ipeelee", "citation": "2012 SCC 13", "type": "case"},
+        ]
+    }
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value=fake_gemini_result), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds):
+        results = expand_concept("gladue principle")
+
+    assert len(results) >= 3
+    names = [r.get("name", "") for r in results]
+    citations = [r.get("neutral_citation") or "" for r in results]
+    all_text = " ".join(names + citations)
+    assert "Criminal Code" in all_text, f"Missing Criminal Code in {names}"
+    assert "s 718" in all_text or "718.2" in all_text, f"Missing s718 in {names}"
+    assert "R v Gladue" in all_text, f"Missing R v Gladue in {names}"
+    assert "R v Ipeelee" in all_text, f"Missing R v Ipeelee in {names}"
+    for r in results:
+        assert r.get("verified") is True
+    mock_ds.assert_not_called()
+
+
+def test_expand_concept_oakes_test():
+    """"oakes test" -> Gemini returns Charter, s 1, R v Oakes."""
+    fake_gemini_result = {
+        "candidates": [
+            {"name": "Canadian Charter of Rights and Freedoms, s 1", "citation": None, "type": "legislation"},
+            {"name": "R v Oakes", "citation": "[1986] 1 SCR 103", "type": "case"},
+            {"name": "R v Big M Drug Mart", "citation": "[1985] 1 SCR 295", "type": "case"},
+        ]
+    }
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value=fake_gemini_result), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds):
+        results = expand_concept("oakes test")
+
+    assert len(results) >= 2
+    names = [r.get("name", "") for r in results]
+    citations = [r.get("neutral_citation") or "" for r in results]
+    all_text = " ".join(names + citations)
+    assert "Charter" in all_text, f"Missing Charter in {names}"
+    assert "s 1" in all_text or "section 1" in all_text.lower(), f"Missing s 1 in {names}"
+    assert "R v Oakes" in all_text, f"Missing R v Oakes in {names}"
+    for r in results:
+        assert r.get("verified") is True
+    mock_ds.assert_not_called()
+
+
+def test_expand_concept_reasonable_limits():
+    """"reasonable limits" -> Gemini returns candidates."""
+    fake_gemini_result = {
+        "candidates": [
+            {"name": "Canadian Charter of Rights and Freedoms, s 1", "citation": None, "type": "legislation"},
+            {"name": "R v Oakes", "citation": "[1986] 1 SCR 103", "type": "case"},
+        ]
+    }
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value=fake_gemini_result), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds):
+        results = expand_concept("reasonable limits")
+
+    assert len(results) >= 1
+    assert results[0].get("verified") is True
+    mock_ds.assert_not_called()
+
+
+def test_expand_concept_duty_of_care():
+    """"duty of care" -> Gemini returns candidates."""
+    fake_gemini_result = {
+        "candidates": [
+            {"name": "Donoghue v Stevenson", "citation": "[1932] AC 562", "type": "case"},
+            {"name": "Anns v Merton London Borough Council", "citation": "[1978] AC 728", "type": "case"},
+        ]
+    }
+    mock_ds = MagicMock()
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value=fake_gemini_result), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds):
+        results = expand_concept("duty of care")
+
+    assert len(results) >= 1
+    assert results[0].get("verified") is True
+    mock_ds.assert_not_called()
+
+
+def test_expand_concept_gemini_http_error_falls_back():
+    """Gemini returns None (failure) -> DeepSeek fallback with A2AJ verification."""
+    mock_ds = MagicMock(return_value=(
+        '{"candidates": ['
+        '{"name": "R v Gladue", "citation": "[1999] 1 SCR 688", "type": "case"}'
+        "]}"
+    ))
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value=None), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
+         patch("local_tools.citation_search.fetch_by_citation"), \
+         patch("local_tools.citation_search.search_cases_multi", return_value=[]):
+        results = expand_concept("gladue principle")
+
+    assert len(results) >= 1
+    mock_ds.assert_called_once()
+
+
+def test_expand_concept_gemini_timeout_falls_back():
+    """Simulate Gemini timeout -> DeepSeek fallback."""
+    mock_ds = MagicMock(return_value=(
+        '{"candidates": ['
+        '{"name": "R v Gladue", "citation": "[1999] 1 SCR 688", "type": "case"}'
+        "]}"
+    ))
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value=None), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
+         patch("local_tools.citation_search.fetch_by_citation"), \
+         patch("local_tools.citation_search.search_cases_multi", return_value=[]):
+        results = expand_concept("gladue principle")
+
+    assert len(results) >= 1
+    mock_ds.assert_called_once()
+
+
+def test_expand_concept_gemini_malformed_json_falls_back():
+    """Gemini returns malformed JSON -> DeepSeek fallback."""
+    mock_ds = MagicMock(return_value=(
+        '{"candidates": ['
+        '{"name": "R v Gladue", "citation": "[1999] 1 SCR 688", "type": "case"}'
+        "]}"
+    ))
+    # Simulate a non-dict return (malformed)
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value={"foo": "bar"}), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
+         patch("local_tools.citation_search.fetch_by_citation"), \
+         patch("local_tools.citation_search.search_cases_multi", return_value=[]):
+        results = expand_concept("gladue principle")
+
+    assert len(results) >= 1
+    mock_ds.assert_called_once()
+
+
+def test_expand_concept_gemini_empty_content_falls_back():
+    """Gemini returns empty candidates list -> DeepSeek fallback."""
+    mock_ds = MagicMock(return_value=(
+        '{"candidates": ['
+        '{"name": "R v Gladue", "citation": "[1999] 1 SCR 688", "type": "case"}'
+        "]}"
+    ))
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value={"candidates": []}), \
+         patch("local_tools.citation_search.ask_deepseek", mock_ds), \
+         patch("local_tools.citation_search.fetch_by_citation"), \
+         patch("local_tools.citation_search.search_cases_multi", return_value=[]):
+        results = expand_concept("gladue principle")
+
+    assert len(results) >= 1
+    mock_ds.assert_called_once()
+
+
+def test_expand_concept_double_failure_raises_value_error():
+    """Gemini fails AND DeepSeek fails -> ValueError raised."""
+    with patch("local_tools.citation_search.call_gemini_text_structured", return_value=None), \
+         patch("local_tools.citation_search.ask_deepseek", side_effect=RuntimeError("DS down")):
+        with pytest.raises(ValueError, match="LLM expansion failed after fallback"):
+            expand_concept("gladue principle")
