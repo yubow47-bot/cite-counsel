@@ -221,3 +221,117 @@ def test_verify_legislation_clean_schema():
         f"Pinpoint text {pinpoint_text!r} appears in {pin_count} fields "
         f"(expected exactly 1). Fields: {r}"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Test 5-10: fallback regex negative tests
+# The broader pinpoint fallback regex in verify_one() must NOT
+# over-capture Ontario-style chapter letter-number designators
+# ("c S.15", "c S.5", "c SS.1") as pinpoints, while still correctly
+# capturing real pinpoints after the chapter clause.
+#
+# All tests use mocked A2AJ that returns empty results so the
+# primary _verify_legislation path does NOT set a pinpoint, forcing
+# the fallback regex to run on the original LLM name.
+# ═══════════════════════════════════════════════════════════════════
+
+_LLM_NAME = {
+    "candidates": [
+        {"name": None, "citation": None, "type": "legislation"},
+    ]
+}
+
+_EMPTY_A2AJ = {"results": []}
+
+
+def _run_fallback_test(name_str: str) -> dict | None:
+    """Run expand_concept with a mocked legislation candidate and return
+    the result dict, or None if no legislation candidate was produced."""
+    from local_tools import citation_search as cs_mod
+
+    mock_llm = {
+        "candidates": [
+            {"name": name_str, "citation": None, "type": "legislation"},
+        ]
+    }
+
+    with patch.object(cs_mod, "call_gemini_text_structured", return_value=mock_llm):
+        with patch("local_tools.utils.request_with_retry") as mock_request:
+            mock_resp = mock_request.return_value
+            mock_resp.json.return_value = _EMPTY_A2AJ
+
+            results = cs_mod.expand_concept("test concept")
+
+    for r in results:
+        if r.get("role") == "legislation":
+            return r
+    return None
+
+
+def test_fallback_rejects_ontario_chapter_S15():
+    """'Some Act, RSO 1990, c S.15' -> fallback regex must NOT match
+    'S.15' as a pinpoint (it's a chapter letter-number, not a section)."""
+    r = _run_fallback_test("Some Act, RSO 1990, c S.15")
+    assert r is not None, "Expected a legislation candidate"
+    assert "pinpoint" not in r, (
+        f"Chapter letter-number 'S.15' must NOT be extracted as pinpoint, "
+        f"got {r.get('pinpoint')!r}. Keys: {list(r.keys())}"
+    )
+    assert r.get("verified") is False  # A2AJ returned empty
+
+
+def test_fallback_rejects_ontario_chapter_S5():
+    """'Some Act, RSO 1990, c S.5' -> fallback regex must NOT match
+    'S.5' as a pinpoint."""
+    r = _run_fallback_test("Some Act, RSO 1990, c S.5")
+    assert r is not None, "Expected a legislation candidate"
+    assert "pinpoint" not in r, (
+        f"Chapter letter-number 'S.5' must NOT be extracted as pinpoint, "
+        f"got {r.get('pinpoint')!r}"
+    )
+
+
+def test_fallback_rejects_ontario_chapter_SS1():
+    """'Some Act, RSO 1990, c SS.1' -> fallback regex must NOT match
+    'SS.1' as a pinpoint (double-S chapter letter)."""
+    r = _run_fallback_test("Some Act, RSO 1990, c SS.1")
+    assert r is not None, "Expected a legislation candidate"
+    assert "pinpoint" not in r, (
+        f"Chapter letter-number 'SS.1' must NOT be extracted as pinpoint, "
+        f"got {r.get('pinpoint')!r}"
+    )
+
+
+def test_fallback_rejects_federal_hyphen_chapter():
+    """'Some Act, RSC 1985, c S-15' -> already safe (hyphen not in [\\d(]),
+    but confirm no regression from the regex changes."""
+    r = _run_fallback_test("Some Act, RSC 1985, c S-15")
+    assert r is not None, "Expected a legislation candidate"
+    assert "pinpoint" not in r, (
+        f"Federal hyphen chapter 'S-15' must NOT be extracted, "
+        f"got {r.get('pinpoint')!r}"
+    )
+
+
+def test_fallback_matches_pinpoint_after_chapter_clause():
+    """'Some Act, RSO 1990, c S.15, s 5' -> must still correctly extract
+    's 5' as the pinpoint (real pinpoint following the full citation)."""
+    r = _run_fallback_test("Some Act, RSO 1990, c S.15, s 5")
+    assert r is not None, "Expected a legislation candidate"
+    assert r.get("pinpoint") == "s 5", (
+        f"Real pinpoint 's 5' after chapter clause must be extracted, "
+        f"got {r.get('pinpoint')!r}"
+    )
+    assert "name" not in r, "ad-hoc 'name' must NOT be present"
+
+
+def test_fallback_matches_constitutional_s1():
+    """'Canadian Charter of Rights and Freedoms, s 1' -> must still
+    correctly extract 's 1' (regression guard — this is why the
+    fallback was originally added)."""
+    r = _run_fallback_test("Canadian Charter of Rights and Freedoms, s 1")
+    assert r is not None, "Expected a legislation candidate"
+    assert r.get("pinpoint") == "s 1", (
+        f"Constitutional 's 1' must be extracted, "
+        f"got {r.get('pinpoint')!r}"
+    )

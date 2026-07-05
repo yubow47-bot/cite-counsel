@@ -498,8 +498,18 @@ Rules:
             # constitutional titles whose citation number does not match
             # _CITATION_REGEX), try a broader fallback on the original name.
             if not entry.get("pinpoint") and name:
+                # Negative lookbehinds reject Ontario-style chapter letter-number
+                # designators (e.g. "c S.15") that collide with the s/ss marker
+                # tokens.  A genuine pinpoint is never immediately preceded by
+                # the chapter marker "c " — it always follows the full citation
+                # (chapter clause already closed, then a comma, then the pinpoint).
+                # Federal-style hyphenated chapters ("c S-15") are safe because
+                # "-" is not in [\d(] and never reaches the lookbehinds.
+                # A \b word-boundary prefix prevents the "ss" alternation from
+                # matching at the second character of "SS" (s/ss chapter-letter
+                # case) where the lookbehinds would check the wrong position.
                 _broader = re.search(
-                    r'(?:,\s*)?((?:s|ss|art|cl|para|sub)\.?\s*[\d(][\d\w().,-]*(?:\s*\([\w\d]+\))*)\s*$',
+                    r'(?<!, c )(?<! c )(?:,\s*)?\b((?:s|ss|art|cl|para|sub)\.?\s*[\d(][\d\w().,-]*(?:\s*\([\w\d]+\))*)\s*$',
                     name,
                     re.IGNORECASE
                 )
