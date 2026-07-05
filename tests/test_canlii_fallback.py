@@ -922,7 +922,7 @@ def _mock_a2aj_response(data: dict):
 
 
 def test_verify_legislation_strips_pinpoint_from_name():
-    """Expanded concept with pinpoint suffix: name is cleaned, pinpoint extracted separately."""
+    """Expanded concept with pinpoint suffix: statute_title and pinpoint set via clean schema."""
     mock_llm = MagicMock(return_value=_LLM_RESP_PINPOINT)
     mock_a2aj = MagicMock(return_value=_mock_a2aj_response(_A2AJ_OK_RESPONSE))
 
@@ -936,19 +936,27 @@ def test_verify_legislation_strips_pinpoint_from_name():
     assert len(leg) == 1, f"Expected 1 legislation candidate, got {len(leg)}"
     leg = leg[0]
 
-    # name must be clean (no pinpoint suffix)
-    assert leg["name"] == "Criminal Code, RSC 1985, c C-46", (
-        f"Expected name without pinpoint suffix, got {leg['name']!r}"
+    # statute_title from A2AJ, not ad-hoc name field
+    assert leg.get("statute_title") == "Criminal Code", (
+        f"Expected statute_title='Criminal Code', got {leg.get('statute_title')!r}"
+    )
+    # ad-hoc name field must NOT be present
+    assert "name" not in leg, (
+        f"ad-hoc 'name' field must NOT be present, got {leg.get('name')!r}"
     )
     # pinpoint must be extracted separately
-    assert leg["pinpoint"] == "s 718.2(e)", (
+    assert leg.get("pinpoint") == "s 718.2(e)", (
         f"Expected pinpoint='s 718.2(e)', got {leg.get('pinpoint')!r}"
     )
     assert leg["verified"] is True
+    # citation from A2AJ
+    assert leg.get("citation") == "RSC 1985, c C-46", (
+        f"Expected citation='RSC 1985, c C-46', got {leg.get('citation')!r}"
+    )
 
 
 def test_verify_legislation_no_pinpoint_unchanged():
-    """Candidate without pinpoint: name unchanged, no pinpoint field."""
+    """Candidate without pinpoint: statute_title set, no pinpoint field."""
     mock_llm = MagicMock(return_value=_LLM_RESP_NO_PINPOINT)
     mock_a2aj = MagicMock(return_value=_mock_a2aj_response(_A2AJ_OK_RESPONSE))
 
@@ -961,9 +969,13 @@ def test_verify_legislation_no_pinpoint_unchanged():
     assert len(leg) == 1
     leg = leg[0]
 
-    # name unchanged (no pinpoint to strip)
-    assert leg["name"] == "Criminal Code, RSC 1985, c C-46", (
-        f"Expected name unchanged, got {leg['name']!r}"
+    # statute_title from A2AJ
+    assert leg.get("statute_title") == "Criminal Code", (
+        f"Expected statute_title='Criminal Code', got {leg.get('statute_title')!r}"
+    )
+    # ad-hoc name must NOT be present
+    assert "name" not in leg, (
+        f"ad-hoc 'name' must NOT be present, got {leg.get('name')!r}"
     )
     # no pinpoint field should be present
     assert "pinpoint" not in leg or not leg["pinpoint"], (
@@ -973,7 +985,7 @@ def test_verify_legislation_no_pinpoint_unchanged():
 
 
 def test_verify_legislation_no_citmatch_fallback():
-    """Candidate where cit_match doesn't match: name stays as original string."""
+    """Candidate where cit_match doesn't match: no ad-hoc name, warning present."""
     mock_llm = MagicMock(return_value=_LLM_RESP_NO_CITMATCH)
     mock_a2aj = MagicMock(return_value=_mock_a2aj_response(_A2AJ_EMPTY_RESPONSE))
 
@@ -986,9 +998,10 @@ def test_verify_legislation_no_citmatch_fallback():
     assert len(leg) == 1
     leg = leg[0]
 
-    # name must be the original string (no cit_match → no cleanup)
-    assert leg["name"] == "Some Non-existent Act, s 5", (
-        f"Expected original name, got {leg['name']!r}"
+    # ad-hoc name must NOT be present (the clean legislation schema
+    # does not include 'name'; cit_match failing doesn't change this)
+    assert "name" not in leg, (
+        f"ad-hoc 'name' must NOT be present, got {leg.get('name')!r}"
     )
     # should have a warning (A2AJ returned no results)
     assert "warning" in leg

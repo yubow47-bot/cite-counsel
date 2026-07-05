@@ -382,8 +382,16 @@ Rules:
     def _verify_legislation(name: str) -> dict:
         """验证法规候选：标准化 → A2AJ /fetch(doc_type=laws)。
         与 search_citation() legislation 路由做法一致。
+
+        Returns the same field schema as the direct legislation branch of
+        search_citation(): statute_title, jurisdiction, chapter, pinpoint,
+        citation, verified, warning.  Does NOT return ad-hoc "name" or
+        "neutral_citation" fields — those belong to the LLM candidate shape
+        and cause duplicate pinpoint rendering in format_citation when mixed
+        with the clean legislation schema.
         """
         from local_tools.utils import a2aj_session, request_with_retry
+        from local_tools.a2aj_api import _extract_jurisdiction
         import os as _os
 
         entry = {"verified": False}
@@ -419,10 +427,15 @@ Rules:
         _pin = extract_pinpoint(normalized)
         if _pin:
             entry["pinpoint"] = _pin
-        # Strip the pinpoint suffix from name so format_citation doesn't
-        # include it both via the embedded text and the standalone field.
-        if _pin and cit_match:
-            entry["name"] = normalized[:cit_match.end()].strip().rstrip(',').strip()
+
+        # 提前提取 chapter（与 search_citation() legislation 分支一致）
+        chapter = None
+        if cit_match:
+            ch_match = re.search(r'(c\s[\w.-]+)', base_citation)
+            if ch_match:
+                chapter = ch_match.group(1)
+        if chapter:
+            entry["chapter"] = chapter
 
         # 3. A2AJ /fetch(doc_type="laws")
         try:
@@ -440,7 +453,18 @@ Rules:
             if results:
                 entry["verified"] = True
                 entry["statute_title"] = results[0].get("name_en", normalized)
-                entry["neutral_citation"] = results[0].get("citation_en", base_citation)
+                # citation from A2AJ, fall back to base_citation
+                cit_en = results[0].get("citation_en", base_citation)
+                entry["citation"] = cit_en
+                # Extract chapter from A2AJ citation if not already set
+                if not chapter:
+                    ch_match = re.search(r'(c\s[\w.-]+)', cit_en)
+                    if ch_match:
+                        entry["chapter"] = ch_match.group(1)
+                # Extract jurisdiction from dataset
+                jur = _extract_jurisdiction(results[0].get("dataset", ""))
+                if jur:
+                    entry["jurisdiction"] = jur
                 return entry
         except Exception:
             pass
@@ -470,6 +494,23 @@ Rules:
         if ctype == "legislation":
             result = _verify_legislation(name)
             entry.update(result)
+            # If _verify_legislation did not extract a pinpoint (e.g. for
+            # constitutional titles whose citation number does not match
+            # _CITATION_REGEX), try a broader fallback on the original name.
+            if not entry.get("pinpoint") and name:
+                _broader = re.search(
+                    r'(?:,\s*)?((?:s|ss|art|cl|para|sub)\.?\s*[\d(][\d\w().,-]*(?:\s*\([\w\d]+\))*)\s*$',
+                    name,
+                    re.IGNORECASE
+                )
+                if _broader:
+                    entry["pinpoint"] = _broader.group(1)
+            # Clean up ad-hoc LLM-candidate fields not part of the clean
+            # legislation schema (statute_title, jurisdiction, chapter,
+            # citation, pinpoint).  The "role" key is preserved for
+            # detect_type() routing.
+            entry.pop("name", None)
+            entry.pop("neutral_citation", None)
             return entry
         else:
             result = _verify_case(name, citation)
