@@ -121,3 +121,23 @@ git checkout HEAD~1 -- local_tools/citation_search.py
 ```
 
 No database, schema, or config changes required.
+
+---
+
+## Follow-up: citation-number proximity comment added
+
+A code comment was added in `local_tools/citation_search.py` directly above the citation-number-proximity prompt rule (line 242–249):
+
+```python
+            # Citation-number/year proximity association (e.g. selecting a case
+            # because its SCC number or year is adjacent to a known-correct case)
+            # is a known LLM associative failure mode.  This prompt rule is a
+            # mitigation, not a deterministic filter — A2AJ verification (via
+            # _verify_items) still only confirms citation EXISTENCE, not topical
+            # relevance, and must remain active.  If a third proximity-based
+            # incident occurs, consider structural post-processing (detect
+            # SCC-number/year adjacency programmatically and flag/deprioritize)
+            # rather than adding another named exclusion to this prompt.
+```
+
+The comment documents the known failure mode, the limits of the prompt-level mitigation, and a specific structural recommendation (programmatic adjacency detection) if a third incident occurs. No other code changes were made.
