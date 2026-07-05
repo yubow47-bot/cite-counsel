@@ -288,6 +288,8 @@ Rules:
     def _verify_case(name: str, citation: str) -> dict:
         """验证判例候选：citation 优先 /fetch，失败/为空则按案名搜索。"""
         entry = {"verified": False}
+
+        # ── Primary path: verify via fetch_by_citation ──
         if citation:
             try:
                 verified = fetch_by_citation(citation)
@@ -297,16 +299,83 @@ Rules:
                     return entry
             except Exception:
                 pass
-        if name:
-            try:
-                results = search_cases_multi(name, size=1, search_type="name")
-                if results:
-                    mapped = _map_fields(results[0])
-                    entry["verified"] = True
-                    entry.update(mapped)
+
+        # ── Fallback: name search with date-bounding & name-normalization matching ──
+        if not name:
+            entry["warning"] = "⚠️ 未能在数据库验证该判例"
+            return entry
+
+        # Build name-normalization: strip R v / R c / Regina v / The Queen v
+        # prefix (with optional dots, as A2AJ returns "R. v. Creighton"),
+        # then strip remaining punctuation and lowercase for comparison.
+        _prefix_re = re.compile(
+            r"^(?:R\.?\s+v\.?|R\.?\s+c\.?|Regina\s+v\.?|The\s+Queen\s+v\.?)\s+",
+            re.IGNORECASE,
+        )
+
+        def _normalize_case_name(s: str) -> str:
+            """Normalize case name: strip prefix, remove dots, lowercase."""
+            s = _prefix_re.sub("", s)
+            s = s.replace(".", "")
+            return s.strip().lower()
+
+        name_key = _normalize_case_name(name)
+
+        # Try to extract year from the LLM-provided citation for date-bounding
+        _, year = _extract_year(citation) if citation else (None, None)
+
+        def _filter_by_name(results: list) -> list:
+            """Filter results by name normalization; return matched list."""
+            matched = []
+            for r in results:
+                result_name = r.get("name_en", "")
+                if _normalize_case_name(result_name) == name_key:
+                    matched.append(r)
+            return matched
+
+        try:
+            if year:
+                results = search_cases_multi(
+                    name, size=5, search_type="name",
+                    start_date=f"{year}-01-01", end_date=f"{year}-12-31",
+                )
+                if not results:
+                    # Zero results after year-bounding → verified=False, no wider fallback
+                    entry["warning"] = "⚠️ 未能在数据库验证该判例"
                     return entry
-            except Exception:
-                pass
+                matched = _filter_by_name(results)
+                if len(matched) == 1:
+                    mapped = _map_fields(matched[0])
+                    entry.update(mapped)
+                    entry["verified"] = True
+                    return entry
+                elif len(matched) == 0:
+                    # Year-bounded but name didn't match → verified=False
+                    entry["warning"] = "⚠️ 未能在数据库验证该判例"
+                    return entry
+                else:
+                    # 2+ same-name, same-year → ambiguous
+                    entry["warning"] = "⚠️ 该案名在同一年份存在多个同名判例，无法确认具体是哪一个"
+                    return entry
+            else:
+                # No year extractable — unbounded search with name normalization
+                results = search_cases_multi(name, size=5, search_type="name")
+                if not results:
+                    entry["warning"] = "⚠️ 未能在数据库验证该判例"
+                    return entry
+                matched = _filter_by_name(results)
+                if len(matched) == 1:
+                    mapped = _map_fields(matched[0])
+                    entry.update(mapped)
+                    entry["verified"] = True
+                    return entry
+                else:
+                    # 0 or 2+ matches → ambiguous
+                    entry["warning"] = "⚠️ 该案名存在多个同名判例，无法确认具体是哪一个"
+                    return entry
+        except Exception:
+            pass
+
         entry["warning"] = "⚠️ 未能在数据库验证该判例"
         return entry
 
