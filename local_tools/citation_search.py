@@ -209,6 +209,17 @@ def expand_concept(query: str) -> list:
     _fn_t0 = time.perf_counter()
     logger.debug("[DUR] expand_concept START — query_len=%d query=%s", len(query), query[:80])
 
+    # Citation-number/year proximity association (e.g. selecting a case
+    # because its SCC number or year is adjacent to a known-correct case)
+    # is a known LLM associative failure mode.  The prompt rules below
+    # (substantive-relevance and citation-number-proximity prohibitions)
+    # are mitigations, not a deterministic filter — A2AJ verification
+    # (via _verify_items) still only confirms citation EXISTENCE, not
+    # topical relevance, and must remain active.  If a third proximity-based
+    # incident occurs, consider structural post-processing (detect
+    # SCC-number/year adjacency programmatically and flag/deprioritize)
+    # rather than adding another named exclusion to this prompt.
+
     prompt = f"""You are a Canadian legal citation expert. The user query is: "{query}"
 
 A legal concept can have two types of sources:
@@ -242,16 +253,7 @@ Rules:
   that is DIRECTLY about the queried concept — a landmark precedent that established,
   refined, or is fundamentally cited for the concept.  Do NOT include cases that merely
   mention the concept in passing or are tangentially related through a shared area of law.
-            # Citation-number/year proximity association (e.g. selecting a case
-            # because its SCC number or year is adjacent to a known-correct case)
-            # is a known LLM associative failure mode.  This prompt rule is a
-            # mitigation, not a deterministic filter — A2AJ verification (via
-            # _verify_items) still only confirms citation EXISTENCE, not topical
-            # relevance, and must remain active.  If a third proximity-based
-            # incident occurs, consider structural post-processing (detect
-            # SCC-number/year adjacency programmatically and flag/deprioritize)
-            # rather than adding another named exclusion to this prompt.
-            - IMPORTANT — do NOT select candidates based on citation-number proximity, year proximity,
+        - IMPORTANT — do NOT select candidates based on citation-number proximity, year proximity,
   or SCC sequence-number similarity to another correct candidate.  Sharing a similar SCC
   number, docket number, or being decided in the same year as a case you have correctly
   identified is NOT a valid basis for inclusion.  Only substantive legal subject-matter
@@ -435,7 +437,7 @@ Rules:
                 # (via _verify_items) confirms citation EXISTENCE, not
                 # substantive relevance, and must remain active regardless of
                 # thinking budget.
-                connect_timeout=5, read_timeout=12, thinking_budget=4096,
+                connect_timeout=5, read_timeout=20, thinking_budget=4096,
             )
         _gemini_elapsed = time.time() - t0
         logger.debug("[DUR] expand_concept Gemini — %.1fms  result=%s",
