@@ -655,13 +655,13 @@ def test_expand_concept_gladue_principle():
         results = expand_concept("gladue principle")
 
     assert len(results) >= 3
-    names = [r.get("name", "") for r in results]
-    citations = [r.get("neutral_citation") or "" for r in results]
+    names = [r.get("statute_title") or r.get("name", "") for r in results]
+    citations = [r.get("citation") or r.get("neutral_citation") or "" for r in results]
     all_text = " ".join(names + citations)
     assert "Criminal Code" in all_text, f"Missing Criminal Code in {names}"
     assert "R v Gladue" in all_text, f"Missing R v Gladue in {names}"
     assert "R v Ipeelee" in all_text, f"Missing R v Ipeelee in {names}"
-    # Legislation candidate: pinpoint extracted into separate field by existing A2AJ logic
+    # Legislation candidate: pinpoint extracted into separate field by _verify_legislation
     leg = [r for r in results if r.get("role") == "legislation"]
     if leg:
         assert leg[0].get("pinpoint") == "s 718.2(e)", (
@@ -695,9 +695,10 @@ def test_expand_concept_oakes_test():
         results = expand_concept("oakes test")
 
     assert len(results) >= 2
-    names = [r.get("name", "") for r in results]
-    citations = [r.get("neutral_citation") or "" for r in results]
-    all_text = " ".join(names + citations)
+    names = [r.get("statute_title") or r.get("name", "") for r in results]
+    citations = [r.get("citation") or r.get("neutral_citation") or "" for r in results]
+    pinpoints = [r.get("pinpoint", "") or "" for r in results]
+    all_text = " ".join(names + citations + pinpoints)
     assert "Charter" in all_text, f"Missing Charter in {names}"
     assert "s 1" in all_text or "section 1" in all_text.lower(), f"Missing s 1 in {names}"
     assert "R v Oakes" in all_text, f"Missing R v Oakes in {names}"

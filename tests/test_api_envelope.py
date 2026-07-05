@@ -120,19 +120,21 @@ _CLASSIFICATION_CONCEPT = {
 
 _LEGISLATION_RESULT_WITH_PIN = {
     "verified": True, "statute_title": "Criminal Code",
-    "neutral_citation": "RSC 1985, c C-46", "pinpoint": "s 718.2(e)",
+    "citation": "RSC 1985, c C-46", "pinpoint": "s 718.2(e)",
     "_match_path": "exact", "warning": "",
 }
 
 _CASE_RESULT_WITH_PIN = {
-    "verified": True, "name": "R v Gladue",
+    "verified": True, "style_of_cause": "R v Gladue",
     "neutral_citation": "[1999] 1 SCR 688", "pinpoint": "at para 47",
 }
 
 _CONCEPT_RESULT_LEGISLATION = {
-    "verified": True, "name": "Criminal Code, RSC 1985, c C-46",
-    "neutral_citation": "RSC 1985, c C-46", "pinpoint": "s 718.2(e)",
-    "role": "legislation", "statute_title": "Criminal Code",
+    "verified": True,
+    "statute_title": "Criminal Code",
+    "citation": "RSC 1985, c C-46",
+    "pinpoint": "s 718.2(e)",
+    "role": "legislation",
 }
 
 _CIT_LEGISLATION_WITH_PIN = "Criminal Code, RSC 1985, c C-46, s 718.2(e)."
@@ -199,9 +201,9 @@ def test_concept_route_no_pinpoint_field():
 
 
 def test_citation_select_has_pinpoint_field():
-    """citation_select strips pinpoint before formatting, returns it separately."""
+    """citation_select strips pinpoint for case candidates, returns it separately."""
     candidate = {
-        "name": "R v Gladue",
+        "style_of_cause": "R v Gladue",
         "neutral_citation": "[1999] 1 SCR 688",
         "pinpoint": "at para 47",
     }

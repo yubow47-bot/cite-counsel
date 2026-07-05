@@ -508,9 +508,23 @@ async def citation_select(body: CitationSelectInput):
     item = body.candidates[body.selected_index]
 
     try:
-        # Strip pinpoint before format_citation (composed client-side)
+        # Determine whether this candidate represents a case/jurisprudence
+        # result.  Only for case/jurisprudence candidates is pinpoint
+        # stripped from the formatted citation text and returned as a
+        # separate client-side-editable field.  For legislation, bill,
+        # and other types the pinpoint is part of the citation text and
+        # must be passed through to format_citation as-is.
+        # Concept-route case items carry role="case"; direct case_name
+        # route items carry style_of_cause (but not bill_session, which
+        # distinguishes bill items that also carry style_of_cause).
+        _is_case = (
+            item.get("role") == "case"
+            or (bool(item.get("style_of_cause")) and not item.get("bill_session"))
+        )
+
+        # Strip pinpoint only for case/jurisprudence candidates
         _pin = item.get("pinpoint")
-        if _pin:
+        if _pin and _is_case:
             fmt_item = {k: v for k, v in item.items() if k != "pinpoint"}
             citation = format_citation(_without_internal(fmt_item))
         else:
@@ -519,7 +533,8 @@ async def citation_select(body: CitationSelectInput):
         # detect_type cannot classify LEGISinfo record keys.
         item_source_type = "bill" if item.get("bill_session") else detect_type(item)
         _cit_data: dict = {"citation": citation, "source_type": item_source_type}
-        if _pin:
+        # Return pinpoint as separate field only for case/jurisprudence
+        if _pin and _is_case:
             _cit_data["pinpoint"] = _pin
         debug = _collect_debug_info("select")
         return _envelope(
