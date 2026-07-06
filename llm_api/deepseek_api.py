@@ -178,6 +178,14 @@ def extract_from_url(url: str) -> dict:
     Returns a dict with ``"error"`` key on failure so the caller can degrade
     to the manual scaffold.
     """
+    # ── PDF URL short-circuit ──
+    # We have no PDF text/byte parser in this module, so a .pdf-suffixed URL
+    # can never produce correct document data.  Return immediately before any
+    # network call to avoid silently returning archive-interstitial metadata.
+    _path = url.split("?", 1)[0]
+    if _path.lower().endswith(".pdf"):
+        return {"url": url, "error": "We can't reliably read a direct PDF link. Please fill in the citation fields manually."}
+
     import trafilatura
 
     html = fetch_html(url, timeout=URL_EXTRACT_FETCH_TIMEOUT)
