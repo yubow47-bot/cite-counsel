@@ -118,3 +118,17 @@ class TestExtractCasePinpoint:
 
     def test_case_insensitive(self):
         assert extract_case_pinpoint("R v PATEL AT PARA 42") == "AT PARA 42"
+
+    # ── New tests for Item 2 (extract_case_pinpoint boundary gap) ─────────
+
+    def test_paras_plural_single_number(self):
+        """'at paras N' (plural, single number, no range) is now matched."""
+        assert extract_case_pinpoint("r v smith at paras 10") == "at paras 10"
+
+    def test_no_boundary_false_positive(self):
+        """Word-boundary guard on 'at' prevents match inside a longer token."""
+        assert extract_case_pinpoint("R v Format10") == ""
+
+    def test_existing_paras_range_still_works(self):
+        """Regression guard: 'at paras N-M' still matches the whole range."""
+        assert extract_case_pinpoint("r v jones at paras 10-15") == "at paras 10-15"

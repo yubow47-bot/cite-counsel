@@ -101,6 +101,7 @@ def extract_case_pinpoint(raw_input: str) -> str:
     Recognizes trailing patterns at the END of the input:
       "at para N"       e.g. "at para 2"
       "at paras N-M"    e.g. "at paras 10-15"
+      "at paras N"      e.g. "at paras 10"
       "at N"            e.g. "at 47"
       "at p N"          e.g. "at p 5"
       "at pp N-M"       e.g. "at pp 10-15"
@@ -113,10 +114,11 @@ def extract_case_pinpoint(raw_input: str) -> str:
     # Order matters: longer patterns first to avoid partial matches
     patterns = [
         r'at\s+paras\s+\d+(?:-\d+)$',
+        r'at\s+paras\s+\d+$',
         r'at\s+para\s+\d+(?:-\d+)?$',
         r'at\s+pp\s+\d+(?:-\d+)$',
         r'at\s+p\s+\d+(?:-\d+)?$',
-        r'at\s+\d+$',
+        r'\bat\s+\d+$',
     ]
     for pat in patterns:
         m = re.search(pat, s, re.IGNORECASE)

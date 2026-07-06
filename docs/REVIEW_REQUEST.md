@@ -1,133 +1,168 @@
-# Review Request: Fallback Regex Over-Capture of Ontario Chapter Letter-Numbers
+# Review Request: `extract_case_pinpoint()` boundary gap + repo hygiene
 
-**Date:** 2026-07-05  
-**Author:** Claude Code  
+**Date:** 2026-07-06
+**Author:** Claude Code
 **Reviewer:** Yubo (sole committer)
 
 ---
 
 ## Summary
 
-The broader pinpoint fallback regex in `verify_one()` (`local_tools/citation_search.py`)
-matched Ontario-style chapter letter-number designators (e.g. `"c S.15"`, `"c S.5"`,
-`"c SS.1"`) as if `"S.15"`, `"S.5"`, `"SS.1"` were section pinpoints. The root
-cause was that the chapter letter `S` collides with the `s`/`ss` pinpoint-marker
-tokens in the regex alternation `(?:s|ss|art|cl|para|sub)`.
+Two independent items:
 
-## Fix
+1. **Repo hygiene** — stale docs at root (`REVIEW_REQUEST.md`, `FOLLOW_UPS.md`) deleted; 10 one-off diagnostic/profiling artifacts moved to `profiling/`.
+2. **`extract_case_pinpoint()` boundary gap** (`local_tools/utils.py`) — word-boundary guard added to prevent false-positive "at N" matches inside longer tokens; new pattern added for the `"at paras N"` (plural, single number) form.
 
-Added three guards to the fallback regex:
+---
 
-1. **Negative lookbehind `(?<!, c )`** — rejects a match where the captured token
-   is immediately preceded by `", c "` (standard chapter-clause marker).
+## Item 1 — Files Deleted / Moved
 
-2. **Negative lookbehind `(?<! c )`** — rejects a match where the captured token
-   is immediately preceded by `" c "` (chapter marker without preceding comma).
+### Deleted
 
-3. **Word-boundary `\b`** — prevents the `ss` alternation from matching at the
-   second character of `"SS"` (e.g. in `"c SS.1"`, the `s` alternation would
-   otherwise match at the second `S`, placing the lookbehinds at the wrong
-   offset where they fail to catch the chapter-signal).
+| File | Reason |
+|---|---|
+| `REVIEW_REQUEST.md` | Stale artifact from an earlier review round (pinpoint v2), superseded by `docs/REVIEW_REQUEST.md` (2026-07-05, fallback regex over-capture fix) |
+| `FOLLOW_UPS.md` | Documented 7 test failures that no longer reproduce on current HEAD (confirmed: both full-suite runs show 0 failures) |
 
-A real pinpoint always follows the complete citation (chapter clause already
-closed, then a comma, then the pinpoint), so none of these guards block real
-pinpoint detection.
+### Moved to `profiling/`
 
-Federal-style hyphenated chapters (`"c S-15"`) were already safe because `-`
-is not in `[\d(]` and never reaches the lookbehinds.
+The following 10 files were moved (not deleted — kept for potential reference):
 
-## Diff
+- `diagnose_format_latency.py`
+- `diag_format_smoke.py`
+- `diag_result.json`
+- `diag_thinking_mode.py`
+- `diag_thinking_mode3.py`
+- `diag_thinking_smoke.py`
+- `debug_prompt.txt`
+- `favicon_options.png`
+- `test_format_timing.py`
+- `test_run.py`
 
-### `local_tools/citation_search.py` (regex fix only)
+No name collisions existed in `profiling/` (existing contents: `__init__.py`, `run.py`, `timing.py`).
+
+---
+
+## Item 2 — Regex Diff
+
+### `local_tools/utils.py` — `extract_case_pinpoint()`
 
 ```diff
-                 _broader = re.search(
--                    r'(?:,\s*)?((?:s|ss|art|cl|para|sub)\.?\s*[\d(][\d\w().,-]*(?:\s*\([\w\d]+\))*)\s*$',
-+                    r'(?<!, c )(?<! c )(?:,\s*)?\b((?:s|ss|art|cl|para|sub)\.?\s*[\d(][\d\w().,-]*(?:\s*\([\w\d]+\))*)\s*$',
-                     name,
-                     re.IGNORECASE
-                 )
+     Recognizes trailing patterns at the END of the input:
+       "at para N"       e.g. "at para 2"
+       "at paras N-M"    e.g. "at paras 10-15"
++      "at paras N"      e.g. "at paras 10"
+       "at N"            e.g. "at 47"
+       "at p N"          e.g. "at p 5"
+       "at pp N-M"       e.g. "at pp 10-15"
+@@
+     # Order matters: longer patterns first to avoid partial matches
+     patterns = [
+         r'at\s+paras\s+\d+(?:-\d+)$',
++        r'at\s+paras\s+\d+$',
+         r'at\s+para\s+\d+(?:-\d+)?$',
+         r'at\s+pp\s+\d+(?:-\d+)$',
+         r'at\s+p\s+\d+(?:-\d+)?$',
+-        r'at\s+\d+$',
++        r'\bat\s+\d+$',
+     ]
 ```
 
-### `tests/test_pinpoint_regression.py` (6 new tests)
+**Change 1 — `\b` word-boundary guard (line 121):**
+`r'at\s+\d+$'` → `r'\bat\s+\d+$'`
 
-- `test_fallback_rejects_ontario_chapter_S15` — `"c S.15"` must NOT produce pinpoint
-- `test_fallback_rejects_ontario_chapter_S5` — `"c S.5"` must NOT produce pinpoint
-- `test_fallback_rejects_ontario_chapter_SS1` — `"c SS.1"` must NOT produce pinpoint
-- `test_fallback_rejects_federal_hyphen_chapter` — `"c S-15"` already safe, no regression
-- `test_fallback_matches_pinpoint_after_chapter_clause` — `", s 5"` after chapter clause MUST extract
-- `test_fallback_matches_constitutional_s1` — `"Charter, s 1"` MUST still extract (original fix regression guard)
+Without `\b`, a case name ending in a word followed by `at` and digits (e.g. `"R v Format10"` → the regex would see `at 10` inside `"Format10"`) could false-positive match. The `\b` ensures `at` is preceded by a word boundary (whitespace or start-of-string), not another word character.
+
+**Change 2 — `"at paras N"` pattern (new line 117):**
+`r'at\s+paras\s+\d+$'`
+
+The existing `at\s+paras\s+\d+(?:-\d+)$` requires the `-M` range suffix (the `(?:-\d+)` group is not optional). Inputs like `"at paras 10"` (single number, no dash) silently returned `""`, discarding the pinpoint. The new pattern matches the standalone `"at paras N"` form.
+
+### `tests/local_tools/test_format_util.py` — 3 new tests
+
+```python
+def test_paras_plural_single_number(self):
+    """'at paras N' (plural, single number, no range) is now matched."""
+    assert extract_case_pinpoint("r v smith at paras 10") == "at paras 10"
+
+def test_no_boundary_false_positive(self):
+    """Word-boundary guard on 'at' prevents match inside a longer token."""
+    assert extract_case_pinpoint("R v Format10") == ""
+
+def test_existing_paras_range_still_works(self):
+    """Regression guard: 'at paras N-M' still matches the whole range."""
+    assert extract_case_pinpoint("r v jones at paras 10-15") == "at paras 10-15"
+```
+
+### `extract_pinpoint()` — untouched
+
+`extract_pinpoint()` (separate function in the same file, lines 130–149) was deliberately left byte-for-byte unchanged. No changes were made to `citation_search.py` or any other file.
+
+---
 
 ## Test Output
 
-### Full suite (specified command)
+### Run 1 — Before deleting `FOLLOW_UPS.md` (to confirm 7 prior failures gone)
 
 ```
 $ python -m pytest tests/ --ignore=tests/test_crossref.py -q
-424 passed, 2 skipped, 16 warnings in 29.42s
+427 passed, 2 skipped, 16 warnings in 38.50s
 ```
 
-### Pinpoint-specific tests (all 18)
+### Run 2 — Final run after all changes
 
 ```
-$ python -m pytest tests/test_pinpoint_regression.py tests/test_api_envelope.py -v
-
-tests/test_pinpoint_regression.py::test_direct_legislation_pinpoint_once PASSED
-tests/test_pinpoint_regression.py::test_concept_legislation_via_select_pinpoint_once PASSED
-tests/test_pinpoint_regression.py::test_case_citation_select_has_pinpoint_field PASSED
-tests/test_pinpoint_regression.py::test_verify_legislation_clean_schema PASSED
-tests/test_pinpoint_regression.py::test_fallback_rejects_ontario_chapter_S15 PASSED
-tests/test_pinpoint_regression.py::test_fallback_rejects_ontario_chapter_S5 PASSED
-tests/test_pinpoint_regression.py::test_fallback_rejects_ontario_chapter_SS1 PASSED
-tests/test_pinpoint_regression.py::test_fallback_rejects_federal_hyphen_chapter PASSED
-tests/test_pinpoint_regression.py::test_fallback_matches_pinpoint_after_chapter_clause PASSED
-tests/test_pinpoint_regression.py::test_fallback_matches_constitutional_s1 PASSED
-tests/test_api_envelope.py::test_assemble_scaffold_disabled_returns_unsupported PASSED
-tests/test_api_envelope.py::test_assemble_scaffold_disabled_no_verified_citation PASSED
-tests/test_api_envelope.py::test_jur_none_shows_specific_message PASSED
-tests/test_api_envelope.py::test_other_match_path_shows_generic_message PASSED
-tests/test_api_envelope.py::test_legislation_route_no_pinpoint_field PASSED
-tests/test_api_envelope.py::test_case_route_has_pinpoint_field PASSED
-tests/test_api_envelope.py::test_concept_route_no_pinpoint_field PASSED
-tests/test_api_envelope.py::test_citation_select_has_pinpoint_field PASSED
-(All 18 passed)
+$ python -m pytest tests/ --ignore=tests/test_crossref.py -q
+427 passed, 2 skipped, 16 warnings in 27.55s
 ```
+
+### Pinpoint-specific tests (all 32 pass)
+
+```
+$ python -m pytest tests/local_tools/test_format_util.py -v
+...
+tests/local_tools/test_format_util.py::TestExtractPinpoint::test_pinpoint_present PASSED
+tests/local_tools/test_format_util.py::TestExtractPinpoint::test_no_pinpoint PASSED
+tests/local_tools/test_format_util.py::TestExtractPinpoint::test_act_level_only PASSED
+tests/local_tools/test_format_util.py::TestExtractPinpoint::test_sc_regulation PASSED
+tests/local_tools/test_format_util.py::TestExtractPinpoint::test_sor_regulation PASSED
+tests/local_tools/test_format_util.py::TestExtractPinpoint::test_bc_regulation PASSED
+tests/local_tools/test_format_util.py::TestExtractPinpoint::test_empty_string PASSED
+tests/local_tools/test_format_util.py::TestExtractPinpoint::test_no_citation_match PASSED
+tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_at_para_n PASSED
+tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_at_paras_range PASSED
+tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_bare_at_number PASSED
+tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_at_p_n PASSED
+tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_at_pp_range PASSED
+tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_no_pinpoint_no_match PASSED
+tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_trailing_period_no_match PASSED
+tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_citation_number_no_match PASSED
+tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_reporter_no_match PASSED
+tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_pinpoint_not_at_end_no_match PASSED
+tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_empty_string PASSED
+tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_none_input PASSED
+tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_at_para_single_digit PASSED
+tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_case_insensitive PASSED
+tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_paras_plural_single_number PASSED
+tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_no_boundary_false_positive PASSED
+tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_existing_paras_range_still_works PASSED
+32 passed in 0.15s
+```
+
+---
 
 ## Regression Count
 
-| Metric | Before fix (`a9807f8`) | After fix (`86f0140`) |
+| Metric | Baseline (`40b47e9`) | After changes (current HEAD) |
 |---|---|---|
-| Tests passed | 418 | 424 |
+| Tests passed | 424 | 427 |
 | Tests skipped | 2 | 2 |
 | Tests failed | 0 | 0 |
-| Total collected | 420 | 426 |
+| Total collected | 426 | 429 |
 
-The delta of +6 is the new negative regression tests. All existing tests
-continue to pass unchanged.
+The delta of +3 is the new pinpoint-boundary regression tests. All 15 pre-existing `TestExtractCasePinpoint` tests and all 8 `TestExtractPinpoint` tests pass unchanged.
 
-## Regex Verification (pass/fail on each required case)
-
-Full regex: `r'(?<!, c )(?<! c )(?:,\s*)?\b((?:s|ss|art|cl|para|sub)\.?\s*[\d(][\d\w().,-]*(?:\s*\([\w\d]+\))*)\s*$'`
-
-| Input | Expected | Result |
-|---|---|---|
-| `"Some Act, RSO 1990, c S.15"` | NO match (chapter letter-number) | PASS |
-| `"Some Act, RSO 1990, c S.5"` | NO match (chapter letter-number) | PASS |
-| `"Some Act, RSO 1990, c SS.1"` | NO match (double-S chapter letter) | PASS |
-| `"Some Act, RSC 1985, c S-15"` | NO match (federal hyphen, already safe) | PASS |
-| `"Some Act, RSO 1990, c S.15, s 5"` | MATCH `"s 5"` (real pinpoint after clause) | PASS |
-| `"Canadian Charter of Rights and Freedoms, s 1"` | MATCH `"s 1"` (constitutional, original use) | PASS |
-| `"Criminal Code, RSC 1985, c C-46, s 718.2(e)"` | MATCH `"s 718.2(e)"` | PASS |
-| `"Regulation X, para 5"` | MATCH `"para 5"` | PASS |
-| `"Some Act, cl 5"` | MATCH `"cl 5"` | PASS |
-
-## Files Changed
-
-```
- local_tools/citation_search.py      |  12 ++-
- tests/test_pinpoint_regression.py   | 114 ++++++++++++++++++++++++++++
- 2 files changed, 125 insertions(+), 1 deletion(-)
-```
+---
 
 ## Verification Command
 
