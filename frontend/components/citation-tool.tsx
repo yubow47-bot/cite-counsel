@@ -15,6 +15,7 @@ import {
   type Envelope,
 } from "@/lib/citation-api"
 import { SCAFFOLD_ENABLED } from "@/lib/scaffold"
+import { trackEvent } from "@/lib/analytics"
 
 type View =
   | { kind: "idle" }
@@ -43,6 +44,9 @@ export function CitationTool({ autoFocus }: { autoFocus?: boolean }) {
     switch (env.status) {
       case "done":
         setView({ kind: "done", citations: env.data.citations ?? [] })
+        if (env.data.citations?.length > 0) {
+          trackEvent("citation_generated")
+        }
         break
       case "needs_selection":
         setView({

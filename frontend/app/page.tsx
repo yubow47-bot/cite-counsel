@@ -8,6 +8,7 @@ import { CitationTool } from "@/components/citation-tool"
 import { FeedbackBox } from "@/components/feedback-box"
 import { FileExtractView } from "@/components/file-extract-view"
 import { UrlExtractView } from "@/components/url-extract-view"
+import { trackEvent } from "@/lib/analytics"
 
 const BOXES = [
   {
@@ -174,6 +175,7 @@ export default function Page() {
               target="_blank"
               rel="noopener"
               aria-label="Support this project"
+              onClick={() => trackEvent("kofi_click")}
               className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs transition-colors"
               style={{ background: "#FAECE7", color: "#993C1D", border: "0.5px solid #F0997B" }}
             >
