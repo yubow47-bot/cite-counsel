@@ -3,6 +3,7 @@
 Run: pytest tests/test_extract_from_url.py -v
 """
 
+import json
 import os
 import sys
 import requests
@@ -158,3 +159,62 @@ def test_extract_from_url_error_does_not_claim_blocked():
     assert "couldn't fetch" in result["error"].lower(), (
         "Error message should acknowledge uncertainty"
     )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  PDF URL short-circuit (Item: extract_from_url PDF guard)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_extract_from_url_pdf_suffix_short_circuits():
+    """URL ending in .pdf returns error immediately; fetch_html is NOT called."""
+    with patch("llm_api.deepseek_api.fetch_html") as mock_fetch:
+        result = extract_from_url("https://example.com/document.pdf")
+
+    assert "error" in result
+    assert "reliably read a direct PDF link" in result["error"]
+    assert result["url"] == "https://example.com/document.pdf"
+    mock_fetch.assert_not_called()
+
+
+def test_extract_from_url_pdf_suffix_case_insensitive():
+    """URL ending in .PDF (uppercase) short-circuits the same way."""
+    with patch("llm_api.deepseek_api.fetch_html") as mock_fetch:
+        result = extract_from_url("https://example.com/report.PDF")
+
+    assert "error" in result
+    assert "reliably read a direct PDF link" in result["error"]
+    mock_fetch.assert_not_called()
+
+
+def test_extract_from_url_pdf_suffix_with_query_string():
+    """Query string is stripped before the suffix check; short-circuits."""
+    with patch("llm_api.deepseek_api.fetch_html") as mock_fetch:
+        result = extract_from_url("https://example.com/file.pdf?download=true")
+
+    assert "error" in result
+    assert "reliably read a direct PDF link" in result["error"]
+    mock_fetch.assert_not_called()
+
+
+def test_extract_from_url_non_pdf_url_unaffected():
+    """Non-PDF URLs still go through fetch_html and trafilatura as before."""
+    fake_trafilatura_json = json.dumps({
+        "title": "Normal Article",
+        "author": "Author Name",
+        "date": "2023-06-01",
+        "hostname": "example.com",
+        "raw_text": (
+            "This is a normal article with enough text to pass the empty-body "
+            "guard threshold of fifty characters in the raw text field."
+        ),
+    })
+    with (
+        patch("llm_api.deepseek_api.fetch_html", return_value="<html><body>ok</body></html>") as mock_fetch,
+        patch("trafilatura.extract", return_value=fake_trafilatura_json),
+    ):
+        result = extract_from_url("https://example.com/article")
+
+    assert "error" not in result
+    assert result["page_title"] == "Normal Article"
+    assert result["author"] == "Author Name"
+    mock_fetch.assert_called_once()

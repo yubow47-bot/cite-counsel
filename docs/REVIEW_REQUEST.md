@@ -1,4 +1,4 @@
-# Review Request: `extract_case_pinpoint()` boundary gap + repo hygiene
+# Review Request: PDF URL short-circuit for `extract_from_url()`
 
 **Date:** 2026-07-06
 **Author:** Claude Code
@@ -8,161 +8,155 @@
 
 ## Summary
 
-Two independent items:
+`extract_from_url()` in `llm_api/deepseek_api.py` has no PDF text/byte parser. For
+`.pdf`-suffixed URLs, two outcomes are possible: (a) the binary PDF bytes cause
+`trafilatura.extract()` to fail cleanly (the safe path), or (b) the server returns
+an HTML interstitial/archive-notice page that `trafilatura` parses successfully,
+producing **silently wrong metadata** (title, year) with no error shown — the
+dangerous path.
 
-1. **Repo hygiene** — stale docs at root (`REVIEW_REQUEST.md`, `FOLLOW_UPS.md`) deleted; 10 one-off diagnostic/profiling artifacts moved to `profiling/`.
-2. **`extract_case_pinpoint()` boundary gap** (`local_tools/utils.py`) — word-boundary guard added to prevent false-positive "at N" matches inside longer tokens; new pattern added for the `"at paras N"` (plural, single number) form.
-
----
-
-## Item 1 — Files Deleted / Moved
-
-### Deleted
-
-| File | Reason |
-|---|---|
-| `REVIEW_REQUEST.md` | Stale artifact from an earlier review round (pinpoint v2), superseded by `docs/REVIEW_REQUEST.md` (2026-07-05, fallback regex over-capture fix) |
-| `FOLLOW_UPS.md` | Documented 7 test failures that no longer reproduce on current HEAD (confirmed: both full-suite runs show 0 failures) |
-
-### Moved to `profiling/`
-
-The following 10 files were moved (not deleted — kept for potential reference):
-
-- `diagnose_format_latency.py`
-- `diag_format_smoke.py`
-- `diag_result.json`
-- `diag_thinking_mode.py`
-- `diag_thinking_mode3.py`
-- `diag_thinking_smoke.py`
-- `debug_prompt.txt`
-- `favicon_options.png`
-- `test_format_timing.py`
-- `test_run.py`
-
-No name collisions existed in `profiling/` (existing contents: `__init__.py`, `run.py`, `timing.py`).
+Since the module currently has no legitimate case where a `.pdf` URL produces correct
+data, the fix is an early-return guard: if the URL ends in `.pdf` (case-insensitive,
+query-string stripped), return immediately before any network call with a clear error
+message directing the user to fill in citation fields manually.
 
 ---
 
-## Item 2 — Regex Diff
+## Diff
 
-### `local_tools/utils.py` — `extract_case_pinpoint()`
+### `llm_api/deepseek_api.py` — 8 lines added at top of `extract_from_url()`
 
 ```diff
-     Recognizes trailing patterns at the END of the input:
-       "at para N"       e.g. "at para 2"
-       "at paras N-M"    e.g. "at paras 10-15"
-+      "at paras N"      e.g. "at paras 10"
-       "at N"            e.g. "at 47"
-       "at p N"          e.g. "at p 5"
-       "at pp N-M"       e.g. "at pp 10-15"
-@@
-     # Order matters: longer patterns first to avoid partial matches
-     patterns = [
-         r'at\s+paras\s+\d+(?:-\d+)$',
-+        r'at\s+paras\s+\d+$',
-         r'at\s+para\s+\d+(?:-\d+)?$',
-         r'at\s+pp\s+\d+(?:-\d+)$',
-         r'at\s+p\s+\d+(?:-\d+)?$',
--        r'at\s+\d+$',
-+        r'\bat\s+\d+$',
-     ]
++    # ── PDF URL short-circuit ──
++    # We have no PDF text/byte parser in this module, so a .pdf-suffixed URL
++    # can never produce correct document data.  Return immediately before any
++    # network call to avoid silently returning archive-interstitial metadata.
++    _path = url.split("?", 1)[0]
++    if _path.lower().endswith(".pdf"):
++        return {"url": url, "error": "We can't reliably read a direct PDF link. Please fill in the citation fields manually."}
++
+     import trafilatura
 ```
 
-**Change 1 — `\b` word-boundary guard (line 121):**
-`r'at\s+\d+$'` → `r'\bat\s+\d+$'`
+No other function in this file was touched (`fetch_html()`, `extract_url()` upstream
+callers, etc. are unchanged). No changes to `api/main.py`, `local_tools/file_extractor.py`,
+or any frontend file.
 
-Without `\b`, a case name ending in a word followed by `at` and digits (e.g. `"R v Format10"` → the regex would see `at 10` inside `"Format10"`) could false-positive match. The `\b` ensures `at` is preceded by a word boundary (whitespace or start-of-string), not another word character.
+The error dict uses the same `{"url": url, "error": "..."}` shape already used by the
+existing early-return error cases in this function (e.g. the `fetch_html`-returns-None
+path on line ~185), so `api/main.py` surfaces it as `status: "unsupported"` without
+any changes.
 
-**Change 2 — `"at paras N"` pattern (new line 117):**
-`r'at\s+paras\s+\d+$'`
+### `tests/test_extract_from_url.py` — 4 new tests, 1 import added
 
-The existing `at\s+paras\s+\d+(?:-\d+)$` requires the `-M` range suffix (the `(?:-\d+)` group is not optional). Inputs like `"at paras 10"` (single number, no dash) silently returned `""`, discarding the pinpoint. The new pattern matches the standalone `"at paras N"` form.
-
-### `tests/local_tools/test_format_util.py` — 3 new tests
+```diff
++import json
+```
 
 ```python
-def test_paras_plural_single_number(self):
-    """'at paras N' (plural, single number, no range) is now matched."""
-    assert extract_case_pinpoint("r v smith at paras 10") == "at paras 10"
-
-def test_no_boundary_false_positive(self):
-    """Word-boundary guard on 'at' prevents match inside a longer token."""
-    assert extract_case_pinpoint("R v Format10") == ""
-
-def test_existing_paras_range_still_works(self):
-    """Regression guard: 'at paras N-M' still matches the whole range."""
-    assert extract_case_pinpoint("r v jones at paras 10-15") == "at paras 10-15"
++def test_extract_from_url_pdf_suffix_short_circuits():
++    with patch("llm_api.deepseek_api.fetch_html") as mock_fetch:
++        result = extract_from_url("https://example.com/document.pdf")
++    assert "error" in result
++    assert "reliably read a direct PDF link" in result["error"]
++    assert result["url"] == "https://example.com/document.pdf"
++    mock_fetch.assert_not_called()
++
++def test_extract_from_url_pdf_suffix_case_insensitive():
++    with patch("llm_api.deepseek_api.fetch_html") as mock_fetch:
++        result = extract_from_url("https://example.com/report.PDF")
++    assert "error" in result
++    assert "reliably read a direct PDF link" in result["error"]
++    mock_fetch.assert_not_called()
++
++def test_extract_from_url_pdf_suffix_with_query_string():
++    with patch("llm_api.deepseek_api.fetch_html") as mock_fetch:
++        result = extract_from_url("https://example.com/file.pdf?download=true")
++    assert "error" in result
++    assert "reliably read a direct PDF link" in result["error"]
++    mock_fetch.assert_not_called()
++
++def test_extract_from_url_non_pdf_url_unaffected():
++    fake_trafilatura_json = json.dumps({
++        "title": "Normal Article",
++        "author": "Author Name",
++        "date": "2023-06-01",
++        "hostname": "example.com",
++        "raw_text": "This is a normal article with enough text to pass the empty-body guard threshold of fifty characters in the raw text field.",
++    })
++    with (
++        patch("llm_api.deepseek_api.fetch_html", return_value="<html><body>ok</body></html>") as mock_fetch,
++        patch("trafilatura.extract", return_value=fake_trafilatura_json),
++    ):
++        result = extract_from_url("https://example.com/article")
++    assert "error" not in result
++    assert result["page_title"] == "Normal Article"
++    assert result["author"] == "Author Name"
++    mock_fetch.assert_called_once()
 ```
-
-### `extract_pinpoint()` — untouched
-
-`extract_pinpoint()` (separate function in the same file, lines 130–149) was deliberately left byte-for-byte unchanged. No changes were made to `citation_search.py` or any other file.
 
 ---
 
 ## Test Output
 
-### Run 1 — Before deleting `FOLLOW_UPS.md` (to confirm 7 prior failures gone)
+### Full suite (specified command)
 
 ```
 $ python -m pytest tests/ --ignore=tests/test_crossref.py -q
-427 passed, 2 skipped, 16 warnings in 38.50s
+431 passed, 2 skipped, 16 warnings in 24.09s
 ```
 
-### Run 2 — Final run after all changes
+### Targeted tests (all 20 pass, 13 existing + 4 new PDF + 3 test_url_extract)
 
 ```
-$ python -m pytest tests/ --ignore=tests/test_crossref.py -q
-427 passed, 2 skipped, 16 warnings in 27.55s
-```
+$ python -m pytest tests/test_extract_from_url.py tests/test_url_extract.py -v
 
-### Pinpoint-specific tests (all 32 pass)
-
-```
-$ python -m pytest tests/local_tools/test_format_util.py -v
-...
-tests/local_tools/test_format_util.py::TestExtractPinpoint::test_pinpoint_present PASSED
-tests/local_tools/test_format_util.py::TestExtractPinpoint::test_no_pinpoint PASSED
-tests/local_tools/test_format_util.py::TestExtractPinpoint::test_act_level_only PASSED
-tests/local_tools/test_format_util.py::TestExtractPinpoint::test_sc_regulation PASSED
-tests/local_tools/test_format_util.py::TestExtractPinpoint::test_sor_regulation PASSED
-tests/local_tools/test_format_util.py::TestExtractPinpoint::test_bc_regulation PASSED
-tests/local_tools/test_format_util.py::TestExtractPinpoint::test_empty_string PASSED
-tests/local_tools/test_format_util.py::TestExtractPinpoint::test_no_citation_match PASSED
-tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_at_para_n PASSED
-tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_at_paras_range PASSED
-tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_bare_at_number PASSED
-tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_at_p_n PASSED
-tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_at_pp_range PASSED
-tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_no_pinpoint_no_match PASSED
-tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_trailing_period_no_match PASSED
-tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_citation_number_no_match PASSED
-tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_reporter_no_match PASSED
-tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_pinpoint_not_at_end_no_match PASSED
-tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_empty_string PASSED
-tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_none_input PASSED
-tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_at_para_single_digit PASSED
-tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_case_insensitive PASSED
-tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_paras_plural_single_number PASSED
-tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_no_boundary_false_positive PASSED
-tests/local_tools/test_format_util.py::TestExtractCasePinpoint::test_existing_paras_range_still_works PASSED
-32 passed in 0.15s
+tests/test_extract_from_url.py::test_extract_from_url_trafilatura_extract_raises PASSED
+tests/test_extract_from_url.py::test_extract_from_url_trafilatura_extract_raises_runtime_error PASSED
+tests/test_extract_from_url.py::test_extract_from_url_fetch_html_fails PASSED
+tests/test_extract_from_url.py::test_extract_from_url_trafilatura_returns_none PASSED
+tests/test_extract_from_url.py::test_fetch_html_fallback_succeeds PASSED
+tests/test_extract_from_url.py::test_fetch_html_both_fail PASSED
+tests/test_extract_from_url.py::test_fetch_html_curl_succeeds_no_fallback PASSED
+tests/test_extract_from_url.py::test_fetch_html_fallback_http_error_returns_none PASSED
+tests/test_extract_from_url.py::test_extract_from_url_error_does_not_claim_blocked PASSED
+tests/test_extract_from_url.py::test_extract_from_url_pdf_suffix_short_circuits PASSED   # NEW
+tests/test_extract_from_url.py::test_extract_from_url_pdf_suffix_case_insensitive PASSED  # NEW
+tests/test_extract_from_url.py::test_extract_from_url_pdf_suffix_with_query_string PASSED # NEW
+tests/test_extract_from_url.py::test_extract_from_url_non_pdf_url_unaffected PASSED       # NEW
+tests/test_url_extract.py::TestExtractUrlDoi::test_doi_only PASSED
+tests/test_url_extract.py::TestExtractUrlDoi::test_doi_with_url_ignored PASSED
+tests/test_url_extract.py::TestExtractUrlIsbn::test_isbn_only PASSED
+tests/test_url_extract.py::TestExtractUrlOnly::test_url_only PASSED
+tests/test_url_extract.py::TestExtractUrlOnly::test_url_extract_failure_scaffold PASSED
+tests/test_url_extract.py::TestExtractUrlEmpty::test_all_empty PASSED
+tests/test_url_extract.py::TestExtractUrlEmpty::test_all_none PASSED
+20 passed
 ```
 
 ---
 
 ## Regression Count
 
-| Metric | Baseline (`40b47e9`) | After changes (current HEAD) |
+| Metric | Baseline (`40b47e9`) | After change |
 |---|---|---|
-| Tests passed | 424 | 427 |
+| Tests passed | 427 | 431 |
 | Tests skipped | 2 | 2 |
 | Tests failed | 0 | 0 |
-| Total collected | 426 | 429 |
+| Total collected | 429 | 433 |
 
-The delta of +3 is the new pinpoint-boundary regression tests. All 15 pre-existing `TestExtractCasePinpoint` tests and all 8 `TestExtractPinpoint` tests pass unchanged.
+The delta of +4 is the new PDF short-circuit tests. All existing tests in
+`test_extract_from_url.py` and `test_url_extract.py` pass unchanged.
 
 ---
+
+## Files Changed
+
+```
+ llm_api/deepseek_api.py              |  8 +++
+ tests/test_extract_from_url.py       | 67 ++++++++++++++++++++++++++++
+ 2 files changed, 75 insertions(+)
+```
 
 ## Verification Command
 
