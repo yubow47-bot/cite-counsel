@@ -106,6 +106,23 @@ export default function RootLayout({
             </Script>
           </>
         ) : null}
+        {process.env.NODE_ENV === "production" ? (
+          <>
+            <Script
+              async
+              src="https://www.googletagmanager.com/gtag/js?id=AW-18282297703"
+              strategy="afterInteractive"
+            />
+            <Script id="google-ads-gtag" strategy="afterInteractive">
+              {`
+                window.dataLayer = window.dataLayer || [];
+                function gtag(){dataLayer.push(arguments);}
+                gtag('js', new Date());
+                gtag('config', 'AW-18282297703');
+              `}
+            </Script>
+          </>
+        ) : null}
         {children}
         {process.env.NODE_ENV === "production" && <Analytics />}
         {process.env.NODE_ENV === "production" && <WarmupPing />}
