@@ -122,3 +122,22 @@ Same baseline as previous commit — no tests regressed. Change D has no new aut
 | `tests/test_verified_gate.py` | 8 regression tests for Changes A–C |
 | `tests/test_api_envelope.py` | Added `verified: True` to existing pinpoint test candidate |
 | `docs/REVIEW_REQUEST.md` | This file |
+
+---
+
+## Verification Tests (Change D — Constitutional Shortcut)
+
+**Approach:** (a) — call `expand_concept()` with all LLM and network calls fully mocked via `unittest.mock.patch`. This exercises `verify_one()` through the real code path without extracting it from its enclosing function. `verify_one()` stays as a nested function; zero production logic was touched.
+
+**6 tests in `tests/test_expand_concept_constitutional.py`:**
+
+| # | Test | Result | What it proves |
+|---|------|--------|----------------|
+| 1 | `test_1_charter_with_pinpoint` | ✅ | Charter + "s 2" → `verified=True`, correct title, pinpoint "s 2", A2AJ NOT called |
+| 2 | `test_2_constitution_act_1867_no_pinpoint` | ✅ | Constitution Act, 1867 → `verified=True`, correct title, no pinpoint, A2AJ NOT called |
+| 3 | `test_3_constitution_act_1982_with_pinpoint` | ✅ | Constitution Act, 1982 + "s 35" → `verified=True`, correct title, pinpoint "s 35", A2AJ NOT called |
+| 4 | `test_4_canada_act_1982` | ✅ | Canada Act 1982 → `verified=True`, correct title, A2AJ NOT called |
+| 5 | `test_5_non_constitutional_falls_through_to_a2aj` | ✅ | "Code civil du Québec, art 1457" → shortcut does NOT match, A2AJ IS called, `verified=False` |
+| 6 | `test_6_case_candidate_unaffected` | ✅ | "R v Gladue" (case type) → `_verify_case` called (not shortcut), `verified=True` |
+
+**Full suite:** `445 passed, 2 skipped, 17 warnings` (baseline 439 + 6 new, no regressions)
