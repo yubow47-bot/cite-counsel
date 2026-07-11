@@ -373,7 +373,7 @@ async def citation_query(body: CitationInput, request: Request):
 
     # ── concept: multi-result, format each ──
     if route == "concept":
-        return _handle_concept(results)
+        return _handle_concept(results, query)
 
     # ── citation_number / legislation / bill with unverified result → scaffold or unsupported ──
     if route in ("citation_number", "legislation", "bill") and len(results) == 1:
@@ -439,38 +439,52 @@ async def citation_query(body: CitationInput, request: Request):
         )
 
 
-def _handle_concept(results: list) -> dict:
+def _handle_concept(results: list, query: str) -> dict:
     """Handle concept-expansion results with needs_selection for multiple candidates.
 
-    Mirrors the case_name branch: single result → format directly;
-    multiple results → return candidates, defer format to /api/citation/select.
+    Single result (verified) → format directly; single unverified → scaffold.
+    Multiple results → filter to verified candidates only.
     """
+    # ── Empty (no results at all) ──
     if not results:
-        # Concept expansion returned nothing — offer scaffold fallback
-        suggested = SUGGESTED_TYPE_MAP.get("concept", "jurisprudence")
-        return _scaffold_response(
-            "concept",
-            "Could not verify against our databases. Fill in the fields below to generate a McGill 10th citation.",
-            prefill={"style_of_cause": "duty to consult"},
-            suggested_type=suggested,
-            disabled_message=_SCAFFOLD_DISABLED_MSG,
-        )
+        return _concept_scaffold()
 
-    # Multiple candidates → defer format to /api/citation/select
-    if len(results) > 1:
-        candidates = []
-        for item in results:
-            candidates.append({
-                "display": _candidate_display(item),
-                **_without_internal(item),
-            })
-        return _envelope(True, "concept", "needs_selection", {
-            "candidates": candidates,
+    # ── Single result: check verified ──
+    if len(results) == 1:
+        item = results[0]
+        if not item.get("verified"):
+            return _scaffold_response(
+                "concept",
+                "Could not verify against our databases. Fill in the fields below to generate a McGill 10th citation.",
+                prefill=build_prefill("concept", query, partial=item),
+                suggested_type=SUGGESTED_TYPE_MAP.get("concept", "concept"),
+                disabled_message=_SCAFFOLD_DISABLED_MSG,
+            )
+        return _format_concept(item)
+
+    # ── Multiple candidates: filter to verified only ──
+    verified = [r for r in results if r.get("verified")]
+    if not verified:
+        return _concept_scaffold()
+    if len(verified) == 1:
+        return _format_concept(verified[0])
+
+    # 2+ verified → needs_selection with only verified candidates
+    candidates = []
+    for item in verified:
+        candidates.append({
+            "display": _candidate_display(item),
+            **_without_internal(item),
         })
+    return _envelope(True, "concept", "needs_selection", {
+        "candidates": candidates,
+    })
 
-    # Single result → format directly
+
+def _format_concept(item: dict) -> dict:
+    """Format a single verified concept result."""
     try:
-        citation = format_citation(_without_internal(results[0]))
+        citation = format_citation(_without_internal(item))
         _cit_data: dict = {"citation": citation, "source_type": "concept"}
         debug = _collect_debug_info("concept")
         return _envelope(
@@ -484,6 +498,18 @@ def _handle_concept(results: list) -> dict:
             True, "concept", "error", {},
             error={"reason": _USER_FACING_ERROR},
         )
+
+
+def _concept_scaffold() -> dict:
+    """Return scaffold/unsupported when concept has no verified results."""
+    suggested = SUGGESTED_TYPE_MAP.get("concept", "jurisprudence")
+    return _scaffold_response(
+        "concept",
+        "Could not verify against our databases. Fill in the fields below to generate a McGill 10th citation.",
+        prefill={"style_of_cause": "duty to consult"},
+        suggested_type=suggested,
+        disabled_message=_SCAFFOLD_DISABLED_MSG,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -506,6 +532,15 @@ async def citation_select(body: CitationSelectInput):
         return cap_block
 
     item = body.candidates[body.selected_index]
+
+    # ── Verified gate: refuse to format unverified candidates ──
+    # Explicit boolean identity: only True passes — "false" (string), 1, or
+    # other truthy-but-not-True values are rejected same as an actual False.
+    if item.get("verified") is not True:
+        return _envelope(
+            True, "select", "unsupported", {},
+            error={"reason": _SCAFFOLD_DISABLED_MSG},
+        )
 
     try:
         # Determine whether this candidate represents a case/jurisprudence
