@@ -1,11 +1,11 @@
-# Review Request: Verified Gate for Concept / citation_select
+# Review Request: Verified Gate for Concept / citation_select + Constitutional-title Shortcut
 
-**Date:** 2026-07-11
+**Date:** 2026-07-12
 **Author:** Claude Code
 
 ---
 
-## Summary
+## Summary (Changes A–C)
 
 Three gaps allowed unverified concept candidates to reach `format_citation()`, producing fabricated citations. Each was fixed by gating on `item.get("verified")`.
 
@@ -42,13 +42,52 @@ Three gaps allowed unverified concept candidates to reach `format_citation()`, p
 
 **Architectural note:** This check trusts the `verified` field as sent back by the client in the request body, same as the rest of `citation_select()`'s stateless design (it already trusts every other field — `statute_title`, `neutral_citation`, etc. — for formatting). This is a known, pre-existing architectural property of this endpoint, not something this task changes.
 
+---
+
+## Summary (Change D — Constitutional-title Shortcut)
+
+### Background
+
+After Changes A–C were deployed, verified-only filtering in `_handle_concept()` revealed that constitutional documents (Charter, Constitution Acts, Canada Act) always returned `verified=False` from `expand_concept()`. These documents have no standard RSC/SC/SOR citation number, so `_verify_legislation()`'s A2AJ lookup always fails. The direct legislation route in `search_citation()` already handles these via a local `_CANONICAL` dict that returns `verified=True` immediately, before touching A2AJ.
+
+### Change D — `local_tools/citation_search.py`
+
+**1. Module-level constant promoted:**
+The local `_CANONICAL` dict (previously defined inside `search_citation()`'s legislation branch) was promoted to a module-level constant named **`_CONSTITUTIONAL_CANONICAL`** (name chosen to avoid collision — `_CANONICAL` is generic and could conflict with future uses). The constant lives alongside `_CANLII_STATUTE_DB` and other module-level constants. `search_citation()`'s legislation branch now references the module-level constant instead of defining its own local variable — no behavior change there.
+
+**2. `verify_one()` constitutional shortcut:**
+In `verify_one()`'s legislation branch, before calling `_verify_legislation(name)`:
+- Normalize `name` with `_normalize_title()` (same helper already imported and used elsewhere in this file).
+- Check if the normalized name starts with any key in `_CONSTITUTIONAL_CANONICAL`.
+- If matched: set `entry["verified"] = True`, `entry["statute_title"]` to the canonical display title, and extract any pinpoint from `name` using the same `_broader` regex pattern that the existing fallback code path already uses after `_verify_legislation()`. Skip `_verify_legislation()` (and therefore A2AJ) entirely for this case.
+- If not matched: fall through to `_verify_legislation(name)` unchanged.
+
+### Manual trace verification
+
+Tracing `verify_one({"name": "Canadian Charter of Rights and Freedoms, s 2", "type": "legislation"})`:
+
+| Step | Output |
+|------|--------|
+| `_normalize_title("Canadian Charter of Rights and Freedoms, s 2")` | `"canadian charter of rights and freedoms s 2"` |
+| Starts with `"canadian charter of rights and freedoms"`? | ✅ Yes → `_matched_canonical = "Canadian Charter of Rights and Freedoms"` |
+| `entry["verified"]` | `True` |
+| `entry["statute_title"]` | `"Canadian Charter of Rights and Freedoms"` |
+| `_broader` regex on `"Canadian Charter of Rights and Freedoms, s 2"` | Matches `"s 2"` — `_pin_match.group(1)` = `"s 2"` |
+| `entry["pinpoint"]` | `"s 2"` |
+| `_verify_legislation()` reached? | ❌ No — returned early from shortcut |
+
+Result: `{"verified": True, "role": "legislation", "statute_title": "Canadian Charter of Rights and Freedoms", "pinpoint": "s 2"}`
+
 ### Not touched
 
-- `expand_concept()` in `local_tools/citation_search.py` — no changes.
-- `_verify_legislation()` — no changes.
-- Any route logic in `citation_query()` outside the `_handle_concept()` call site update.
+- `_verify_legislation()`'s A2AJ logic itself — no changes.
+- `expand_concept()`'s prompt or candidate generation — no changes.
+- `_handle_concept()` verified-filtering logic (Changes A–B) — no changes.
+- Any other branch of `search_citation()` — no changes.
 
-## Call-site search results (pre-change verification)
+---
+
+## Call-site search results (Changes A–C pre-change verification)
 
 ### `_handle_concept(` call sites
 
@@ -62,23 +101,24 @@ Three gaps allowed unverified concept candidates to reach `format_citation()`, p
 
 **Only existing test that needed updating:** `test_citation_select_has_pinpoint_field` in `test_api_envelope.py` — its candidate dict lacked `verified: True`, so the new gate correctly rejected it. Updated to include `"verified": True`.
 
+---
+
 ## Test Results
 
 ```
 439 passed, 2 skipped, 17 warnings
 ```
 
-All 8 regression tests pass (in `tests/test_verified_gate.py`):
+Same baseline as previous commit — no tests regressed. Change D has no new automated tests (per task instructions).
 
-| # | Test | Status | What it verifies |
-|---|------|--------|------------------|
-| 1 | `test_1_unverified_single_returns_scaffold` | ✅ | Single unverified → scaffold, `format_citation` never called |
-| 2 | `test_2_verified_single_returns_done` | ✅ | Single verified → status `"done"` (unchanged) |
-| 3 | `test_3_mixed_three_filters_candidates` | ✅ | 3 mixed → only 2 verified in `needs_selection` |
-| 4 | `test_4_all_unverified_returns_scaffold` | ✅ | All unverified → same scaffold as empty results |
-| 5 | `test_5_unverified_verified_pair_formats_directly` | ✅ | 1 verified after filtering → `"done"` |
-| 6 | `test_6_select_unverified_returns_unsupported` | ✅ | `citation_select` with `verified=False` → `"unsupported"`, `format_citation` never called |
-| 7 | `test_7_select_verified_returns_done` | ✅ | `citation_select` with `verified=True` → `"done"` (unchanged) |
-| 8 | `test_8_select_truthy_non_true_returns_unsupported` | ✅ | `citation_select` with `verified="false"`, `1`, `"yes"`, `"True"` → all `"unsupported"` — proves `is not True` identity check, not truthiness |
+---
 
-No existing tests regressed.
+## Files Changed
+
+| File | Change |
+|------|--------|
+| `api/main.py` | Changes A, B, C: verified gating on `_handle_concept` and `citation_select` |
+| `local_tools/citation_search.py` | Change D: promoted `_CONSTITUTIONAL_CANONICAL` to module level, added constitutional shortcut in `verify_one()` |
+| `tests/test_verified_gate.py` | 8 regression tests for Changes A–C |
+| `tests/test_api_envelope.py` | Added `verified: True` to existing pinpoint test candidate |
+| `docs/REVIEW_REQUEST.md` | This file |

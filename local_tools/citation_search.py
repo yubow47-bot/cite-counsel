@@ -492,6 +492,36 @@ Rules:
         }
 
         if ctype == "legislation":
+            # ── Constitutional-title shortcut ──
+            # Closed-set constitutional documents (Charter, Constitution Acts,
+            # Canada Act) have no A2AJ-resolvable citation number, so they are
+            # verified deterministically without calling _verify_legislation.
+            from core.mcgill_engine import _normalize_title
+
+            _norm_name = _normalize_title(name)
+            _matched_canonical = None
+            for _norm_prefix, _canonical_title in _CONSTITUTIONAL_CANONICAL.items():
+                if _norm_name.startswith(_norm_prefix):
+                    _matched_canonical = _canonical_title
+                    break
+
+            if _matched_canonical:
+                entry["verified"] = True
+                entry["statute_title"] = _matched_canonical
+                # Extract pinpoint from the original name (same _broader pattern
+                # used by the fallback code path below).
+                _pin_match = re.search(
+                    r'(?<!, c )(?<! c )(?:,\s*)?\b((?:s|ss|art|cl|para|sub)\.?\s*[\d(][\d\w().,-]*(?:\s*\([\w\d]+\))*)\s*$',
+                    name,
+                    re.IGNORECASE
+                )
+                if _pin_match:
+                    entry["pinpoint"] = _pin_match.group(1)
+                # Clean up ad-hoc LLM-candidate fields (same as the main path).
+                entry.pop("name", None)
+                entry.pop("neutral_citation", None)
+                return entry
+
             result = _verify_legislation(name)
             entry.update(result)
             # If _verify_legislation did not extract a pinpoint (e.g. for
@@ -610,6 +640,16 @@ Rules:
     logger.debug("[DUR] expand_concept END (fallback) — %.1fms", _fn_elapsed * 1000)
     raise ValueError("LLM expansion failed after fallback")
 
+
+# ── Closed-set constitutional titles (verified deterministically, no A2AJ) ──
+# These documents have no standard citation number (RSC/SC/SOR) that A2AJ
+# can resolve, so they are verified via a deterministic title match instead.
+_CONSTITUTIONAL_CANONICAL = {
+    "constitution act 1867": "Constitution Act, 1867",
+    "constitution act 1982": "Constitution Act, 1982",
+    "canadian charter of rights and freedoms": "Canadian Charter of Rights and Freedoms",
+    "canada act 1982": "Canada Act 1982",
+}
 
 _CANLII_STATUTE_DB = {
     "ab": "abs", "bc": "bcs", "ca": "cas", "mb": "mbs",
@@ -992,15 +1032,8 @@ def search_citation(query: str, classification: dict | None = None) -> list:
         # produces clean titles, so prefix-matching against normalized works reliably.
         from core.mcgill_engine import _normalize_title
 
-        _CANONICAL = {
-            "constitution act 1867": "Constitution Act, 1867",
-            "constitution act 1982": "Constitution Act, 1982",
-            "canadian charter of rights and freedoms": "Canadian Charter of Rights and Freedoms",
-            "canada act 1982": "Canada Act 1982",
-        }
-
         norm = _normalize_title(normalized)
-        for _norm_prefix, _canonical_title in _CANONICAL.items():
+        for _norm_prefix, _canonical_title in _CONSTITUTIONAL_CANONICAL.items():
             if norm.startswith(_norm_prefix):
                 _pin = extract_pinpoint(normalized) or None
                 if not _pin:
