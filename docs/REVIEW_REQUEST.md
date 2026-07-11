@@ -1,251 +1,84 @@
-# Review Request: GA4 / Google Ads Conversion Tracking
+# Review Request: Verified Gate for Concept / citation_select
 
-**Date:** 2026-07-06
+**Date:** 2026-07-11
 **Author:** Claude Code
-**Reviewer:** Yubo (sole committer)
 
 ---
 
 ## Summary
 
-Add GA4/Google Ads conversion tracking via gtag.js to the citecounsel.com frontend.
-Two events are tracked: `citation_generated` (when a citation is successfully produced)
-and `kofi_click` (when the Ko-fi support link is clicked). Both events are gated to
-production only, require a `NEXT_PUBLIC_GA_MEASUREMENT_ID` env var to be set, and are
-silent no-ops otherwise.
+Three gaps allowed unverified concept candidates to reach `format_citation()`, producing fabricated citations. Each was fixed by gating on `item.get("verified")`.
 
----
+### Change A — `_handle_concept()` single-result branch (gap #1)
 
-## Changes
+**File:** `api/main.py` — `_handle_concept()` function
 
-### 1. New file: `frontend/lib/analytics.ts`
+**Before:** The single-result branch (`len(results) == 1`) called `format_citation()` unconditionally, with no `verified` check — unlike the `citation_number`/`legislation`/`bill` routes earlier in `citation_query()`.
 
-Exports `trackEvent(name, params?)` — calls `window.gtag("event", name, params)` when
-`window.gtag` exists, silent no-op otherwise. Handles SSR, dev, preview, and missing
-env var gracefully.
+**After:**
+- Signature changed from `_handle_concept(results: list) -> dict` to `_handle_concept(results: list, query: str) -> dict` so `build_prefill("concept", query, partial=item)` can be called.
+- Single unverified result → `_scaffold_response("concept", …, prefill=build_prefill("concept", query, partial=item), …)` — same pattern as the other routes.
+- Single verified result → `_format_concept(item)` (extracted helper, unchanged behavior).
+- New helpers `_format_concept()` and `_concept_scaffold()` extracted to avoid duplication.
 
-### 2. `frontend/app/layout.tsx` — gtag.js loader
+### Change B — `_handle_concept()` multi-candidate branch (gap #2)
 
-Added two `<Script>` tags (via `next/script` with `strategy="afterInteractive"`):
-- The external loader from `googletagmanager.com/gtag/js?id=...`
-- An inline config snippet that sets up `gtag()` and calls `gtag('config', ...)`
+**File:** `api/main.py` — `_handle_concept()` function
 
-Both are gated on `process.env.NODE_ENV === "production"` and
-`process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID` being non-empty. When unset (dev, preview,
-or production without the env var), nothing renders and no scripts load.
+**Before:** All results (verified or not) were included in the `needs_selection` candidate list.
 
-### 3. `frontend/components/citation-tool.tsx` — `citation_generated` event
+**After:** Results are filtered to `verified`-truthy items before building the candidate list:
+- **Empty after filtering** → same `_concept_scaffold()` response as the existing empty-results branch.
+- **Exactly 1 after filtering** → `_format_concept(item)` (formats directly, status `"done"`).
+- **2+ after filtering** → `needs_selection` with only verified candidates.
 
-In `applyEnvelope()`, inside the existing `case "done":` branch, calls
-`trackEvent("citation_generated")` only when `env.data.citations?.length > 0`.
-The empty-citations path (which shows "No citations were generated") does NOT fire.
+### Change C — `citation_select()` endpoint (gap #3)
 
-### 4. `frontend/app/page.tsx` — `kofi_click` event
+**File:** `api/main.py` — `citation_select()` function
 
-Added `onClick={() => trackEvent("kofi_click")}` to the Ko-fi `<a>` link.
-Does NOT call `preventDefault()` — the link's default navigation is unaffected.
-The link already has `target="_blank"`, so tracking fires without blocking navigation.
+**Before:** No `verified` check — any candidate the user picked would be formatted.
 
----
+**After:** Before calling `format_citation()`, checks `item.get("verified") is not True` (explicit boolean identity — rejects `"false"`, `1`, or any truthy-but-non-True value the same as an actual `False`). If not `True`, returns `status: "unsupported"` with `_SCAFFOLD_DISABLED_MSG`. The frontend already handles `"unsupported"` status (see `CitationTool.applyEnvelope()` and `CitationStatus` type which includes `"unsupported"`).
 
-## Diff
+**Architectural note:** This check trusts the `verified` field as sent back by the client in the request body, same as the rest of `citation_select()`'s stateless design (it already trusts every other field — `statute_title`, `neutral_citation`, etc. — for formatting). This is a known, pre-existing architectural property of this endpoint, not something this task changes.
 
-```diff
-diff --git a/frontend/app/layout.tsx b/frontend/app/layout.tsx
-index ad2b8bd..4dd3d18 100644
---- a/frontend/app/layout.tsx
-+++ b/frontend/app/layout.tsx
-@@ -1,5 +1,6 @@
- import { Analytics } from "@vercel/analytics/next"
- import type { Metadata, Viewport } from "next"
-+import Script from "next/script"
- import localFont from "next/font/local"
- import { GeistSans } from "geist/font/sans"
- import { GeistMono } from "geist/font/mono"
-@@ -89,6 +90,22 @@ export default function RootLayout({
-             }),
-           }}
-         />
-+        {process.env.NODE_ENV === "production" && process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID ? (
-+          <>
-+            <Script
-+              src={`https://www.googletagmanager.com/gtag/js?id=${process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID}`}
-+              strategy="afterInteractive"
-+            />
-+            <Script id="google-analytics" strategy="afterInteractive">
-+              {`
-+                window.dataLayer = window.dataLayer || [];
-+                function gtag(){dataLayer.push(arguments);}
-+                gtag('js', new Date());
-+                gtag('config', '${process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID}');
-+              `}
-+            </Script>
-+          </>
-+        ) : null}
-         {children}
-         {process.env.NODE_ENV === "production" && <Analytics />}
-         {process.env.NODE_ENV === "production" && <WarmupPing />}
-diff --git a/frontend/app/page.tsx b/frontend/app/page.tsx
-index c320b58..18ccc79 100644
---- a/frontend/app/page.tsx
-+++ b/frontend/app/page.tsx
-@@ -8,6 +8,7 @@ import { CitationTool } from "@/components/citation-tool"
- import { FeedbackBox } from "@/components/feedback-box"
- import { FileExtractView } from "@/components/file-extract-view"
- import { UrlExtractView } from "@/components/url-extract-view"
-+import { trackEvent } from "@/lib/analytics"
- 
- const BOXES = [
-   {
-@@ -174,6 +175,7 @@ export default function Page() {
-               target="_blank"
-               rel="noopener"
-               aria-label="Support this project"
-+              onClick={() => trackEvent("kofi_click")}
-               className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs transition-colors"
-               style={{ background: "#FAECE7", color: "#993C1D", border: "0.5px solid #F0997B" }}
-             >
-diff --git a/frontend/components/citation-tool.tsx b/frontend/components/citation-tool.tsx
-index 1b96696..bdf5b8a 100644
---- a/frontend/components/citation-tool.tsx
-+++ b/frontend/components/citation-tool.tsx
-@@ -15,6 +15,7 @@ import {
-   type Envelope,
- } from "@/lib/citation-api"
- import { SCAFFOLD_ENABLED } from "@/lib/scaffold"
-+import { trackEvent } from "@/lib/analytics"
- 
- type View =
-   | { kind: "idle" }
-@@ -43,6 +44,9 @@ export function CitationTool({ autoFocus }: { autoFocus?: boolean }) {
-     switch (env.status) {
-       case "done":
-         setView({ kind: "done", citations: env.data.citations ?? [] })
-+        if (env.data.citations?.length > 0) {
-+          trackEvent("citation_generated")
-+        }
-         break
-       case "needs_selection":
-         setView({
-```
+### Not touched
 
-### New file: `frontend/lib/analytics.ts`
+- `expand_concept()` in `local_tools/citation_search.py` — no changes.
+- `_verify_legislation()` — no changes.
+- Any route logic in `citation_query()` outside the `_handle_concept()` call site update.
 
-```typescript
-/**
- * Analytics helpers for GA4 / Google Ads conversion tracking.
- *
- * Uses gtag.js loaded via next/script in the root layout.
- * All functions are silent no-ops when gtag is not loaded (dev, preview, SSR).
- */
+## Call-site search results (pre-change verification)
 
-declare global {
-  interface Window {
-    gtag?: (...args: unknown[]) => void
-  }
-}
+### `_handle_concept(` call sites
 
-/**
- * Fire a GA4 / Google Ads event via gtag.js.
- * Safe to call in any environment — no-ops when gtag is unavailable.
- */
-export function trackEvent(name: string, params?: Record<string, unknown>): void {
-  if (typeof window !== "undefined" && window.gtag) {
-    window.gtag("event", name, params)
-  }
-}
-```
+**Finding:** Exactly 1 call site — `citation_query()` at `api/main.py:376`. The only other occurrence is the function definition at line 442. ✅ Safe to modify the signature.
 
-### New file: `frontend/lib/analytics.test.ts` (4 tests)
+### `citation_select` call sites
 
-```typescript
-// — trackEvent: calls window.gtag with correct event name and params
-// — trackEvent: does not throw when window.gtag is undefined
-// — trackEvent: does not throw when window is undefined (SSR)
-// — trackEvent: calls gtag with just event name when no params
-```
+**Backend:** 1 endpoint definition (`@app.post("/api/citation/select")` at line 494).
 
-### New file: `frontend/components/citation-tool.test.tsx` (2 tests)
+**Frontend:** `citation-api.ts:71` calls it via `postCitationSelect()` returning `Envelope`. The `CitationStatus` type (line 6-11) already includes `"unsupported"` (`"done" | "needs_selection" | "needs_input" | "unsupported" | "error"`). The `CitationTool` component's `applyEnvelope()` (line 42-82) already has a `case "unsupported"` handler at lines 64-70. ✅ The frontend will correctly display the "unsupported" state when `citation_select` returns it.
 
-```typescript
-// — CitationTool: calls trackEvent("citation_generated") on done with citations
-// — CitationTool: does NOT call trackEvent on done with empty citations
-```
+**Only existing test that needed updating:** `test_citation_select_has_pinpoint_field` in `test_api_envelope.py` — its candidate dict lacked `verified: True`, so the new gate correctly rejected it. Updated to include `"verified": True`.
 
----
-
-## Test Output
+## Test Results
 
 ```
-$ npx vitest run --reporter=verbose
-
- ✓ lib/analytics.test.ts > trackEvent > calls window.gtag with correct event name and params when gtag is defined
- ✓ lib/analytics.test.ts > trackEvent > calls window.gtag with just event name when no params provided
- ✓ lib/analytics.test.ts > trackEvent > does not throw when window.gtag is undefined
- ✓ lib/analytics.test.ts > trackEvent > does not throw when window is undefined (SSR)
- ✓ components/citation-tool.test.tsx > CitationTool — analytics tracking > calls trackEvent("citation_generated") when done envelope has non-empty citations
- ✓ components/citation-tool.test.tsx > CitationTool — analytics tracking > does NOT call trackEvent when done envelope has empty citations
- ✓ components/citation-card.test.tsx > (33 existing tests) all pass
- ✓ components/url-extract-view.test.tsx > (8 existing tests) all pass
-
- Test Files  4 passed (4)
-      Tests  47 passed (47)
+439 passed, 2 skipped, 17 warnings
 ```
 
-## Build Output
+All 8 regression tests pass (in `tests/test_verified_gate.py`):
 
-```
-$ npm run build
+| # | Test | Status | What it verifies |
+|---|------|--------|------------------|
+| 1 | `test_1_unverified_single_returns_scaffold` | ✅ | Single unverified → scaffold, `format_citation` never called |
+| 2 | `test_2_verified_single_returns_done` | ✅ | Single verified → status `"done"` (unchanged) |
+| 3 | `test_3_mixed_three_filters_candidates` | ✅ | 3 mixed → only 2 verified in `needs_selection` |
+| 4 | `test_4_all_unverified_returns_scaffold` | ✅ | All unverified → same scaffold as empty results |
+| 5 | `test_5_unverified_verified_pair_formats_directly` | ✅ | 1 verified after filtering → `"done"` |
+| 6 | `test_6_select_unverified_returns_unsupported` | ✅ | `citation_select` with `verified=False` → `"unsupported"`, `format_citation` never called |
+| 7 | `test_7_select_verified_returns_done` | ✅ | `citation_select` with `verified=True` → `"done"` (unchanged) |
+| 8 | `test_8_select_truthy_non_true_returns_unsupported` | ✅ | `citation_select` with `verified="false"`, `1`, `"yes"`, `"True"` → all `"unsupported"` — proves `is not True` identity check, not truthiness |
 
-▲ Next.js 16.2.6 (Turbopack)
-✓ Compiled successfully in 2.3s
-  Skipping validation of types
-  Generating static pages ✓ (9/9)
-
-Route (app)
-┌ ○ /
-├ ○ /_not-found
-├ ○ /about
-├ ○ /faq
-├ ○ /icon.svg
-├ ○ /robots.txt
-└ ○ /sitemap.xml
-```
-
-Build succeeds cleanly without `NEXT_PUBLIC_GA_MEASUREMENT_ID` set — the gtag
-code path simply renders nothing, confirming no breakage for dev/preview.
-
----
-
-## Regression Count
-
-| Metric | Before | After |
-|---|---|---|
-| Test files | 2 | 4 |
-| Tests passed | 41 | 47 |
-| Tests failed | 0 | 0 |
-| Build | succeeds | succeeds |
-
-All 41 existing tests in `citation-card.test.tsx` and `url-extract-view.test.tsx`
-pass unchanged. The 6 new tests are the analytics-specific tests above.
-
----
-
-## Files Changed / Created
-
-```
- frontend/app/layout.tsx               | 17 +++++++++++++++++
- frontend/app/page.tsx                 |  2 ++
- frontend/components/citation-tool.tsx |  4 ++++
- frontend/lib/analytics.ts             | 20 ++++++++++++++++++++
- frontend/lib/analytics.test.ts        | 40 ++++++++++++++++++++++++++++++++++++++++
- frontend/components/citation-tool.test.tsx | 45 ++++++++++++++++++++++++++++++++++++++++++++
- 6 files changed, 128 insertions(+)
-```
-
-## Verification Commands
-
-```bash
-npx vitest run --reporter=verbose          # frontend tests
-npm run build                               # production build
-```
+No existing tests regressed.

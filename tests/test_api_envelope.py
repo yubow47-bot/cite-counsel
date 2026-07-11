@@ -203,6 +203,7 @@ def test_concept_route_no_pinpoint_field():
 def test_citation_select_has_pinpoint_field():
     """citation_select strips pinpoint for case candidates, returns it separately."""
     candidate = {
+        "verified": True,
         "style_of_cause": "R v Gladue",
         "neutral_citation": "[1999] 1 SCR 688",
         "pinpoint": "at para 47",
