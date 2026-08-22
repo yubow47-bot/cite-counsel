@@ -161,7 +161,7 @@ export function CitationCard({
 
   function handleVote(next: "up" | "down") {
     setVote(next)
-    void postFeedback({ citation: item.citation, vote: next, input: sourceInput })
+    void postFeedback({ verdict: next, input: sourceInput, output: item.citation })
   }
 
   function clearPinpoint() {

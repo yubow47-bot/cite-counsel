@@ -44,7 +44,8 @@ def fetch_by_citation(citation: str, doc_type: str = "cases") -> dict:
             timing.report().add_a2aj(f"fetch({doc_type}) {citation[:40]}", _http_elapsed)
         response.raise_for_status()
         data = response.json()
-        results = data.get("results", [])
+        # Guard: A2AJ must return a JSON object; a bare array/string would crash .get()
+        results = data.get("results", []) if isinstance(data, dict) else []
         if not results and doc_type == "cases":
             # 查询串含 " v. " 或 " v " 的是案件引用，跳过 legislation fallback
             if " v. " in citation or " v " in citation:
@@ -62,7 +63,12 @@ def fetch_by_citation(citation: str, doc_type: str = "cases") -> dict:
                     if timing.ENABLE_TIMING:
                         timing.report().add_a2aj(f"fetch(legislation fallback) {citation[:40]}", time.time() - t0)
                     response.raise_for_status()
-                    results = response.json().get("results", [])
+                    fallback_data = response.json()
+                    results = (
+                        fallback_data.get("results", [])
+                        if isinstance(fallback_data, dict)
+                        else []
+                    )
                 except requests.exceptions.RequestException:
                     results = []
         if not results:

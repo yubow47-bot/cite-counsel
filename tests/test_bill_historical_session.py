@@ -10,9 +10,12 @@ import os
 import pytest
 from unittest.mock import patch
 
+import requests as _probe_requests
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from local_tools.legisinfo_api import (
+    BILLS_URL,
     _year_to_sessions,
     _session_end_year,
     _get_current_session,
@@ -23,6 +26,33 @@ from local_tools.legisinfo_api import (
     _normalize_bill_number,
     _fetch_json,
     SESSION_MAP,
+)
+
+# ── Live-HTTP guard ──────────────────────────────────────────────────────────
+#
+# The tests marked @_skip_live below hit the real LEGISinfo endpoint by design
+# (read-only GETs).  When this environment cannot reach it (offline CI, dead
+# system proxy, blocked network), SKIP instead of FAIL so a red suite always
+# means a code regression — never a connectivity flake.
+_legisinfo_reachable_cache = None
+
+
+def _legisinfo_reachable() -> bool:
+    """One-shot cached probe of the real LEGISinfo endpoint."""
+    global _legisinfo_reachable_cache
+    if _legisinfo_reachable_cache is None:
+        try:
+            _probe_requests.get(BILLS_URL, timeout=(3, 8))
+            # Any HTTP response (even an error status) proves reachability.
+            _legisinfo_reachable_cache = True
+        except Exception:
+            _legisinfo_reachable_cache = False
+    return _legisinfo_reachable_cache
+
+
+_skip_live = pytest.mark.skipif(
+    not _legisinfo_reachable(),
+    reason="LEGISinfo unreachable from this environment — skipping live-HTTP test",
 )
 
 
@@ -77,6 +107,7 @@ class TestYearToSession:
 
 class TestFindBillHistorical:
 
+    @_skip_live
     def test_c32_1997_returns_multiple_candidates(self):
         results = find_bills("C-32", year=1997)
         assert len(results) >= 2
@@ -84,11 +115,13 @@ class TestFindBillHistorical:
         assert "35-2" in sessions
         assert "36-1" in sessions
 
+    @_skip_live
     def test_c32_1994_single_result(self):
         results = find_bills("C-32", year=1994)
         assert len(results) == 1
         assert results[0].get("ParlSessionCode") == "35-1"
 
+    @_skip_live
     def test_c32_current_session_single(self):
         results = find_bills("C-32")
         assert len(results) <= 1
@@ -96,6 +129,7 @@ class TestFindBillHistorical:
             ps = results[0].get("ParlSessionCode", "")
             assert ps != "35-2"
 
+    @_skip_live
     def test_nonexistent_with_year_returns_empty(self):
         results = find_bills("ZZTOP-999", year=1997)
         assert results == []
@@ -104,6 +138,7 @@ class TestFindBillHistorical:
         results = find_bills("C-32", year=1990)
         assert results == []
 
+    @_skip_live
     def test_ambiguous_year_bill_has_session_info(self):
         results = find_bills("C-32", year=1997)
         assert len(results) >= 2
@@ -115,6 +150,7 @@ class TestFindBillHistorical:
 
 class TestSingleResultContract:
 
+    @_skip_live
     def test_single_result_carries_bill_session(self):
         """Single-match via citation_search bill branch carries bill_session."""
         from local_tools.citation_search import search_citation
@@ -133,6 +169,7 @@ class TestSingleResultContract:
         assert item.get("bill_title", "").startswith("An Act")
         assert "*" in item["_bill_citation"]
 
+    @_skip_live
     def test_single_result_no_year_carries_bill_session(self):
         """Single-match without year also carries bill_session + bill_title."""
         from local_tools.citation_search import search_citation
@@ -147,6 +184,7 @@ class TestSingleResultContract:
 
 class TestFindBillsDedup:
 
+    @_skip_live
     def test_dedup_by_bill_id(self):
         results = find_bills("C-32", year=2000)
         ids = [r.get("BillId") for r in results]
@@ -187,6 +225,7 @@ class TestPartialFailureResilience:
 
 class TestCrossSessionBoundary:
 
+    @_skip_live
     def test_1997_bill_unique_to_one_session(self):
         """A bill unique to only 35-2 (not in 36-1) still returns 1 result."""
         results = find_bills("C-32", year=1997)
@@ -207,6 +246,7 @@ class TestCrossSessionBoundary:
 
 class TestBuildBillCitation:
 
+    @_skip_live
     def test_title_italicised(self):
         rec = find_bill("C-32", year=1994)
         assert rec is not None
@@ -215,6 +255,7 @@ class TestBuildBillCitation:
         assert "*An Act" in cit
         assert cit.endswith(".")
 
+    @_skip_live
     def test_current_session_citation(self):
         rec = find_bill("C-32")
         if rec:
@@ -222,6 +263,7 @@ class TestBuildBillCitation:
             assert cit.endswith(".")
             assert "*" in cit
 
+    @_skip_live
     def test_year_present_in_citation(self):
         rec = find_bill("C-32", year=1994)
         assert rec is not None
@@ -247,6 +289,7 @@ class TestBuildBillCitation:
 
 class TestBillAPIEndToEnd:
 
+    @_skip_live
     def test_ambiguous_bill_returns_needs_selection(self):
         from fastapi.testclient import TestClient
         from api.main import app
@@ -290,6 +333,7 @@ class TestBillAPIEndToEnd:
 
 class TestCache:
 
+    @_skip_live
     def test_per_session_cache(self):
         b1 = fetch_legisinfo_bills(session="35-2")
         b2 = fetch_legisinfo_bills(session="36-1")

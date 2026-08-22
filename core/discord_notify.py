@@ -1,7 +1,7 @@
 """Discord webhook notification for feedback events.
 
 Reads env DISCORD_FEEDBACK_WEBHOOK. If unset, degrades gracefully (no-op).
-All errors are swallowed and logged as warnings â?never raised.
+All errors are swallowed and logged as warnings — never raised.
 """
 
 import logging
@@ -32,7 +32,7 @@ def notify(record: dict) -> bool:
     output = record.get("output", "")
 
     if kind == "message":
-        text = f"**ð¬ Feedback Message**\n{note}"
+        text = f"**💬 Feedback Message**\n{note}"
     else:
         text = (
             f"**{'👍' if verdict == 'up' else '👎'} Rating ({verdict})**\n"

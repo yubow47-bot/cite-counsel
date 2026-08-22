@@ -119,11 +119,11 @@ export async function postCitationAssemble(
   return request("/api/citation/assemble", { type, fields })
 }
 
-/** POST /api/feedback —— 对单条引用结果反馈 */
+/** POST /api/feedback —— 对单条引用结果反馈（字段契约见 api/main.py 的 FeedbackInput） */
 export async function postFeedback(payload: {
-  citation: string
-  vote: "up" | "down"
+  verdict: "up" | "down"
   input?: string
+  output?: string
 }): Promise<void> {
   try {
     await fetch(`${API_BASE_URL}/api/feedback`, {
