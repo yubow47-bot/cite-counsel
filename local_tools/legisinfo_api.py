@@ -88,6 +88,34 @@ def _session_end_year(session_code: str) -> int | None:
     return info[1]
 
 
+def _restore_legacy_fields(records: list) -> list:
+    """Map new-schema LEGISinfo records onto the legacy field names.
+
+    LEGISinfo changed their JSON feed server-side: ``BillNumberFormatted``,
+    ``BillId``, and ``ParlSessionCode`` disappeared from each record.  The
+    replacements are ``NumberCode`` (full number, e.g. "C-32"), ``Id``, and
+    ``ParliamentNumber``+``SessionNumber`` respectively.  Re-adding the
+    legacy keys here keeps every downstream consumer (bill-number matching,
+    dedup by BillId, citation assembly) working with either shape.
+    """
+    for b in records:
+        if not isinstance(b, dict):
+            continue
+        if not b.get("BillNumberFormatted"):
+            num = b.get("NumberCode")
+            if num:
+                b["BillNumberFormatted"] = num
+        if not b.get("BillId"):
+            bid = b.get("Id")
+            if bid:
+                b["BillId"] = bid
+        if not b.get("ParlSessionCode"):
+            parl, sess = b.get("ParliamentNumber"), b.get("SessionNumber")
+            if parl and sess:
+                b["ParlSessionCode"] = "%s-%s" % (parl, sess)
+    return records
+
+
 def _fetch_json(session: str | None = None) -> list | None:
     """Download the LEGISinfo bill list. Returns list of bill dicts, or None on failure."""
     try:
@@ -98,7 +126,7 @@ def _fetch_json(session: str | None = None) -> list | None:
         resp.raise_for_status()
         data = resp.json()
         if isinstance(data, list):
-            return data
+            return _restore_legacy_fields(data)
     except Exception:
         pass
     return None

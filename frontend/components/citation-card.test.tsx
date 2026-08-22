@@ -13,7 +13,9 @@ vi.mock('@/lib/clipboard', () => ({
 }))
 
 import { copyCitation } from '@/lib/clipboard'
+import { postFeedback } from '@/lib/citation-api'
 const mockCopy = copyCitation as ReturnType<typeof vi.fn>
+const mockPostFeedback = postFeedback as ReturnType<typeof vi.fn>
 
 const BASE_CITATION = {
   citation: "R v Jordan, 2016 SCC 27.",
@@ -388,5 +390,35 @@ describe('CitationCard — duplicate pinpoint detection', () => {
     await user.click(screen.getByText(/add pinpoint/i))
     // The inline warning should remain visible inside the input area
     expect(screen.getByText(/may already contain a pinpoint/i)).toBeTruthy()
+  })
+})
+
+describe('CitationCard — feedback contract', () => {
+
+  it('posts backend-contract fields: verdict/input/output (no legacy vote)', async () => {
+    const user = userEvent.setup()
+    render(<CitationCard item={BASE_CITATION} sourceInput="r v jordan" />)
+
+    await user.click(screen.getByRole('button', { name: /mark as accurate/i }))
+
+    expect(mockPostFeedback).toHaveBeenCalledTimes(1)
+    const payload = mockPostFeedback.mock.calls[0][0]
+    expect(payload.verdict).toBe('up')
+    expect(payload.input).toBe('r v jordan')
+    expect(payload.output).toBe("R v Jordan, 2016 SCC 27.")
+    expect(payload).not.toHaveProperty('vote')
+    expect(payload).not.toHaveProperty('citation')
+  })
+
+  it('posts verdict "down" when marked incorrect', async () => {
+    const user = userEvent.setup()
+    render(<CitationCard item={BASE_CITATION} sourceInput="r v jordan" />)
+
+    await user.click(screen.getByRole('button', { name: /mark as incorrect/i }))
+
+    expect(mockPostFeedback).toHaveBeenCalledTimes(1)
+    const payload = mockPostFeedback.mock.calls[0][0]
+    expect(payload.verdict).toBe('down')
+    expect(payload.input).toBe('r v jordan')
   })
 })
