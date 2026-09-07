@@ -92,7 +92,7 @@ export function FileExtractView() {
               Click to select a file, or drag and drop here
             </span>
             <span className="text-xs text-muted-foreground">
-              Supports PDF, Word, images (screenshots / scans), and other document formats
+              Supports PDF, Word (DOCX), PPTX, XLSX, and images (screenshots / scans)
             </span>
             <span className="mt-1 text-xs text-muted-foreground/80">
               We read the text and format the citation using only what you provide.
@@ -121,7 +121,7 @@ export function FileExtractView() {
           ref={inputRef}
           type="file"
           className="sr-only"
-          accept=".pdf,.doc,.docx,.txt,.rtf,.jpg,.jpeg,.png,.webp"
+          accept=".pdf,.docx,.pptx,.xlsx,.jpg,.jpeg,.png,.webp"
           onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
         />
 

@@ -73,7 +73,12 @@ def fetch_by_citation(citation: str, doc_type: str = "cases") -> dict:
                     results = []
         if not results:
             return {"raw_input": citation}
-        return _map_fields(results[0])
+        # Guard: an element of a misbehaving payload may be a string/null —
+        # only dict records are mappable.
+        first = results[0] if isinstance(results[0], dict) else None
+        if first is None:
+            return {"raw_input": citation}
+        return _map_fields(first)
     except requests.exceptions.RequestException as e:
         logger.warning("A2AJ fetch failed: %s", e)
         return {"raw_input": citation, "error": "A2AJ database lookup failed. Try again or enter the citation manually."}
@@ -86,8 +91,8 @@ def _map_fields(result: dict) -> dict:
     date = result.get("document_date_en", "")
     year = date[:4] if date else ""
 
-    # 判断是判例还是法规
-    dataset = result.get("dataset", "")
+    # 判断是判例还是法规（dataset may be present-but-null in degraded payloads）
+    dataset = result.get("dataset") or ""
     is_legislation = "LEGISLATION" in dataset.upper()
 
     if is_legislation:
@@ -172,6 +177,11 @@ def search_cases_multi(query: str, size: int = 45,
         if timing.ENABLE_TIMING:
             timing.report().add_a2aj(f"search_cases_multi /search ({clean_query[:30]})", _http_elapsed)
         resp.raise_for_status()
-        return resp.json().get("results", [])
+        data = resp.json()
+        # Guard: envelope must be a JSON object of dict records (same contract
+        # as fetch_by_citation — an array/scalar envelope or junk elements
+        # degrade to an empty result instead of raising).
+        results = data.get("results", []) if isinstance(data, dict) else []
+        return [r for r in results if isinstance(r, dict)]
     except requests.exceptions.RequestException:
         return []

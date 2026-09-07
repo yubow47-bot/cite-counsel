@@ -15,6 +15,7 @@ from typing import Optional
 from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 # ── Ensure project root is on sys.path (so `from local_tools …` works) ──
 _PROJ = Path(__file__).resolve().parent.parent
@@ -136,7 +137,8 @@ rate_limiter = RateLimiter()
 async def _warm_legisinfo_cache():
     try:
         from local_tools.legisinfo_api import fetch_legisinfo_bills
-        bills = fetch_legisinfo_bills(force_refresh=True)
+        # Off the event loop: the fetch is a blocking HTTP GET + JSON parse.
+        bills = await run_in_threadpool(fetch_legisinfo_bills, force_refresh=True)
         _logger.info("[STARTUP] LEGISinfo cache warmed — %d bills loaded in current session", len(bills))
     except Exception as exc:
         _logger.warning("[STARTUP] LEGISinfo cache warm-up failed (non-fatal): %s", exc)
@@ -361,8 +363,11 @@ async def citation_query(body: CitationInput, request: Request):
     query = body.input.strip()
 
     # ── Step 1: classify ──
+    # The pipeline below is fully synchronous and network-bound (LLM + legal
+    # database calls up to ~30 s each).  It runs in the threadpool so the
+    # event loop stays responsive for other requests.
     try:
-        classified = classify_and_normalize(query)
+        classified = await run_in_threadpool(classify_and_normalize, query)
     except Exception as e:
         _logger.warning("Classification failed: %s", e)
         return _envelope(False, "", "error", {}, error={"reason": _USER_FACING_ERROR})
@@ -371,7 +376,9 @@ async def citation_query(body: CitationInput, request: Request):
 
     # ── Step 2: search ──
     try:
-        results = search_citation(query, classification=classified)
+        results = await run_in_threadpool(
+            lambda: search_citation(query, classification=classified),
+        )
     except Exception as e:
         _logger.warning("Search failed: %s", e)
         return _envelope(
@@ -397,7 +404,7 @@ async def citation_query(body: CitationInput, request: Request):
 
     # ── concept: multi-result, format each ──
     if route == "concept":
-        return _handle_concept(results, query)
+        return await _handle_concept(results, query)
 
     # ── citation_number / legislation / bill with unverified result → scaffold or unsupported ──
     if route in ("citation_number", "legislation", "bill") and len(results) == 1:
@@ -438,9 +445,13 @@ async def citation_query(body: CitationInput, request: Request):
         # continue to pass pinpoint through (the LLM includes it in the citation text).
         if route == "case_name" and _pin:
             fmt_item = {k: v for k, v in results[0].items() if k != "pinpoint"}
-            citation = format_citation(_without_internal(fmt_item))
+            citation = await run_in_threadpool(
+                lambda: format_citation(_without_internal(fmt_item)),
+            )
         else:
-            citation = format_citation(_without_internal(results[0]))
+            citation = await run_in_threadpool(
+                lambda: format_citation(_without_internal(results[0])),
+            )
         _cit_data: dict = {"citation": citation, "source_type": route}
         # Only return pinpoint as a separate field when it was stripped
         # before formatting (case_name route).  For legislation/concept/
@@ -463,7 +474,7 @@ async def citation_query(body: CitationInput, request: Request):
         )
 
 
-def _handle_concept(results: list, query: str) -> dict:
+async def _handle_concept(results: list, query: str) -> dict:
     """Handle concept-expansion results with needs_selection for multiple candidates.
 
     Single result (verified) → format directly; single unverified → scaffold.
@@ -471,7 +482,7 @@ def _handle_concept(results: list, query: str) -> dict:
     """
     # ── Empty (no results at all) ──
     if not results:
-        return _concept_scaffold()
+        return _concept_scaffold(query)
 
     # ── Single result: check verified ──
     if len(results) == 1:
@@ -484,14 +495,14 @@ def _handle_concept(results: list, query: str) -> dict:
                 suggested_type=SUGGESTED_TYPE_MAP.get("concept", "concept"),
                 disabled_message=_SCAFFOLD_DISABLED_MSG,
             )
-        return _format_concept(item)
+        return await _format_concept(item)
 
     # ── Multiple candidates: filter to verified only ──
     verified = [r for r in results if r.get("verified")]
     if not verified:
-        return _concept_scaffold()
+        return _concept_scaffold(query)
     if len(verified) == 1:
-        return _format_concept(verified[0])
+        return await _format_concept(verified[0])
 
     # 2+ verified → needs_selection with only verified candidates
     candidates = []
@@ -505,10 +516,10 @@ def _handle_concept(results: list, query: str) -> dict:
     })
 
 
-def _format_concept(item: dict) -> dict:
+async def _format_concept(item: dict) -> dict:
     """Format a single verified concept result."""
     try:
-        citation = format_citation(_without_internal(item))
+        citation = await run_in_threadpool(lambda: format_citation(_without_internal(item)))
         _cit_data: dict = {"citation": citation, "source_type": "concept"}
         debug = _collect_debug_info("concept")
         return _envelope(
@@ -524,13 +535,15 @@ def _format_concept(item: dict) -> dict:
         )
 
 
-def _concept_scaffold() -> dict:
+def _concept_scaffold(query: str) -> dict:
     """Return scaffold/unsupported when concept has no verified results."""
     suggested = SUGGESTED_TYPE_MAP.get("concept", "jurisprudence")
     return _scaffold_response(
         "concept",
         "Could not verify against our databases. Fill in the fields below to generate a McGill 10th citation.",
-        prefill={"style_of_cause": "duty to consult"},
+        # Prefill from the user's own query — never a hardcoded example, which
+        # the user could accidentally submit as a "verified" citation.
+        prefill=build_prefill("concept", query),
         suggested_type=suggested,
         disabled_message=_SCAFFOLD_DISABLED_MSG,
     )
@@ -585,9 +598,13 @@ async def citation_select(body: CitationSelectInput):
         _pin = item.get("pinpoint")
         if _pin and _is_case:
             fmt_item = {k: v for k, v in item.items() if k != "pinpoint"}
-            citation = format_citation(_without_internal(fmt_item))
+            citation = await run_in_threadpool(
+                lambda: format_citation(_without_internal(fmt_item)),
+            )
         else:
-            citation = format_citation(_without_internal(item))
+            citation = await run_in_threadpool(
+                lambda: format_citation(_without_internal(item)),
+            )
         # Bill candidates carry bill_session → use "bill" directly;
         # detect_type cannot classify LEGISinfo record keys.
         item_source_type = "bill" if item.get("bill_session") else detect_type(item)
@@ -612,6 +629,31 @@ async def citation_select(body: CitationSelectInput):
 # ═══════════════════════════════════════════════════════════════════
 #  3. POST /api/extract/file  —  File upload & citation extract
 # ═══════════════════════════════════════════════════════════════════
+
+_FILE_NO_TEXT_MSG = (
+    "We couldn't read any usable text from this file. Try a screenshot of the "
+    "relevant page (File Extraction tab), or enter the details manually."
+)
+
+
+def _extract_file_pipeline(tmp_path: str) -> dict:
+    """Blocking extract → classify → format pipeline for uploads.
+
+    Runs in a worker thread (called via run_in_threadpool) so the event loop
+    stays responsive.  Returns the extractor fields plus computed keys
+    ``_doc_type`` / ``_citation`` ("" when the pipeline stops early); the
+    route decides how to degrade on error / no-text results.
+    """
+    fields = extract_from_file(tmp_path)
+    if "error" in fields:
+        return {**fields, "_doc_type": "", "_citation": ""}
+    raw_text = fields.get("raw_text") or ""
+    if not raw_text.strip():
+        return {**fields, "_doc_type": "", "_citation": ""}
+    doc_type = classify_document_type(raw_text)
+    citation = format_citation(fields, doc_type=doc_type)
+    return {**fields, "_doc_type": doc_type, "_citation": citation}
+
 
 @app.post("/api/extract/file")
 async def extract_file(file: UploadFile = File(...)):
@@ -660,15 +702,26 @@ async def extract_file(file: UploadFile = File(...)):
         if cap_block:
             return cap_block
 
-        fields = extract_from_file(tmp_path)
+        fields = await run_in_threadpool(_extract_file_pipeline, tmp_path)
+
         if "error" in fields:
             return _envelope(
                 True, "file", "unsupported", {},
                 error={"reason": fields["error"]},
             )
+        if not (fields.get("raw_text") or "").strip():
+            # Extractors that can't parse the type return a bare raw_input;
+            # empty/unreadable documents yield no text at all.  Either way
+            # there is nothing to cite — stop before any LLM call instead of
+            # paying to format a junk citation.
+            reason = fields.get("raw_input") or _FILE_NO_TEXT_MSG
+            return _envelope(
+                True, "file", "unsupported", {},
+                error={"reason": reason},
+            )
 
-        doc_type = classify_document_type(fields.get("raw_text", ""))
-        citation = format_citation(fields, doc_type=doc_type)
+        doc_type = fields["_doc_type"]
+        citation = fields["_citation"]
         debug = _collect_debug_info("file")
 
         return _envelope(True, "file", "done", {
@@ -768,7 +821,7 @@ async def extract_url(body: UrlInput):
             )
 
     # ── URL-only — scaffold or unsupported when extraction fails ──
-    fields = extract_from_url(url)
+    fields = await run_in_threadpool(extract_from_url, url)
     if "error" in fields:
         error_msg = fields["error"]
         prefill = {"url": url}
@@ -799,8 +852,10 @@ async def extract_url(body: UrlInput):
         )
 
     try:
-        doc_type = classify_document_type(raw_text)
-        citation = format_citation(fields, doc_type=doc_type)
+        doc_type = await run_in_threadpool(classify_document_type, raw_text)
+        citation = await run_in_threadpool(
+            lambda: format_citation(fields, doc_type=doc_type),
+        )
         debug = _collect_debug_info("url")
 
         return _envelope(True, "url", "done", {
@@ -831,7 +886,7 @@ async def chat(body: ChatInput):
 
     try:
         messages = [{"role": m.role, "content": m.content} for m in body.messages]
-        reply = chat_deepseek(messages)
+        reply = await run_in_threadpool(chat_deepseek, messages)
         return _envelope(True, "chat", "done", {"reply": reply})
     except Exception as e:
         _logger.warning("Chat failed: %s", e)
@@ -1068,7 +1123,7 @@ async def citation_assemble(body: AssemblyInput):
         )
 
     try:
-        citation = assemble(body.type, body.fields)
+        citation = await run_in_threadpool(assemble, body.type, body.fields)
         return _envelope(True, body.type, "done", {
             "citations": [{"citation": citation, "verified": False, "source_type": body.type}],
         })

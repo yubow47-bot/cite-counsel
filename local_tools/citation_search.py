@@ -77,6 +77,29 @@ def _mark_first_deepseek_call() -> bool:
     return False
 
 
+_CLASSIFICATION_TYPES = ("citation_number", "case_name", "legislation", "bill", "concept")
+
+
+def _valid_classification(result) -> bool:
+    """A classifier result is usable only when it is a dict with a known type
+    and string normalized/original fields.
+
+    Downstream search_citation does ``classified["normalized"]`` and feeds it
+    to ``re`` matching — a missing/None key there would raise KeyError/TypeError
+    instead of degrading to the next fallback.
+    """
+    if not isinstance(result, dict):
+        return False
+    if result.get("type") not in _CLASSIFICATION_TYPES:
+        return False
+    normalized = result.get("normalized")
+    original = result.get("original")
+    return (
+        isinstance(normalized, str) and bool(normalized.strip())
+        and isinstance(original, str)
+    )
+
+
 def classify_and_normalize(query: str) -> dict:
     """判断输入类型并标准化。"""
     _fn_t0 = time.perf_counter()
@@ -140,7 +163,7 @@ def classify_and_normalize(query: str) -> dict:
 
         if content is not None:
             result = parse_llm_json(content)
-            if result.get("type") in ("citation_number", "case_name", "legislation", "bill", "concept"):
+            if _valid_classification(result):
                 gemini_succeeded = True
                 _fn_elapsed = time.perf_counter() - _fn_t0
                 logger.debug("[DUR] classify_and_normalize END (gemini_path) — %.1fms  llm=%.1fms", _fn_elapsed * 1000, _gemini_elapsed * 1000)
@@ -161,7 +184,7 @@ def classify_and_normalize(query: str) -> dict:
             _ds_elapsed = time.time() - t0
             logger.debug("[DUR] DeepSeek classify_and_normalize fallback — %.1fms", _ds_elapsed * 1000)
             result = parse_llm_json(content)
-            if result.get("type") in ("citation_number", "case_name", "legislation", "bill", "concept"):
+            if _valid_classification(result):
                 _fn_elapsed = time.perf_counter() - _fn_t0
                 logger.debug("[DUR] classify_and_normalize END (deepseek_fallback) — %.1fms  llm=%.1fms", _fn_elapsed * 1000, _ds_elapsed * 1000)
                 return result
