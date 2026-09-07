@@ -77,6 +77,48 @@ def _mark_first_deepseek_call() -> bool:
     return False
 
 
+# ── Process-lifetime caches for the static data files ────────────────────────
+# Both files change only on deploy.  They used to be re-read and re-parsed
+# per candidate inside the verification threadpool (normalization rules) and
+# per legislation query (CanLII database map).
+_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+_NORM_RULES_CACHE: dict | None = None
+_CANLII_DB_MAP_CACHE: dict | None = None
+_CANLII_DB_MAP_OK: bool = False
+
+
+def _load_normalization_rules() -> dict:
+    """Legislation-abbreviation expansion table ({} on missing/corrupt file)."""
+    global _NORM_RULES_CACHE
+    if _NORM_RULES_CACHE is None:
+        try:
+            with open(os.path.join(_DATA_DIR, "normalization_rules.json"), encoding="utf-8") as f:
+                _NORM_RULES_CACHE = json.load(f)
+        except Exception:
+            _NORM_RULES_CACHE = {}
+    return _NORM_RULES_CACHE
+
+
+def _load_canlii_db_map() -> tuple[dict, bool]:
+    """Jurisdiction → CanLII statute database mapping.
+
+    Returns (mapping, file_loaded_ok): ok=False means the file is missing or
+    corrupt, which callers treat as "use the hardcoded fallback" (a valid
+    file that merely lacks a jurisdiction does NOT trigger the fallback —
+    original semantics preserved).
+    """
+    global _CANLII_DB_MAP_CACHE, _CANLII_DB_MAP_OK
+    if _CANLII_DB_MAP_CACHE is None:
+        try:
+            with open(os.path.join(_DATA_DIR, "canlii_legislation_databases.json"), encoding="utf-8") as f:
+                _CANLII_DB_MAP_CACHE = json.load(f)
+            _CANLII_DB_MAP_OK = True
+        except Exception:
+            _CANLII_DB_MAP_CACHE = {}
+            _CANLII_DB_MAP_OK = False
+    return _CANLII_DB_MAP_CACHE, _CANLII_DB_MAP_OK
+
+
 _CLASSIFICATION_TYPES = ("citation_number", "case_name", "legislation", "bill", "concept")
 
 
@@ -415,20 +457,13 @@ Rules:
         """
         from local_tools.utils import a2aj_session, request_with_retry
         from local_tools.a2aj_api import _extract_jurisdiction
-        import os as _os
 
         entry = {"verified": False}
 
-        # 1. 用 normalization_rules.json 展开缩写
+        # 1. 用 normalization_rules.json 展开缩写（process-lifetime 缓存）
         normalized = name
-        rules_path = _os.path.join(
-            _os.path.dirname(_os.path.dirname(__file__)),
-            "data", "normalization_rules.json"
-        )
         try:
-            with open(rules_path, encoding='utf-8') as _f:
-                rules = json.load(_f)
-            abbrevs = rules.get("legislation_abbreviations", {})
+            abbrevs = _load_normalization_rules().get("legislation_abbreviations", {})
             if name in abbrevs:
                 normalized = abbrevs[name]
             else:
@@ -1150,16 +1185,13 @@ def search_citation(query: str, classification: dict | None = None) -> list:
             if jur:
                 from local_tools.canlii_api import browse_legislation_in_database
                 db_id = None
-                # 优先从 data/canlii_legislation_databases.json 读取
+                # 优先从 data/canlii_legislation_databases.json 读取（缓存）
+                db_map, db_map_ok = _load_canlii_db_map()
                 try:
-                    mapping_path = os.path.join(
-                        os.path.dirname(os.path.dirname(__file__)),
-                        "data", "canlii_legislation_databases.json"
-                    )
-                    with open(mapping_path, encoding='utf-8') as _f:
-                        db_map = json.load(_f)
-                    db_id = db_map.get(jur, {}).get("statute")
-                except (FileNotFoundError, json.JSONDecodeError, KeyError):
+                    db_id = db_map[jur]["statute"]
+                except (KeyError, TypeError):
+                    db_id = None
+                if db_id is None and not db_map_ok:
                     # 文件缺失/损坏 → 用硬编码兜底
                     db_id = _CANLII_STATUTE_DB.get(jur)
                 if db_id:

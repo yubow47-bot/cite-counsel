@@ -13,11 +13,17 @@ One-click disable: set ENABLED = False.
 
 import time
 import threading
+from collections import deque
 from contextlib import contextmanager
 
 ENABLED = True
 
-_records = []
+# Bounded span history: in the API process every measure() span appends and
+# nothing ever calls reset(), so an unbounded list leaked memory for the
+# life of the server.  500 spans covers any reasonable diagnostic window.
+_MAX_SPANS = 500
+
+_records = deque(maxlen=_MAX_SPANS)
 _lock = threading.Lock()
 
 

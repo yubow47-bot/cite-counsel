@@ -21,10 +21,20 @@ _RULES_PATH = Path(__file__).resolve().parent.parent / "mcgill_rules.json"
 #  Dynamic readers
 # ═══════════════════════════════════════════════════════════════════
 
+_RULES_CACHE: dict | None = None
+
+
 def _load_rules() -> dict:
-    """Load and return the full mcgill_rules.json."""
-    with open(_RULES_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+    """Load the full mcgill_rules.json once per process.
+
+    Rules change only on deploy; this used to be re-read (and re-parsed)
+    up to 4x per /api/scaffold/config request.
+    """
+    global _RULES_CACHE
+    if _RULES_CACHE is None:
+        with open(_RULES_PATH, "r", encoding="utf-8") as f:
+            _RULES_CACHE = json.load(f)
+    return _RULES_CACHE
 
 
 def get_scaffold_types() -> list[str]:

@@ -52,57 +52,6 @@ def get_case_databases(language: str = "en") -> dict:
         return {"error": "Legal database lookup failed. Try again or enter the citation manually."}
 
 
-def browse_cases(
-    database_id: str,
-    offset: int = 0,
-    result_count: int = 10,
-    language: str = "en",
-) -> dict:
-    """浏览指定数据库中的判例列表。
-
-    Args:
-        database_id: CanLII 数据库 ID（如 "scc-csc"）。
-        offset: 分页偏移量。
-        result_count: 返回条数（1-50）。
-        language: "en" 或 "fr"。
-
-    调用方契约：返回值可能是 {"error": "..."} 字典。集成时调用方
-    必须先检查 `if "error" in result`，不可直接索引数据键，否则 KeyError。
-    """
-    if not database_id:
-        return {"error": "database_id required"}
-    if not database_id.strip():
-        return {"error": "database_id required"}
-
-    key = os.environ.get("CANLII_API_KEY")
-    if not key:
-        return {"error": "CANLII_API_KEY not configured"}
-
-    try:
-        t0 = time.time()
-        with prof.measure("http.canlii_browse_cases", endpoint="/caseBrowse/{language}/{database_id}/"):
-            response = request_with_retry(
-                canlii_session, "GET",
-                f"{CANLII_BASE}/caseBrowse/{language}/{database_id}/",
-                params={
-                    "offset": offset,
-                    "resultCount": result_count,
-                    "api_key": key,
-                },
-                read_timeout=15,
-            )
-        if timing.ENABLE_TIMING:
-            timing.report().add_a2aj(
-                f"browse_cases({database_id}, offset={offset}, count={result_count})",
-                time.time() - t0,
-            )
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        logger.warning("CanLII browse_cases failed: %s", type(e).__name__)
-        return {"error": "Legal database lookup failed. Try again or enter the citation manually."}
-
-
 def get_case_metadata(
     database_id: str,
     case_id: str,

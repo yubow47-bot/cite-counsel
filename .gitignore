@@ -11,8 +11,8 @@ config/settings.py
 # 日志
 *.log
 
-# 一次性审计传递件，不进版本控制
-REVIEW_REQUEST.md
+# 一次性审计传递件，不进版本控制（仅根目录；docs/ 下的模板是受控跟踪的）
+/REVIEW_REQUEST.md
 
 # 调试 / 临时文件
 debug_prompt.txt

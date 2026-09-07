@@ -367,6 +367,23 @@ def detect_type(extracted_fields: dict) -> str:
     return "general_rules"
 
 
+_RULES_DB_CACHE: dict | None = None
+
+
+def _load_rules_db() -> dict:
+    """Load mcgill_rules.json once per process.
+
+    Rules change only on deploy, so a process-lifetime cache is safe; this
+    used to re-read and re-parse the ~50 KB file on every full-topic
+    format_citation call.
+    """
+    global _RULES_DB_CACHE
+    if _RULES_DB_CACHE is None:
+        with open(RULES_PATH, "r", encoding="utf-8") as f:
+            _RULES_DB_CACHE = json.load(f)
+    return _RULES_DB_CACHE
+
+
 def get_rules(detected_type: str, subpattern: str | None = None) -> dict:
     """从 mcgill_rules.json 读取并返回与类型相关的规则片段。
 
@@ -380,8 +397,7 @@ def get_rules(detected_type: str, subpattern: str | None = None) -> dict:
         return dict(SUBPATTERN_TEMPLATES[subpattern])
 
     # ── Full-topic mode (original behavior, subpattern is None) ──
-    with open(RULES_PATH, "r", encoding="utf-8") as f:
-        rules_db = json.load(f)
+    rules_db = _load_rules_db()
 
     if detected_type.startswith("secondary_sources."):
         subtype = detected_type.split(".", 1)[1]

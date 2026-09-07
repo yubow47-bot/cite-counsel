@@ -71,13 +71,23 @@ def _extract_pdf_scanned(file_path: str) -> dict:
     image_paths = []
     try:
         doc = fitz.open(file_path)
-        for i in range(min(3, len(doc))):
-            page = doc.load_page(i)
-            pix = page.get_pixmap(dpi=200)
-            # Write to a temporary PNG file
-            tmp_path = f"{file_path}.page{i}.png"
-            pix.save(tmp_path)
-            image_paths.append(tmp_path)
+        try:
+            for i in range(min(3, len(doc))):
+                page = doc.load_page(i)
+                # Cap rendered pixels: a crafted oversized page at dpi=200
+                # would otherwise allocate a giant pixmap.
+                _MAX_PIXELS = 16_000_000  # ≈ 4000×4000
+                w, h = page.rect.width, page.rect.height
+                scale = 200 / 72
+                if w * h * scale * scale > _MAX_PIXELS:
+                    scale = (_MAX_PIXELS / (w * h)) ** 0.5
+                pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale))
+                # Write to a temporary PNG file
+                tmp_path = f"{file_path}.page{i}.png"
+                pix.save(tmp_path)
+                image_paths.append(tmp_path)
+        finally:
+            doc.close()
 
         from llm_api.gemini_api import extract_from_images
         result = extract_from_images(image_paths)

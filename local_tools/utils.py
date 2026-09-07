@@ -27,7 +27,6 @@ crossref_session = _requests.Session()
 openlibrary_session = _requests.Session()
 deepseek_session = _requests.Session()
 gemini_session = _requests.Session()
-kimi_session = _requests.Session()
 discord_session = _requests.Session()
 generic_session = _requests.Session()
 
