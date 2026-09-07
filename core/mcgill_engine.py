@@ -619,6 +619,26 @@ def _mark_first_format() -> bool:
 import time as _fmt_time
 
 
+# ── Deterministic-lookup failure signals ────────────────────────────────────
+# ValueError subclasses so existing ``except ValueError`` handlers keep
+# working; typed so callers branch on the failure KIND instead of matching
+# English message substrings (which silently breaks when wording changes).
+class NotADoiError(ValueError):
+    """No DOI could be extracted from the input."""
+
+
+class DoiNotFoundError(ValueError):
+    """DOI extracted but the provider has no record / was unreachable."""
+
+
+class InvalidIsbnError(ValueError):
+    """ISBN extracted but its checksum fails."""
+
+
+class IsbnNotFoundError(ValueError):
+    """ISBN valid but the provider has no record / was unreachable."""
+
+
 def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
     """对外主入口：自动判断类型 → 取规则 → 拼 prompt → 调 DeepSeek → 返回引用。
 
@@ -659,11 +679,11 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
                 _last_source = "crossref"
                 return result
             # DOI valid but CrossRef has no data / unreachable
-            raise ValueError(
+            raise DoiNotFoundError(
                 "Couldn't find this publication in our databases."
             )
         # No DOI extracted from input — signal failure instead of falling through to LLM
-        raise ValueError(
+        raise NotADoiError(
             "This doesn't look like a valid DOI — please check the identifier."
         )
 
@@ -674,7 +694,7 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
         isbn = extract_isbn(raw_text)
         if isbn:
             if not validate_isbn(isbn):
-                raise ValueError(
+                raise InvalidIsbnError(
                     "This ISBN appears invalid — please check the digits."
                 )
             ol_data = fetch_openlibrary(isbn)
@@ -686,7 +706,7 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
                     _last_source = "openlibrary"
                     return result
             # Valid ISBN but Open Library has no data / unreachable
-            raise ValueError(
+            raise IsbnNotFoundError(
                 "Couldn't find this book in our databases."
             )
         # No valid ISBN extracted from raw_text — fall through to generic formatting
