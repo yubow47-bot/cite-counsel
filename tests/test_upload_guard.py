@@ -13,10 +13,19 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, ".")
 
+import pytest
 from fastapi.testclient import TestClient
 from api.main import app
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _no_rate_limit():
+    """The whole suite shares one in-process per-IP limiter bucket; keep these
+    requests out of that budget (the limiter itself is tested nowhere here)."""
+    with patch("api.main.rate_limiter.check", return_value=True):
+        yield
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -134,3 +143,59 @@ def test_upload_png_magic_mismatch_rejected():
         )
     assert resp.json()["status"] == "unsupported"
     mock_ext.assert_not_called()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Pipeline guards: extraction that yields no citable text must never
+#  trigger a paid LLM format call (junk-citation bug)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_bare_raw_input_result_never_reaches_llm():
+    """Extractor returns {'raw_input': 'Unsupported file type: .doc'} with no
+    error key — must degrade to unsupported, format_citation NOT called."""
+    with patch("api.main.extract_from_file",
+               MagicMock(return_value={"raw_input": "Unsupported file type: .doc"})), \
+         patch("api.main.format_citation") as mock_fmt, \
+         patch("api.main.classify_document_type") as mock_cls:
+        resp = client.post(
+            "/api/extract/file",
+            files={"file": ("doc.docx", b"PK\x03\x04 zip", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+        )
+    body = resp.json()
+    assert body["status"] == "unsupported"
+    assert "Unsupported file type" in body["error"]["reason"]
+    mock_fmt.assert_not_called()
+    mock_cls.assert_not_called()
+
+
+def test_empty_text_document_never_reaches_llm():
+    """A parseable but empty document (raw_text="") → unsupported, no LLM call."""
+    with patch("api.main.extract_from_file",
+               MagicMock(return_value={"title": "Empty report", "raw_text": ""})), \
+         patch("api.main.format_citation") as mock_fmt, \
+         patch("api.main.classify_document_type") as mock_cls:
+        resp = client.post(
+            "/api/extract/file",
+            files={"file": ("doc.docx", b"PK\x03\x04 zip", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+        )
+    body = resp.json()
+    assert body["status"] == "unsupported"
+    assert "couldn't read any usable text" in body["error"]["reason"]
+    mock_fmt.assert_not_called()
+    mock_cls.assert_not_called()
+
+
+def test_good_text_document_still_flows_to_llm():
+    """Guard-rail: a file WITH usable text still goes through classify+format."""
+    with patch("api.main.extract_from_file",
+               MagicMock(return_value={"title": "Report", "raw_text": "This document has plenty of readable body text to classify and format."})), \
+         patch("api.main.classify_document_type", MagicMock(return_value="report")), \
+         patch("api.main.format_citation", MagicMock(return_value="Report, 2026.")) as mock_fmt:
+        resp = client.post(
+            "/api/extract/file",
+            files={"file": ("doc.docx", b"PK\x03\x04 zip", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+        )
+    body = resp.json()
+    assert body["status"] == "done"
+    assert body["data"]["doc_type"] == "report"
+    mock_fmt.assert_called_once()

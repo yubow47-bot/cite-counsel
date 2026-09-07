@@ -10,6 +10,7 @@ Run:  pytest tests/test_verified_gate.py -v
 
 import sys
 import os
+import asyncio
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from unittest.mock import patch
@@ -104,7 +105,7 @@ _FORMATTED_CASE = "R v Verified, 2025 SCC 3."
 def test_1_unverified_single_returns_scaffold():
     """_handle_concept([unverified_single]) → unsupported scaffold, no format_citation."""
     with patch("api.main.format_citation") as mock_fmt:
-        result = _handle_concept(_UNVERIFIED_SINGLE, query="Fundamental freedoms")
+        result = asyncio.run(_handle_concept(_UNVERIFIED_SINGLE, query="Fundamental freedoms"))
 
     # format_citation must NOT be called
     mock_fmt.assert_not_called()
@@ -120,7 +121,7 @@ def test_1_unverified_single_returns_scaffold():
 def test_2_verified_single_returns_done():
     """_handle_concept([verified_single]) → status done, citation returned."""
     with patch("api.main.format_citation", return_value=_FORMATTED_CIT):
-        result = _handle_concept(_VERIFIED_SINGLE, query="Criminal Code")
+        result = asyncio.run(_handle_concept(_VERIFIED_SINGLE, query="Criminal Code"))
 
     assert result["status"] == "done", (
         f"Expected done, got {result['status']!r}"
@@ -133,7 +134,7 @@ def test_2_verified_single_returns_done():
 def test_3_mixed_three_filters_candidates():
     """_handle_concept([unverified, verified, verified]) → only 2 verified in needs_selection."""
     with patch("api.main.format_citation") as mock_fmt:
-        result = _handle_concept(_MIXED_THREE, query="Extra-contractual liability")
+        result = asyncio.run(_handle_concept(_MIXED_THREE, query="Extra-contractual liability"))
 
     # Must NOT format anything (multi-candidate path)
     mock_fmt.assert_not_called()
@@ -158,7 +159,7 @@ def test_3_mixed_three_filters_candidates():
 def test_4_all_unverified_returns_scaffold():
     """_handle_concept([all unverified]) → same scaffold shape as empty results."""
     with patch("api.main.format_citation") as mock_fmt:
-        result = _handle_concept(_ALL_UNVERIFIED, query="Some Act")
+        result = asyncio.run(_handle_concept(_ALL_UNVERIFIED, query="Some Act"))
 
     mock_fmt.assert_not_called()
     assert result["status"] in ("unsupported", "needs_input"), (
@@ -170,7 +171,7 @@ def test_4_all_unverified_returns_scaffold():
 def test_5_unverified_verified_pair_formats_directly():
     """_handle_concept([unverified, verified]) → 1 verified after filtering → done."""
     with patch("api.main.format_citation", return_value=_FORMATTED_CASE):
-        result = _handle_concept(_MIXED_TWO, query="R v Verified")
+        result = asyncio.run(_handle_concept(_MIXED_TWO, query="R v Verified"))
 
     assert result["status"] == "done", (
         f"Expected done, got {result['status']!r}"
