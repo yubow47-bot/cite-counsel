@@ -13,7 +13,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, Request
+from fastapi import BackgroundTasks, FastAPI, UploadFile, File, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
@@ -282,20 +282,6 @@ def _envelope(
         "data": data,
         "debug": debug if DEBUG else None,
         "error": error,
-    }
-
-
-def _build_debug(route_label: str) -> dict | None:
-    """Build debug payload from the last format_citation call + route info."""
-    if not DEBUG:
-        return None
-    last = get_last_debug()
-    return {
-        "route": route_label,
-        "a2aj_summary": last.get("source", ""),
-        "deepseek_prompt": (last.get("prompt") or "")[:1000],
-        "deepseek_response": (last.get("raw_response") or "")[:2000],
-        "rule_used": last.get("source"),
     }
 
 
@@ -984,10 +970,11 @@ FEEDBACK_FILE = _PROJ / "data" / "feedback.jsonl"
 
 
 @app.post("/api/feedback")
-async def feedback(body: FeedbackInput):
+def feedback(body: FeedbackInput, background_tasks: BackgroundTasks):
     """Record feedback (rating or message) to local JSONL + HF Dataset + Discord.
 
-    Two delivery paths run in a background executor, each independent:
+    Two delivery paths run as background tasks (after the response), each
+    independent:
       1. HF Dataset append (``_persist_feedback_hf``)
       2. Discord webhook notification (``_notify_discord``)
     Neither blocks the HTTP response; each swallows its own exceptions.
@@ -1004,7 +991,7 @@ async def feedback(body: FeedbackInput):
         record = {
             "kind": "message",
             "note": note,
-            "timestamp": __import__("datetime").datetime.now().isoformat(),
+            "timestamp": _dt.datetime.now().isoformat(),
         }
     else:
         verdict = (body.verdict or "").strip().lower()
@@ -1017,7 +1004,7 @@ async def feedback(body: FeedbackInput):
             "route": body.route or "",
             "verdict": verdict,
             "note": body.note or "",
-            "timestamp": __import__("datetime").datetime.now().isoformat(),
+            "timestamp": _dt.datetime.now().isoformat(),
         }
 
     # ── Local write (fast, always attempted) ──
@@ -1033,10 +1020,7 @@ async def feedback(body: FeedbackInput):
         )
 
     # ── Background delivery (HF Dataset + Discord) ──
-    import asyncio
-    asyncio.get_event_loop().run_in_executor(
-        None, _deliver_feedback, record,
-    )
+    background_tasks.add_task(_deliver_feedback, record)
 
     return _envelope(True, body.route or "", "done", {})
 
@@ -1053,11 +1037,9 @@ def _persist_feedback_hf(record: dict) -> None:
         from core.hf_store import append_record
         ok = append_record(record, filename="feedback.jsonl")
         if not ok:
-            logger = __import__("logging").getLogger(__name__)
-            logger.warning("Feedback HF Dataset write returned False")
+            _logging.getLogger(__name__).warning("Feedback HF Dataset write returned False")
     except Exception:
-        logger = __import__("logging").getLogger(__name__)
-        logger.warning("Feedback HF Dataset write failed", exc_info=True)
+        _logging.getLogger(__name__).warning("Feedback HF Dataset write failed", exc_info=True)
 
 
 def _notify_discord(record: dict) -> None:
@@ -1067,8 +1049,7 @@ def _notify_discord(record: dict) -> None:
 
         notify(record)
     except Exception:
-        logger = __import__("logging").getLogger(__name__)
-        logger.warning("Discord notification failed", exc_info=True)
+        _logging.getLogger(__name__).warning("Discord notification failed", exc_info=True)
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -38,7 +38,8 @@ export function ScaffoldForm({
   /** Hide/close the form (manual override scenario). */
   onClose?: () => void
 }) {
-  if (!SCAFFOLD_ENABLED) return null
+  // Hooks must run unconditionally (Rules of Hooks) — the SCAFFOLD_ENABLED
+  // gate below sits after them, right before the first render.
   const { config, loading: configLoading, error: configError } =
     useScaffoldConfig()
 
@@ -46,6 +47,8 @@ export function ScaffoldForm({
   const [fields, setFields] = useState<Record<string, string>>({})
   const [assembling, setAssembling] = useState(false)
   const [result, setResult] = useState<Result>({ kind: "idle" })
+
+  if (!SCAFFOLD_ENABLED) return null
 
   // Use backend suggestion first, fall back to first option
   useEffect(() => {

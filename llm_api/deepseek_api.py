@@ -59,12 +59,7 @@ def _call_deepseek(messages: list, temperature: float = 0, model: str | None = N
     _http_t0 = time.perf_counter()
     _is_first = _mark_first_deepseek_http()
 
-    api_key = _get_api_key()
-    if not api_key:
-        raise ValueError(
-            "DEEPSEEK_API_KEY not configured. "
-            "Set it in .env or config/settings.py"
-        )
+    api_key = _get_api_key()  # raises a clean ValueError when unconfigured
     actual_model = model or DEEPSEEK_MODEL
 
     if _is_first:

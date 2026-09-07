@@ -9,8 +9,14 @@ Usage:
 """
 
 import time
+from collections import deque
 
 ENABLE_TIMING = True
+
+# Bound the shared report's call lists: in the API process start()/print()
+# are never called, so the lazily-created global report used to accumulate
+# every LLM/HTTP span forever (slow leak + cross-request mixing).
+_MAX_ENTRIES = 200
 
 _report = None
 
@@ -31,9 +37,9 @@ class TimingReport:
     def __init__(self):
         self.start_ts = time.time()
         self.classify_t = None          # 分类阶段总耗时
-        self.a2aj_calls = []            # [(label, elapsed_seconds)]
+        self.a2aj_calls = deque(maxlen=_MAX_ENTRIES)   # [(label, elapsed_seconds)]
         self.format_t = None            # 格式化阶段总耗时
-        self.llm_calls = []             # [(label, elapsed_seconds)]
+        self.llm_calls = deque(maxlen=_MAX_ENTRIES)    # [(label, elapsed_seconds)]
 
     def set_classify(self, elapsed):
         self.classify_t = elapsed
