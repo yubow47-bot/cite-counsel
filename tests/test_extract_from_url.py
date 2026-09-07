@@ -6,12 +6,23 @@ Run: pytest tests/test_extract_from_url.py -v
 import json
 import os
 import sys
+import pytest
 import requests
 from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from llm_api.deepseek_api import extract_from_url, fetch_html
+
+
+@pytest.fixture(autouse=True)
+def _fake_dns():
+    """Resolve all hostnames to a public IP so tests never touch real DNS
+    (fetch_html now validates every URL through the SSRF guard)."""
+    def fake_getaddrinfo(hostname, port=None, *args, **kwargs):
+        return [(2, 1, 6, "", ("93.184.216.34", 0))]
+    with patch("socket.getaddrinfo", fake_getaddrinfo):
+        yield
 
 
 # ═════════════════════════════════════════════════════════════════════════════

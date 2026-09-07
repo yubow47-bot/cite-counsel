@@ -157,7 +157,8 @@ def test_file_processing_failure_sanitized(caplog):
         mock_ext.side_effect = _DummyException(_DUMMY_EXC_TEXT)
         resp = client.post(
             "/api/extract/file",
-            files={"file": ("test.txt", b"Hello world", "text/plain")},
+            # allowlisted extension so the request reaches the extraction stage
+            files={"file": ("test.docx", b"PK\x03\x04 dummy", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
         )
 
     assert resp.status_code == 200

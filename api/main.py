@@ -60,6 +60,30 @@ DEBUG = os.getenv("DEBUG_RESPONSES", "false").lower() in ("1", "true", "yes")
 SCAFFOLD_ENABLED = os.getenv("SCAFFOLD_ENABLED", "false").lower() in ("1", "true", "yes")
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "10"))
 EMPTY_BODY_THRESHOLD = 50  # chars — below this, treat the extracted body as unusable
+
+# ── Upload hardening ─────────────────────────────────────────────────────
+# Only types the extractors can actually parse (the frontend advertises the
+# same set minus .doc/.txt/.rtf, which have no server-side parser).  Anything
+# else is rejected before a temp file, a parser, or an LLM call is involved.
+_UPLOAD_SUFFIXES = {".pdf", ".docx", ".pptx", ".xlsx", ".jpg", ".jpeg", ".png", ".webp"}
+
+
+def _magic_byte_ok(head: bytes, suffix: str) -> bool:
+    """Loose content sniff: leading bytes must look like the declared type."""
+    if not head:
+        return False
+    if suffix == ".pdf":
+        return head.startswith(b"%PDF")
+    if suffix in (".docx", ".pptx", ".xlsx"):
+        # OOXML containers are zip archives (spanning/empty markers tolerated)
+        return head[:4] in (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
+    if suffix in (".jpg", ".jpeg"):
+        return head.startswith(b"\xff\xd8\xff")
+    if suffix == ".png":
+        return head.startswith(b"\x89PNG\r\n\x1a\n")
+    if suffix == ".webp":
+        return head[:4] == b"RIFF" and head[8:12] == b"WEBP"
+    return False
 ALLOWED_ORIGINS = [
     o.strip()
     for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
@@ -591,18 +615,42 @@ async def citation_select(body: CitationSelectInput):
 
 @app.post("/api/extract/file")
 async def extract_file(file: UploadFile = File(...)):
-    """Upload a document (docx/pdf/pptx/xlsx) and extract McGill citation."""
-    # ── Size guard ──
-    MAX_BYTES = MAX_UPLOAD_MB * 1024 * 1024
-    contents = await file.read()
-    if len(contents) > MAX_BYTES:
+    """Upload a document (docx/pdf/pptx/xlsx/image) and extract McGill citation."""
+    # ── Extension allowlist (checked before any I/O — also caps pathological
+    #     filename suffixes from ever reaching NamedTemporaryFile) ──
+    suffix = Path(file.filename or "upload").suffix.lower()
+    if suffix not in _UPLOAD_SUFFIXES:
         return _envelope(
-            False, "", "error", {},
-            error={"reason": f"File too large ({len(contents)/1024/1024:.1f} MB). Maximum is {MAX_UPLOAD_MB} MB"},
+            True, "file", "unsupported", {},
+            error={"reason": "Unsupported file type. Please upload a PDF, DOCX, PPTX, XLSX, or image (JPG/PNG/WebP)."},
+        )
+
+    # ── Size guard: read in chunks so an oversized upload is rejected early
+    #     instead of being fully received first ──
+    MAX_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_BYTES:
+            return _envelope(
+                False, "", "error", {},
+                error={"reason": f"File too large. Maximum is {MAX_UPLOAD_MB} MB"},
+            )
+        chunks.append(chunk)
+    contents = b"".join(chunks)
+
+    # ── Magic-byte check: content must look like the declared type ──
+    if not _magic_byte_ok(contents[:16], suffix):
+        return _envelope(
+            True, "file", "unsupported", {},
+            error={"reason": f"This file doesn't appear to be a valid {suffix.lstrip('.').upper()} file. Please re-save or convert it and try again."},
         )
 
     # ── Save to temp file (extract_from_file reads by path) ──
-    suffix = Path(file.filename or "upload").suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(contents)
         tmp_path = tmp.name
