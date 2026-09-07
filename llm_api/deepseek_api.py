@@ -121,20 +121,66 @@ def chat_deepseek(messages: list) -> str:
     return _call_deepseek(messages, temperature=0.7)
 
 
-def fetch_html(url: str, timeout: int = 15) -> str | None:
-    """Fetch HTML: try curl_cffi first, fall back to plain requests if it fails.
+_REDIRECT_STATUS = (301, 302, 303, 307, 308)
+_MAX_REDIRECT_HOPS = 5
 
+
+def fetch_html(url: str, timeout: int = 15) -> str | None:
+    """Fetch HTML from a user-supplied URL (SSRF-guarded).
+
+    curl_cffi first (Chrome TLS fingerprint), plain requests fallback —
     curl_cffi with impersonate="chrome" sometimes times out on sites that
-    respond fine to a plain requests.get() with a standard User-Agent.
-    The fallback catches that case.
+    respond fine to a plain requests.get() with a standard User-Agent, and
+    the fallback catches that case.
+
+    Redirects are followed MANUALLY (allow_redirects=False) so every hop is
+    re-validated against the internal-address blocklist in
+    local_tools.url_guard before the next request — an external page can no
+    longer 302 the server into fetching its own loopback / private network.
+    Response bodies are size-capped.  Returns None on any failure (blocked,
+    unreachable, oversized, too many hops).
     """
+    from local_tools.url_guard import (
+        MAX_RESPONSE_BYTES,
+        UrlBlocked,
+        next_redirect_url,
+        validate_url,
+    )
+
     import curl_cffi.requests as cffi_requests
+
+    try:
+        current = validate_url(url)
+    except UrlBlocked as e:
+        logger.info("[SSRF] URL fetch blocked: %s", e)
+        return None
+
+    def _capped(text: str | None) -> str | None:
+        # Post-hoc body cap: trafilatura only needs a normal article; a body
+        # beyond MAX_RESPONSE_BYTES is not a citation source (memory spike
+        # before the cap is bounded by the fetch timeout).
+        if text and len(text) > MAX_RESPONSE_BYTES:
+            return None
+        return text
 
     # ── Primary attempt: curl_cffi (Chrome TLS fingerprint) ──
     try:
-        r = cffi_requests.get(url, impersonate="chrome", timeout=timeout)
-        r.raise_for_status()
-        return r.text
+        hops = 0
+        while True:
+            r = cffi_requests.get(
+                current, impersonate="chrome", timeout=timeout, allow_redirects=False,
+            )
+            if r.status_code in _REDIRECT_STATUS:
+                if hops >= _MAX_REDIRECT_HOPS:
+                    return None
+                current = next_redirect_url(current, r.headers.get("location", ""))
+                hops += 1
+                continue
+            r.raise_for_status()
+            return _capped(r.text)
+    except UrlBlocked as e:
+        logger.info("[SSRF] redirect blocked: %s", e)
+        return None
     except Exception:
         pass
 
@@ -145,18 +191,30 @@ def fetch_html(url: str, timeout: int = 15) -> str | None:
         "Chrome/124.0.0.0 Safari/537.36"
     )
     try:
-        resp = request_with_retry(
-            generic_session, "GET", url,
-            connect_timeout=2.7, read_timeout=5, retries=0,
-            headers={"User-Agent": _UA},
-        )
-        try:
-            resp.raise_for_status()
-            return resp.text
-        except requests.exceptions.HTTPError:
-            return None
-        finally:
-            resp.close()
+        hops = 0
+        while True:
+            resp = request_with_retry(
+                generic_session, "GET", current,
+                connect_timeout=2.7, read_timeout=5, retries=0,
+                headers={"User-Agent": _UA},
+                allow_redirects=False,
+            )
+            if resp.status_code in _REDIRECT_STATUS:
+                if hops >= _MAX_REDIRECT_HOPS:
+                    return None
+                current = next_redirect_url(current, resp.headers.get("location", ""))
+                hops += 1
+                continue
+            try:
+                resp.raise_for_status()
+                return _capped(resp.text)
+            except requests.exceptions.HTTPError:
+                return None
+            finally:
+                resp.close()
+    except UrlBlocked as e:
+        logger.info("[SSRF] redirect blocked (fallback): %s", e)
+        return None
     except Exception:
         return None
 

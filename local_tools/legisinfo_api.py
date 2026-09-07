@@ -122,7 +122,7 @@ def _fetch_json(session: str | None = None) -> list | None:
         url = BILLS_URL
         if session:
             url = f"{BILLS_URL}?parlsession={session}"
-        resp = request_with_retry(legisinfo_session, "GET", url, read_timeout=30, verify=False)
+        resp = request_with_retry(legisinfo_session, "GET", url, read_timeout=30)
         resp.raise_for_status()
         data = resp.json()
         if isinstance(data, list):
