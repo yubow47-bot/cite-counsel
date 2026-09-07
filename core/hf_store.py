@@ -47,7 +47,7 @@ def _read_dataset(filename: str, repo: str, token: str) -> list[dict]:
             token=token,
         )
         records = []
-        with open(raw, "r") as f:
+        with open(raw, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line:
@@ -84,7 +84,7 @@ def _append_record(record: dict, filename: str, repo: str, token: str) -> bool:
                 repo_id=repo, filename=filename,
                 repo_type="dataset", token=token,
             )
-            with open(local_path, "a") as f:
+            with open(local_path, "a", encoding="utf-8") as f:
                 f.write(line)
             api.upload_file(
                 path_or_fileobj=local_path,

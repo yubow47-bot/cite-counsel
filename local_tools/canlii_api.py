@@ -48,7 +48,7 @@ def get_case_databases(language: str = "en") -> dict:
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        logger.warning("CanLII get_case_databases failed: %s", e)
+        logger.warning("CanLII get_case_databases failed: %s", type(e).__name__)
         return {"error": "Legal database lookup failed. Try again or enter the citation manually."}
 
 
@@ -99,7 +99,7 @@ def browse_cases(
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        logger.warning("CanLII browse_cases failed: %s", e)
+        logger.warning("CanLII browse_cases failed: %s", type(e).__name__)
         return {"error": "Legal database lookup failed. Try again or enter the citation manually."}
 
 
@@ -150,7 +150,7 @@ def get_case_metadata(
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        logger.warning("CanLII get_case_metadata failed: %s", e)
+        logger.warning("CanLII get_case_metadata failed: %s", type(e).__name__)
         return {"error": "Legal database lookup failed. Try again or enter the citation manually."}
 
 
@@ -178,7 +178,7 @@ def get_legislation_databases(language: str = "en") -> dict:
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        logger.warning("CanLII get_legislation_databases failed: %s", e)
+        logger.warning("CanLII get_legislation_databases failed: %s", type(e).__name__)
         return {"error": "Legal database lookup failed. Try again or enter the citation manually."}
 
 
@@ -228,5 +228,5 @@ def browse_legislation_in_database(
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        logger.warning("CanLII browse_legislation_in_database failed: %s", e)
+        logger.warning("CanLII browse_legislation_in_database failed: %s", type(e).__name__)
         return {"error": "Legal database lookup failed. Try again or enter the citation manually."}

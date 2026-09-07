@@ -77,7 +77,10 @@ class SpendTracker:
             self._check_day_rollover()
             self._total_spend += cost
             self._calls_since_flush += 1
-            self._throttled_flush()
+        # Flush OUTSIDE the lock: the HF download-append-upload round-trip can
+        # take seconds and must never stall every in-flight LLM call that
+        # shares this tracker.
+        self._maybe_flush()
 
     def is_over_cap(self) -> bool:
         """Return True if cumulative spend has reached the daily cap."""
@@ -127,27 +130,39 @@ class SpendTracker:
             self._total_spend = 0.0
             self._calls_since_flush = 0
 
-    def _throttled_flush(self):
-        """Flush to HF Dataset every N calls or every N seconds, whichever first."""
+    def _maybe_flush(self):
+        """Throttled HF flush — every N calls or N seconds, whichever first.
+
+        Called WITHOUT the lock held (record_cost releases it first).  The
+        flush decision and state snapshot are taken under the lock; the
+        network write happens after releasing it.
+        """
         if not self._persistence_ok:
             return
         now = time.time()
-        if (self._calls_since_flush >= _FLUSH_INTERVAL_CALLS
-                or (self._calls_since_flush > 0 and now - self._last_flush_ts >= _FLUSH_INTERVAL_SEC)):
-            self._do_flush()
+        with self._lock:
+            due = (
+                self._calls_since_flush >= _FLUSH_INTERVAL_CALLS
+                or (self._calls_since_flush > 0 and now - self._last_flush_ts >= _FLUSH_INTERVAL_SEC)
+            )
+            if not due:
+                return
             self._calls_since_flush = 0
             self._last_flush_ts = now
+            # Consistent snapshot for the record (state may move while we write)
+            record = {
+                "date": self._utc_date,
+                "total_spend_usd": round(self._total_spend, 6),
+                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }
+        self._do_flush(record)
 
-    def _do_flush(self):
-        """Write current state to HF Dataset."""
-        record = {
-            "date": self._utc_date,
-            "total_spend_usd": round(self._total_spend, 6),
-            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        }
+    def _do_flush(self, record: dict):
+        """Write the given state snapshot to HF Dataset (no lock held)."""
         ok = append_record(record)
         if not ok:
-            self._persistence_ok = False
+            with self._lock:
+                self._persistence_ok = False
             logger.warning(
                 "Spend tracker persistence failed — continuing in-memory. "
                 "Cap will reset on restart."

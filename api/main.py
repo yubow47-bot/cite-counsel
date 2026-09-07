@@ -6,6 +6,7 @@ Run:  uvicorn api.main:app --reload --port 8000
 """
 
 import os
+import re
 import sys
 import json
 import tempfile
@@ -14,7 +15,7 @@ from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 # ── Ensure project root is on sys.path (so `from local_tools …` works) ──
@@ -41,7 +42,14 @@ from local_tools.citation_search import classify_and_normalize, search_citation
 from local_tools.file_extractor import extract_from_file, classify_document_type
 from local_tools.openlibrary_api import extract_isbn
 from llm_api.deepseek_api import extract_from_url, chat_deepseek
-from core.mcgill_engine import format_citation, get_last_debug, detect_type, get_rules
+from core.mcgill_engine import (
+    format_citation,
+    get_last_debug,
+    detect_type,
+    get_rules,
+    NotADoiError,
+    InvalidIsbnError,
+)
 from local_tools.utils import (
     legisinfo_session,
     a2aj_session,
@@ -99,10 +107,53 @@ def _without_internal(d: dict) -> dict:
     """Strip known internal diagnostic keys from a result dict before user-facing use.
 
     Only specific keys (``_match_path``) are removed.  Other underscore-prefixed
-    keys (e.g. ``_bill_citation`` used by the bill route) are preserved.
+    keys (e.g. ``_bill_citation`` used by the bill route) are preserved — this
+    helper is used on the SERVER-side formatting path where the engine needs
+    ``_bill_citation``.  For payloads sent to the CLIENT use
+    ``_strip_internal_keys`` (internal fields never leave the server).
     """
     _INTERNAL_KEYS = {"_match_path"}
     return {k: v for k, v in d.items() if k not in _INTERNAL_KEYS}
+
+
+def _strip_internal_keys(d: dict) -> dict:
+    """Remove every underscore-prefixed (server-internal) key from a dict.
+
+    Used on payloads that cross the trust boundary: candidates sent to the
+    client and candidate dicts received back on /api/citation/select.
+    """
+    return {k: v for k, v in d.items() if not k.startswith("_")}
+
+
+_BILL_STYLE_RE = re.compile(r"(?i)^bill\s+([A-Za-z]+-\d+)$")
+
+
+def _rebuild_bill_citation(item: dict) -> str | None:
+    """Re-derive the deterministic LEGISinfo citation for a bill candidate.
+
+    Bill candidates expose only curated fields (style_of_cause "Bill C-22",
+    bill_session, bill_title) — the raw record never reaches the client, so
+    the citation is rebuilt from LEGISinfo (module-cached) instead of trusting
+    any client-supplied text.  Returns None when the bill cannot be
+    re-confirmed against LEGISinfo; the caller degrades to the scaffold.
+    """
+    from local_tools.legisinfo_api import (
+        build_bill_citation,
+        fetch_legisinfo_bills,
+        _normalize_bill_number,
+    )
+
+    style = (item.get("style_of_cause") or "").strip()
+    m = _BILL_STYLE_RE.match(style)
+    if not m:
+        return None
+    target = _normalize_bill_number(m.group(1))
+    session = (item.get("bill_session") or "").strip() or None
+    bills = fetch_legisinfo_bills(session=session)
+    for rec in bills:
+        if _normalize_bill_number(rec.get("BillNumberFormatted", "")) == target:
+            return build_bill_citation(rec, pinpoint=item.get("pinpoint"))
+    return None
 
 
 app = FastAPI(title="McGill Citation Tool API", version="1.0.0")
@@ -161,41 +212,51 @@ app.add_middleware(
 # ═══════════════════════════════════════════════════════════════════
 
 class CitationInput(BaseModel):
-    input: str
+    # max_length only — emptiness is answered by the route as a normal
+    # envelope error (contract keeps every response a uniform JSON object).
+    input: str = Field(..., max_length=2000)
 
 
 class CitationSelectInput(BaseModel):
-    candidates: list
+    candidates: list = Field(..., max_length=20)
     selected_index: int
 
 
 class UrlInput(BaseModel):
-    url: Optional[str] = None
-    doi: Optional[str] = None
-    isbn: Optional[str] = None
+    url: Optional[str] = Field(default=None, max_length=2048)
+    doi: Optional[str] = Field(default=None, max_length=256)
+    isbn: Optional[str] = Field(default=None, max_length=32)
 
 
 class ChatMessage(BaseModel):
-    role: str
-    content: str
+    role: str = Field(..., max_length=20)
+    content: str = Field(..., max_length=4000)
 
 
 class ChatInput(BaseModel):
-    messages: list[ChatMessage]
+    messages: list[ChatMessage] = Field(..., max_length=20)
 
 
 class FeedbackInput(BaseModel):
-    kind: str = "rating"  # "rating" | "message"
-    input: Optional[str] = None
-    output: Optional[str] = None
-    route: Optional[str] = None
-    verdict: Optional[str] = None  # "up" or "down" for ratings
-    note: Optional[str] = None
+    kind: str = Field(default="rating", max_length=20)  # "rating" | "message"
+    input: Optional[str] = Field(default=None, max_length=2000)
+    output: Optional[str] = Field(default=None, max_length=4000)
+    route: Optional[str] = Field(default=None, max_length=100)
+    verdict: Optional[str] = Field(default=None, max_length=10)  # "up" or "down"
+    note: Optional[str] = Field(default=None, max_length=4000)
 
 
 class AssemblyInput(BaseModel):
-    type: str
-    fields: dict
+    type: str = Field(..., max_length=100)
+    fields: dict = Field(default_factory=dict)
+
+    @field_validator("fields")
+    @classmethod
+    def _cap_fields(cls, v: dict) -> dict:
+        """Bound the manual-scaffold payload: field count and value length."""
+        if len(v) > 60:
+            raise ValueError("too many fields")
+        return {str(k)[:60]: (str(val)[:500] if val is not None else "") for k, val in v.items()}
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -431,7 +492,7 @@ async def citation_query(body: CitationInput, request: Request):
         for item in results:
             candidates.append({
                 "display": _candidate_display(item),
-                **_without_internal(item),
+                **_strip_internal_keys(item),
             })
         return _envelope(True, route, "needs_selection", {
             "candidates": candidates,
@@ -509,7 +570,7 @@ async def _handle_concept(results: list, query: str) -> dict:
     for item in verified:
         candidates.append({
             "display": _candidate_display(item),
-            **_without_internal(item),
+            **_strip_internal_keys(item),
         })
     return _envelope(True, "concept", "needs_selection", {
         "candidates": candidates,
@@ -570,6 +631,12 @@ async def citation_select(body: CitationSelectInput):
 
     item = body.candidates[body.selected_index]
 
+    # ── Grounding hardening: internal fields are server-owned ──
+    # The client only echoes a previously-returned candidate.  Strip every
+    # underscore-prefixed key so a tampered payload cannot smuggle in raw
+    # citation text (_bill_citation) or internal markers (_match_path).
+    item = _strip_internal_keys(item)
+
     # ── Verified gate: refuse to format unverified candidates ──
     # Explicit boolean identity: only True passes — "false" (string), 1, or
     # other truthy-but-not-True values are rejected same as an actual False.
@@ -580,6 +647,19 @@ async def citation_select(body: CitationSelectInput):
         )
 
     try:
+        if item.get("bill_session"):
+            # Re-derive the deterministic bill citation from LEGISinfo
+            # (cached).  A candidate carrying bill_session but not
+            # re-confirmable against LEGISinfo degrades to the scaffold
+            # instead of echoing client-controlled text as "verified".
+            rebuilt = await run_in_threadpool(_rebuild_bill_citation, item)
+            if rebuilt is None:
+                return _envelope(
+                    True, "select", "unsupported", {},
+                    error={"reason": _SCAFFOLD_DISABLED_MSG},
+                )
+            item["_bill_citation"] = rebuilt
+
         # Determine whether this candidate represents a case/jurisprudence
         # result.  Only for case/jurisprudence candidates is pinpoint
         # stripped from the formatted citation text and returned as a
@@ -777,8 +857,9 @@ async def extract_url(body: UrlInput):
         except ValueError as e:
             msg = str(e)
             _logger.warning("DOI processing failed: %s", e)
-            # Auto-detect ISBN entered in the DOI field
-            if "valid DOI" in msg and extract_isbn(doi):
+            # Auto-detect ISBN entered in the DOI field (typed sentinel, not
+            # message-substring matching)
+            if isinstance(e, NotADoiError) and extract_isbn(doi):
                 isbn = doi  # fall through to ISBN block below
             else:
                 return _envelope(
@@ -802,9 +883,8 @@ async def extract_url(body: UrlInput):
                 "citations": [{"citation": citation, "source_type": "book"}],
             }, debug=debug)
         except ValueError as e:
-            msg = str(e)
             _logger.warning("ISBN processing failed: %s", e)
-            if "invalid" in msg:
+            if isinstance(e, InvalidIsbnError):
                 return _envelope(
                     True, "url", "error", {},
                     error={"reason": "We couldn't process this ISBN. Please check the number and try again."},
@@ -1158,8 +1238,10 @@ async def timing_middleware(request: Request, call_next):
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    # Free endpoints — no rate limiting
-    free_paths = {"/api/health", "/api/warmup", "/api/feedback", "/api/scaffold/config", "/api/citation/assemble"}
+    # Free endpoints — no rate limiting.  /api/feedback is deliberately NOT
+    # free: each call triggers an HF dataset write + Discord POST, so an
+    # unauthenticated write-amplification vector must stay throttled.
+    free_paths = {"/api/health", "/api/warmup", "/api/scaffold/config", "/api/citation/assemble"}
     if request.url.path in free_paths:
         return await call_next(request)
 

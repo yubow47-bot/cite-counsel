@@ -208,7 +208,9 @@ class TestPartialFailureResilience:
                 }]
             return []
 
-        with patch("local_tools.legisinfo_api._fetch_json", side_effect=fake_fetch):
+        with patch("local_tools.legisinfo_api.fetch_legisinfo_bills", side_effect=fake_fetch), \
+             patch("local_tools.legisinfo_api._CACHE", {}), \
+             patch("local_tools.legisinfo_api._CACHE_TIME", {}):
             results = find_bills("X-99", year=1997)
             assert len(results) == 1
             assert results[0].get("ParlSessionCode") == "36-1"
@@ -218,7 +220,9 @@ class TestPartialFailureResilience:
         def fake_fetch(session=None):
             return None
 
-        with patch("local_tools.legisinfo_api._fetch_json", side_effect=fake_fetch):
+        with patch("local_tools.legisinfo_api.fetch_legisinfo_bills", side_effect=fake_fetch), \
+             patch("local_tools.legisinfo_api._CACHE", {}), \
+             patch("local_tools.legisinfo_api._CACHE_TIME", {}):
             results = find_bills("C-32", year=1997)
             assert results == []
 
@@ -307,11 +311,14 @@ class TestBillAPIEndToEnd:
 
         for c in candidates:
             assert "display" in c
-            assert "_bill_citation" in c
+            # The bill citation text is server-owned: candidates ship curated
+            # fields only, and /api/citation/select re-derives the citation
+            # from LEGISinfo instead of echoing client text.
+            assert "_bill_citation" not in c
+            assert not any(k.startswith("_") for k in c)
             assert "bill_session" in c
             assert "bill_title" in c
             assert "Session" in c["display"]
-            assert "*" in c["_bill_citation"]
 
         sessions_seen = set()
         for i, c in enumerate(candidates):

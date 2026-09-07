@@ -16,6 +16,18 @@ logger = logging.getLogger(__name__)
 _WEBHOOK_ENV = "DISCORD_FEEDBACK_WEBHOOK"
 
 
+def _sanitize(text: str) -> str:
+    """Neutralize Discord markdown escapes and @-mentions in user text.
+
+    A ``` fence in user content would break out of the code block and allow
+    spoofed/styled content; "@everyone"/"@here" in text would ping the whole
+    server (belt to the allowed_mentions braces below).
+    """
+    if not text:
+        return text
+    return text.replace("```", "'''").replace("@", "@ ")
+
+
 def notify(record: dict) -> bool:
     """POST a human-readable feedback message to the Discord webhook.
 
@@ -27,9 +39,9 @@ def notify(record: dict) -> bool:
         return False
 
     kind = record.get("kind", "rating")
-    note = record.get("note", "")
+    note = _sanitize(record.get("note", ""))
     verdict = record.get("verdict", "")
-    output = record.get("output", "")
+    output = _sanitize(record.get("output", ""))
 
     if kind == "message":
         text = f"**💬 Feedback Message**\n{note}"
@@ -41,9 +53,11 @@ def notify(record: dict) -> bool:
         )
 
     try:
-        resp = discord_session.post(webhook, json={"content": text}, timeout=5)
+        # allowed_mentions: never parse pings from content, whatever it holds.
+        payload = {"content": text, "allowed_mentions": {"parse": []}}
+        resp = discord_session.post(webhook, json=payload, timeout=5)
         resp.raise_for_status()
         return True
     except _requests.RequestException as exc:
-        logger.warning("Discord webhook POST failed: %s", exc)
+        logger.warning("Discord webhook POST failed: %s", type(exc).__name__)
         return False

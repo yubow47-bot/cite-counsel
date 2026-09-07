@@ -243,16 +243,26 @@ def find_bills(bill_number: str, year: int | None = None) -> list[dict]:
         return []
 
     for sess in sessions:
-        raw = _fetch_json(session=sess)
-        if raw is None:
+        # Cached fetch (same path as find_bill / boot warm-up) — a historical
+        # query no longer re-downloads the full list for every candidate
+        # session.  Empty result covers both fetch failure and empty session.
+        bills = fetch_legisinfo_bills(session=sess)
+        if not bills:
             failed_sessions.append(sess)
             continue
-        for b in raw:
-            if _normalize_bill_number(b.get("BillNumberFormatted", "")) == target:
-                bid = b.get("BillId", 0)
-                if bid and bid not in seen_bill_ids:
-                    seen_bill_ids.add(bid)
-                    results.append(b)
+        for b in bills:
+            if not isinstance(b, dict):
+                continue
+            if _normalize_bill_number(b.get("BillNumberFormatted", "")) != target:
+                continue
+            # Dedupe on BillId when present; a record with no id is still a
+            # valid match and must not be silently dropped.
+            bid = b.get("BillId") or b.get("Id")
+            if bid:
+                if bid in seen_bill_ids:
+                    continue
+                seen_bill_ids.add(bid)
+            results.append(b)
 
     if failed_sessions:
         logger.warning("[LEGISinfo] failed sessions for bill %s: %s", bill_number, failed_sessions)
