@@ -164,7 +164,7 @@ export function ScaffoldForm({
         <form onSubmit={handleGenerate} className="mt-4 flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="scaffold-type">Source type</Label>
-            <Select value={type} onValueChange={setType}>
+              <Select value={type} onValueChange={(value) => setType(value ?? "")}>
               <SelectTrigger id="scaffold-type" className="bg-background border-border/60">
                 <SelectValue placeholder="Select a source type" />
               </SelectTrigger>

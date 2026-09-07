@@ -44,7 +44,7 @@ export function CitationTool({ autoFocus }: { autoFocus?: boolean }) {
     switch (env.status) {
       case "done":
         setView({ kind: "done", citations: env.data.citations ?? [] })
-        if (env.data.citations?.length > 0) {
+        if ((env.data.citations?.length ?? 0) > 0) {
           trackEvent("citation_generated")
         }
         break
