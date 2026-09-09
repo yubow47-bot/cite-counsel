@@ -614,10 +614,13 @@ def build_prompt(extracted_fields: dict, detected_type: str, relevant_rules: dic
         "- If a field is null or missing, omit it entirely",
         "- Output must end with a period",
         '- NEVER add a pinpoint (e.g. "at para 42", "s 7(2)", "at 100") that is not explicitly present in the input fields above. Only include a pinpoint if the input fields contain a non-null value for it.',
+        '- Use straight quotation marks (") around article and page titles — NEVER curly quotes ("\u201c" or "\u201d"). Book, case and journal names take *asterisks* instead.',
+        "- If there is no issue number, write the volume number alone — no colon after it.",
+        "- Copy names verbatim from the information provided — never abbreviate words.",
     ]
     if detected_type in ("secondary_sources.websites", "secondary_sources.news_sources"):
         strict_rules.append(
-            '- For web sources: Author (if any), "Title", (Date), online: <site domain> [archived URL].'
+            '- For web sources: Author (if any), "Title", (Date), online: <site domain> [archived URL]. — the online element ends at the closing ">" and nothing follows it.'
         )
     strict_text = "\n".join(strict_rules)
 
