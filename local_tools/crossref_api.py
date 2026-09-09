@@ -66,11 +66,12 @@ def build_journal_citation(cr_data: dict) -> str:
     title_raw = cr_data.get("title", [""])[0]
     title_str = f'"{title_raw}"' if title_raw else ""
 
-    # ── Journal (Roman, not italic) ──
+    # ── Journal (italic, per 2026-09-08 ruling — matches the LLM path and
+    #    mcgill_rules.json rule[0]; was Roman before) ──
     journal_raw = cr_data.get("container-title", [""])
     if isinstance(journal_raw, list):
         journal_raw = journal_raw[0] if journal_raw else ""
-    journal_str = f" {journal_raw}" if journal_raw else ""
+    journal_str = f" *{journal_raw}*" if journal_raw else ""
 
     # ── Year ──
     date_parts = cr_data.get("published", {}).get("date-parts", [[None]])
