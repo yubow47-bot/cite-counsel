@@ -94,6 +94,16 @@ def test_juris_neutral_only():
     })
     assert result == "juris.neutral", f"Expected juris.neutral, got {result}"
 
+def test_juris_neutral_with_empty_reporter_string():
+    """neutral + empty-string reporter (the _map_fields equal-value artifact,
+    e.g. pre-neutral era Gladue) → juris.neutral"""
+    result = select_subpattern("jurisprudence", {
+        "style_of_cause": "R. v. Gladue",
+        "neutral_citation": "[1999] 1 SCR 688",
+        "reporter": "",
+    })
+    assert result == "juris.neutral", f"Expected juris.neutral, got {result}"
+
 def test_juris_reported_only():
     """reporter only (no neutral_citation) → juris.reported_only"""
     result = select_subpattern("jurisprudence", {

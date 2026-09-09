@@ -84,6 +84,13 @@ def fetch_by_citation(citation: str, doc_type: str = "cases") -> dict:
         return {"raw_input": citation, "error": "A2AJ database lookup failed. Try again or enter the citation manually."}
 
 
+def _same_citation(a: str, b: str) -> bool:
+    """归一化后比较两条引文是否同值（去点号、折叠空白、忽略大小写）。"""
+    def _norm(s: str) -> str:
+        return re.sub(r"\s+", " ", s.replace(".", "")).strip().casefold()
+    return _norm(a) == _norm(b)
+
+
 def _map_fields(result: dict) -> dict:
     """将 A2AJ 返回字段映射到 detect_type 能识别的格式。"""
     citation = result.get("citation_en", "")
@@ -105,6 +112,11 @@ def _map_fields(result: dict) -> dict:
         }
     else:
         reporter = result.get("citation2_en", "")
+        # A2AJ 对 pre-neutral 时代判例（如 R v Gladue）会把同一条印刷引文
+        # 同时填进 citation_en 和 citation2_en —— 原样映射会让并引路由输出
+        # "X, X."，同值时置空 reporter 退回单引文模式。
+        if reporter and _same_citation(reporter, citation):
+            reporter = ""
         return {
             "style_of_cause": name,
             "neutral_citation": citation,
