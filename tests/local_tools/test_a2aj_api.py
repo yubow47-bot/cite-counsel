@@ -78,6 +78,47 @@ class TestMapFieldsReporter:
         sp = select_subpattern("jurisprudence", mapped)
         assert sp == "juris.neutral_parallel", f"Expected juris.neutral_parallel, got {sp!r}"
 
+    # ── CLASS C: citation2_en duplicates citation_en (pre-neutral era, Gladue) ──
+
+    def test_duplicate_citation2_en_reporter_empty(self):
+        """A2AJ fills both citation fields with the same print citation
+        (pre-neutral era, e.g. R v Gladue) → reporter is emptied, not duplicated."""
+        record = {
+            "citation_en": "[1999] 1 SCR 688",
+            "citation2_en": "[1999] 1 SCR 688",
+            "name_en": "R. v. Gladue",
+            "document_date_en": "1999-04-23T00:00:00",
+            "dataset": "SCC",
+        }
+        mapped = _map_fields(record)
+        assert mapped["neutral_citation"] == "[1999] 1 SCR 688"
+        assert mapped["reporter"] == ""
+
+    def test_duplicate_citation2_en_dotted_variant(self):
+        """Dotted reporter variant (S.C.R.) normalizes to the same citation → reporter emptied."""
+        record = {
+            "citation_en": "[1999] 1 SCR 688",
+            "citation2_en": "[1999] 1 S.C.R. 688",
+            "name_en": "R. v. Gladue",
+            "document_date_en": "1999-04-23T00:00:00",
+            "dataset": "SCC",
+        }
+        mapped = _map_fields(record)
+        assert mapped["reporter"] == ""
+
+    def test_duplicate_citation2_en_select_subpattern(self):
+        """Equal-value record routes to 'juris.neutral', not 'juris.neutral_parallel'."""
+        record = {
+            "citation_en": "[1999] 1 SCR 688",
+            "citation2_en": "[1999] 1 SCR 688",
+            "name_en": "R. v. Gladue",
+            "document_date_en": "1999-04-23T00:00:00",
+            "dataset": "SCC",
+        }
+        mapped = _map_fields(record)
+        sp = select_subpattern("jurisprudence", mapped)
+        assert sp == "juris.neutral", f"Expected juris.neutral, got {sp!r}"
+
     # ── Edge: legislation path (not affected, but guard against regression) ──
 
     def test_legislation_path_reporter_not_set(self):
