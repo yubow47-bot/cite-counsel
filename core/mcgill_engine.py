@@ -754,7 +754,11 @@ def _ensure_balanced_asterisks(citation: str) -> str:
         _last_asterisk_guard = (
             f"repaired: closed italic run before first ', ' (offset {boundary})"
         )
-        logger.warning("[asterisk-guard] %s | %r", _last_asterisk_guard, repaired[:80])
+        # repair is the low-severity outcome (output stays italicized): debug
+        # only, so an upstream model with a habitual dropped-closing-asterisk
+        # quirk cannot flood the WARNING log — the strip fallback below is
+        # the visible-degradation case that does warrant WARNING.
+        logger.debug("[asterisk-guard] %s | %r", _last_asterisk_guard, repaired[:80])
         return repaired
     stripped = citation.replace("*", "")
     _last_asterisk_guard = "stripped: no ', ' boundary after opening '*'"
