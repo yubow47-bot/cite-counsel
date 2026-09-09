@@ -260,7 +260,7 @@
           "SIFT method: Stop | Investigate the Source | Find better coverages | Trace claims to original content."
         ],
         "examples": [
-          "IFSD Report (Institute of Fiscal Studies and Democracy)"
+          "IFSD Report (Institute of Fiscal Studies and Democracy)."
         ]
       },
       {
@@ -286,7 +286,7 @@
             "subtype": "Official Records / Meetings",
             "template": "Title, | UN body's acronym | session number or year, | UN document number | (year of document) | document type and number | pinpoint.",
             "examples": [
-              "UNCTAD TDB, 23rd Sess, UN Doc TD/B/SR. 565 (1981) 565th meeting",
+              "UNCTAD TDB, 23rd Sess, UN Doc TD/B/SR. 565 (1981) 565th meeting.",
               "UN Charter, 26 June 1945, Can TS 1945 No 7."
             ]
           },
@@ -294,7 +294,7 @@
             "subtype": "Reports",
             "template": "Title, | UN body's acronym | session number or year, | UN document number | (year of document) | document type and number | pinpoint.",
             "examples": [
-              "Report of the UN Commissioner for Refugees, UNGA, 15th Sess, UN Doc A/4378"
+              "Report of the UN Commissioner for Refugees, UNGA, 15th Sess, UN Doc A/4378."
             ]
           },
           {
@@ -465,7 +465,7 @@
           "John Borrows, \"Creating an Indigenous Legal Community\" (2005) 50:1 McGill LJ 153 at 155.",
           "Lynn A Iding, \"In a Poor State: The Long Road to Human Rights Protection on the Basis of Social Condition\" (2003) 41:2 Alta LR 513.",
           "The Right Honourable Beberly McLachlin, \"The Supreme Court and the Public Interest\" (2001) 64:2 Sask L Rev 309.",
-          "Rafael La Porta et al, \"Law and Finance (1998) 106:6 J Political Economy 1113 at 1152.",
+          "Rafael La Porta et al, \"Law and Finance\" (1998) 106:6 Journal of Political Economy 1113 at 1152.",
           "Alan Hanna, \"Reconciliation Through Relationality in Indigenous Legal Orders\" (2019) 56:3 Alta L Rev 817.",
           "RRA Walker, \"The English Property Legislation of 1922-26\" (1928) 10:1 J Comp Legis & Intl L (3rd) 1.",
           "Eric David, \"Pourquoi aime-t-on une musique?\" (2022) RQDI (special edition, January)."
@@ -513,6 +513,11 @@
       {
         "topic": "News Sources",
         "template": "Author, \"title of article\", | newspaper | (date) | page, | electronic source.",
+        "rules": [
+          "The newspaper / publication name is in Roman (NOT italicized).",
+          "Article titles go in quotation marks, NOT italics.",
+          "For online sources, indicate the electronic source: online: <site domain> [archived URL]."
+        ],
         "examples": [
           "Bill Curry, \"PM, Premiers Work Out Deal on Aboriginal Health Care,\" The Globe and Mail (26 November 2005) A4.",
           "\"Ottawa Eyes Six Candidates in Search of New Supreme Court Judge\", Canadian Press (17 October 2005).",
@@ -569,6 +574,10 @@
       {
         "topic": "Websites",
         "template": "Author, | \"title of the page/article\" | (date of the page/article) | pinpoint, | online: | <site domain> | [archived URL].",
+        "rules": [
+          "The page/article title goes in quotation marks, NOT italics.",
+          "The site name / domain is in Roman (NOT italicized)."
+        ],
         "examples": [
           "Richard Gold, \"The Midas Conundrum: Why less can be more when it comes to intellectual property protection\" (25 April 2017) online: <cigionline.org> [perma.cc/XAP7-VWDR].",
           "Cour fèdérale, \"Tribunaux canadiens\" (last modified 14 April 2019), online: <fet-ef-gc.ca> [perma.cc/N4G2-EP7D]."
@@ -594,7 +603,7 @@
         "topic": "Physical Objects",
         "template": "Creator, | Type of work, | additional information | (year) | held at | institution name | [medium] | parallel citation",
         "examples": [
-          "Anishinaabe, Drum, (circa 1850) held at the British Museum [drum], online\" <britishmuseum.org> [perma.cc/BN3J-B2YV]."
+          "Anishinaabe, Drum, (circa 1850) held at the British Museum [drum], online: <britishmuseum.org> [perma.cc/BN3J-B2YV]."
         ]
       },
       {
@@ -814,9 +823,9 @@
         ],
         "examples": [
           "Bill C-26, *An Act to establish the Canadian Border Services Agency*, 1st Sess, 38th Parl, 2005, cl 5(1)(e) (as passed by the House of Commons 13 June 2005).",
-          "Bill 59, *An Act to amend the Civil Code as regards marriage*, 1st Sess, 37th Leg, Quebec, 2004 (assented to 10 November 2004), SQ 2004, c 23",
+          "Bill 59, *An Act to amend the Civil Code as regards marriage*, 1st Sess, 37th Leg, Quebec, 2004 (assented to 10 November 2004), SQ 2004, c 23.",
           "Bill S-3, *An Act to amend the Energy Efficiency Act*, 2nd Sess, 40th Parl, 2009, cl 5, (first reading 29 January 2009).",
-          "Bill C-26, *An Act to establish the Canadian Border Services Agency*, 1st Sess, 38th Parl, cl 5(1)(e) (as passed by the House of Commons 13 June 2005)"
+          "Bill C-26, *An Act to establish the Canadian Border Services Agency*, 1st Sess, 38th Parl, cl 5(1)(e) (as passed by the House of Commons 13 June 2005)."
         ]
       },
       {
