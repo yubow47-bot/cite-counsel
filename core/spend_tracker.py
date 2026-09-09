@@ -35,6 +35,10 @@ _PRICING: dict[str, dict[str, float]] = {
     "deepseek-v4-pro":        {"input": 3.0,  "output": 6.0},   # ¥3 / ¥6
     "gemini-2.5-flash-lite":  {"input": 0.10, "output": 0.40},  # $0.10 / $0.40
     "gemini-2.5-flash":       {"input": 0.30, "output": 2.50},  # $0.30 / $2.50
+    # OpenRouter (USD, 2026-09-08 pricing)
+    "qwen/qwen3.7-flash":     {"input": 0.03, "output": 0.13},
+    "openai/gpt-oss-20b":     {"input": 0.03, "output": 0.13},
+    "z-ai/glm-4.7-flash":     {"input": 0.0605, "output": 0.40},
 }
 
 # Models priced in CNY (need FX conversion at spend time).

@@ -11,7 +11,32 @@ from local_tools.utils import deepseek_session, generic_session, request_with_re
 
 logger = logging.getLogger(__name__)
 
+
+def _load_env():
+    """Load .env file for API key."""
+    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    if os.path.exists(env_path):
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                os.environ.setdefault(key.strip(), value.strip())
+
+
+# Must run BEFORE the constants below read os.getenv — this ordering bug
+# silently ignored .env-provided LLM_* values at import time.
+_load_env()
+
+
+# ── Provider selection ──────────────────────────────────────────────────────
+# Default: DeepSeek direct.  Set LLM_COMPLETIONS_URL to any OpenAI-compatible
+# chat/completions endpoint (e.g. https://openrouter.ai/api/v1/chat/completions)
+# and provide OPENROUTER_API_KEY (or LLM_API_KEY) to route the SAME pipeline
+# through it; LLM_DEFAULT_MODEL then names the provider's model id.
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
+COMPLETIONS_URL = os.getenv("LLM_COMPLETIONS_URL", DEEPSEEK_API_URL)
 DEEPSEEK_MODEL = os.getenv("LLM_DEFAULT_MODEL", "deepseek-v4-flash")
 URL_EXTRACT_FETCH_TIMEOUT = 8
 
@@ -27,24 +52,20 @@ def _mark_first_deepseek_http() -> bool:
     return False
 
 
-def _load_env():
-    """Load .env file for API key."""
-    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
-    if os.path.exists(env_path):
-        with open(env_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                os.environ.setdefault(key.strip(), value.strip())
-
-
-_load_env()
-
-
 def _get_api_key() -> str:
-    """Get DeepSeek API key from .env via environment variable."""
+    """Resolve the API key for the configured completions endpoint.
+
+    DeepSeek direct -> DEEPSEEK_API_KEY.  Any custom endpoint (OpenRouter,
+    etc.) -> OPENROUTER_API_KEY, falling back to LLM_API_KEY.
+    """
+    if COMPLETIONS_URL != DEEPSEEK_API_URL:
+        key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("LLM_API_KEY") or ""
+        if not key:
+            raise ValueError(
+                "LLM_COMPLETIONS_URL is set but no key found. "
+                "Set OPENROUTER_API_KEY (or LLM_API_KEY) in the environment."
+            )
+        return key
     key = os.environ.get("DEEPSEEK_API_KEY", "")
     if not key:
         raise ValueError(
@@ -70,13 +91,15 @@ def _call_deepseek(messages: list, temperature: float = 0, model: str | None = N
         "messages": messages,
         "temperature": temperature,
     }
-    if disable_thinking:
+    if disable_thinking and COMPLETIONS_URL == DEEPSEEK_API_URL:
+        # DeepSeek-specific extension — other OpenAI-compatible endpoints
+        # (OpenRouter upstreams) reject unknown params.
         body["thinking"] = {"type": "disabled"}
 
     with timing.measure("http.deepseek", model=actual_model):
         response = request_with_retry(
             deepseek_session, "POST",
-            DEEPSEEK_API_URL,
+            COMPLETIONS_URL,
             # retries=0: POST is not idempotent — a read-timeout retry could
             # duplicate a completed LLM call and double-charge.
             retries=0,
