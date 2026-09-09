@@ -46,7 +46,6 @@ from core.mcgill_engine import (
     format_citation,
     get_last_debug,
     detect_type,
-    get_rules,
     NotADoiError,
     InvalidIsbnError,
 )
