@@ -560,12 +560,10 @@ def _build_italic_rules(detected_type: str, subpattern: str | None = None) -> st
         )
     elif detected_type == "secondary_sources.journal_articles":
         italic_rules = (
-            "- Journal titles/abbreviations are in Roman (NOT italicized).\n"
-            "  Only the article title takes quotation marks.\n"
+            "- YOU MUST italicize the journal name using Markdown *asterisks*.\n"
+            "  The article title goes in quotation marks, NOT italics.\n"
             "  Author list: 1 author \"A\"; 2 authors \"A & B\"; 3 authors \"A, B & C\"; 4+ \"A et al\".\n"
-            "  Example: David M Tanovich, \"E-Racing Racial Profiling\" (2004) 41 Alta L Rev 905.\n"
-            "  Example: Rachel Cox & Karen Messing, \"...\" (2006) 24 Windsor YB Access Just 23.\n"
-            "  Example: Rafael La Porta et al, \"Law and Finance\" (1998) 106:6 Journal of Political Economy 1113.\n"
+            "  Example: David M Tanovich, \"E-Racing Racial Profiling\" (2004) 41 *Alta L Rev* 905.\n"
         )
     elif detected_type == "secondary_sources.books":
         italic_rules = (
