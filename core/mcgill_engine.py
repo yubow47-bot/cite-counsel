@@ -18,6 +18,7 @@ RULES_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcgill_ru
 _last_prompt = None
 _last_raw_response = None
 _last_source = None
+_last_asterisk_guard = None
 
 
 def get_last_debug() -> dict:
@@ -26,6 +27,7 @@ def get_last_debug() -> dict:
         "prompt": _last_prompt,
         "raw_response": _last_raw_response,
         "source": _last_source,
+        "asterisk_guard": _last_asterisk_guard,
     }
 
 
@@ -588,10 +590,13 @@ def build_prompt(extracted_fields: dict, detected_type: str, relevant_rules: dic
     """将字段与规则拼成传给 DeepSeek 的 prompt。
 
     当 subpattern 不为 None 时，斜体规则按子模式选取，不再让 LLM 做 CASE A/B 判断。
+    字段过滤只发生在序列化成 prompt 字符串的这一刻——extracted_fields 字典本体
+    绝不修改（raw_text 在本函数之前有三个真实消费者：DOI 路径、ISBN 路径、
+    select_subpattern 的 government_docs 子类型判别）。
     """
     rules_text = json.dumps(relevant_rules, ensure_ascii=False, indent=2)
     rules_text = rules_text.replace(" | ", " ").replace("|", "")
-    fields_text = json.dumps(extracted_fields, ensure_ascii=False, indent=2)
+    fields_text = json.dumps(_prompt_fields(extracted_fields), ensure_ascii=False, indent=2)
 
     italic_rules = _build_italic_rules(detected_type, subpattern)
 
@@ -618,6 +623,67 @@ STRICT OUTPUT RULES:
 - Output must end with a period
 - NEVER add a pinpoint (e.g. "at para 42", "s 7(2)", "at 100") that is not explicitly present in the input fields above. Only include a pinpoint if the input fields contain a non-null value for it.
 {italic_rules}"""
+
+
+# ── Prompt hygiene: serialization-time field filtering ──────────────────────
+# 批量正文与管线内部字段绝不进 prompt：raw_text 是注入面也是 token 大头；
+# hostname/verified/warning/display/role 是路由或前端元数据，对排版毫无意义。
+_PROMPT_EXCLUDED_FIELDS = frozenset({
+    "raw_text",     # 全文正文（URL 路径不截断）——注入面 + token 大头
+    "hostname",     # 路由元数据
+    "verified",     # 管线标志位
+    "warning",      # search_citation 的中文复核提示
+    "display",      # /citation/select 回传的前端标签
+    "role",         # concept 路由元数据（detect_type 已消费）
+})
+
+_MONTHS_EN = ("January", "February", "March", "April", "May", "June", "July",
+              "August", "September", "October", "November", "December")
+
+
+def _humanize_date(value):
+    """ISO 日期 → McGill 散文日期（'2017-04-25' → '25 April 2017'）。
+
+    仅对 ISO 形状生效；已经是散文日期、部分垃圾、非字符串一律原样返回。
+    纯函数——结果只用于 prompt 序列化，禁止写回 fields 字典。
+    """
+    if not isinstance(value, str):
+        return value
+    s = value.strip()
+    m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", s)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 1 <= mo <= 12 and 1 <= d <= 31:
+            return f"{d} {_MONTHS_EN[mo - 1]} {y}"
+        return s
+    m = re.fullmatch(r"(\d{4})-(\d{2})", s)
+    if m:
+        mo = int(m.group(2))
+        if 1 <= mo <= 12:
+            return f"{_MONTHS_EN[mo - 1]} {m.group(1)}"
+    return s
+
+
+def _prompt_fields(extracted_fields: dict) -> dict:
+    """Serialization-time field filter — returns a NEW dict.
+
+    The input dict is never modified: raw_text/None filtering here must not
+    leak into the DOI/ISBN deterministic paths or select_subpattern, all of
+    which read the ORIGINAL fields before build_prompt is reached.  Blank
+    strings count as absence (same semantics detect_type applies).
+    """
+    out = {}
+    for k, v in extracted_fields.items():
+        if k in _PROMPT_EXCLUDED_FIELDS or k.startswith("_"):
+            continue
+        if v is None:
+            continue
+        if isinstance(v, str) and not v.strip():
+            continue
+        if k == "date":
+            v = _humanize_date(v)
+        out[k] = v
+    return out
 
 
 # ── Per-process first-call tracking for format_citation ──
@@ -655,6 +721,32 @@ class IsbnNotFoundError(ValueError):
     """ISBN valid but the provider has no record / was unreachable."""
 
 
+def _ensure_balanced_asterisks(citation: str) -> str:
+    """Guarantee renderable italics: the number of '*' must be even.
+
+    奇数个星号时先尝试修复——在首星号之后的第一个 ', ' 边界补右星号
+    （最常见的失败形态是案名的闭合星号在逗号前被丢掉）。无法定位边界
+    时剥掉全部星号：渲染成纯文本是看得见的 McGill 降级，好过渲染坏掉。
+    两种处置都记日志并通过 get_last_debug() 暴露，绝不静默。
+    """
+    global _last_asterisk_guard
+    if citation.count("*") % 2 == 0:
+        return citation
+    first = citation.find("*")
+    boundary = citation.find(", ", first + 1) if first != -1 else -1
+    if boundary != -1:
+        repaired = citation[:boundary] + "*" + citation[boundary:]
+        _last_asterisk_guard = (
+            f"repaired: closed italic run before first ', ' (offset {boundary})"
+        )
+        logger.warning("[asterisk-guard] %s | %r", _last_asterisk_guard, repaired[:80])
+        return repaired
+    stripped = citation.replace("*", "")
+    _last_asterisk_guard = "stripped: no ', ' boundary after opening '*'"
+    logger.warning("[asterisk-guard] %s | %r", _last_asterisk_guard, stripped[:80])
+    return stripped
+
+
 def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
     """对外主入口：自动判断类型 → 取规则 → 拼 prompt → 调 DeepSeek → 返回引用。
 
@@ -667,8 +759,9 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
     _is_first_fmt = _mark_first_format()
     if _is_first_fmt:
         logger.debug("[DUR] format_citation — FIRST call")
-    global _last_prompt, _last_raw_response, _last_source
+    global _last_prompt, _last_raw_response, _last_source, _last_asterisk_guard
     _last_source = None
+    _last_asterisk_guard = None
 
     # ── Bill 确定性路径（LEGISinfo，不过 LLM） ──
     bill_cit = extracted_fields.get("_bill_citation")
@@ -760,6 +853,7 @@ def format_citation(extracted_fields: dict, doc_type: str | None = None) -> str:
         timing.report().add_llm("format_citation", time.time() - t0)
     _last_prompt = prompt
     _last_raw_response = result
+    result = _ensure_balanced_asterisks(result)
     if _last_source is None:
         _last_source = "deepseek"
     _f_elapsed = _fmt_time.perf_counter() - _f_t0
