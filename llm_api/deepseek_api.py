@@ -260,18 +260,16 @@ def extract_from_url(url: str) -> dict:
         logger.warning("[JSON] extract_from_url failed: %s  len=%d", e, len(result) if result else 0)
         return {"url": url, "error": "We couldn't read the content of this page. Try uploading a screenshot instead."}
 
-    # 从 hostname 推断来源名称（去掉 .com/.org 等后缀）
+    # 站点标识 = 小写裸域（规则示例 online: <cigionline.org> 的形态）。
+    # 域名不是刊名——不再编造全大写 newspaper。
     hostname = meta.get("hostname", "") or ""
-    sitename = re.sub(r"\.[a-z]{2,4}(?:\.[a-z]{2})?$", "", hostname).upper()
-    if not sitename:
-        sitename = hostname
 
     fields = {
         "url": url,
         "page_title": meta.get("title") or None,
         "author": meta.get("author") or None,
         "date": meta.get("date") or None,
-        "newspaper": sitename or None,
+        "site_domain": hostname or None,
         "hostname": hostname,
         "raw_text": meta.get("raw_text") or "",
         "style_of_cause": None,
@@ -280,9 +278,5 @@ def extract_from_url(url: str) -> dict:
         "jurisdiction": None,
         "year": (meta.get("date") or "")[:4] or None,
     }
-
-    # 如果没有 newspaper，fallback 到 website 模式
-    if not fields["newspaper"] and fields["page_title"]:
-        fields["website"] = hostname
 
     return fields

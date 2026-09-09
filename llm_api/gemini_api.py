@@ -145,8 +145,9 @@ def _align_fields(gemini_result: dict) -> dict:
     title_raw = (gemini_result.get("page_title") or "").strip()
     raw_text = (gemini_result.get("raw_text") or "").strip()
 
-    # Normalise newspaper to uppercase (mirroring extract_from_url's sitename logic)
-    newspaper = newspaper_raw.upper() if newspaper_raw else None
+    # Keep the publication name exactly as extracted — it is a REAL name read
+    # from the page (e.g. "The Globe and Mail"); upper-casing destroyed it.
+    newspaper = newspaper_raw or None
 
     fields = {
         "url": (gemini_result.get("url") or "").strip() or None,
@@ -163,10 +164,8 @@ def _align_fields(gemini_result: dict) -> dict:
         "raw_text": raw_text[:3000] if raw_text else None,
     }
 
-    # Fallback to website mode when no newspaper but has page_title
-    if not fields["newspaper"] and fields["page_title"]:
-        fields["website"] = ""
-
+    # No newspaper/hostname in the vision schema — detect_type falls through
+    # on absent values; blank-string markers no longer count as fields.
     return fields
 
 

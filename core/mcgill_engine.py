@@ -306,7 +306,13 @@ def select_subpattern(detected_type: str, fields: dict) -> str | None:
 
 def detect_type(extracted_fields: dict) -> str:
     """根据提取字段自动判断 McGill 引用类型。"""
-    keys = {k.lower().replace(" ", "_") for k, v in extracted_fields.items() if v is not None}
+    # Presence = non-blank value.  Blank-string markers (e.g. website="") must
+    # not count as fields — same absence semantics as the prompt filter.
+    keys = {
+        k.lower().replace(" ", "_")
+        for k, v in extracted_fields.items()
+        if v is not None and str(v).strip()
+    }
 
     def has(*candidates):
         return any(c in keys for c in candidates)
@@ -600,6 +606,23 @@ def build_prompt(extracted_fields: dict, detected_type: str, relevant_rules: dic
 
     italic_rules = _build_italic_rules(detected_type, subpattern)
 
+    strict_rules = [
+        "- Output ONLY the McGill citation, nothing else",
+        '- No sentences like "can be found online at" or "is available at"',
+        "- No numbers or bullets at the start",
+        "- No explanation, no commentary",
+        "- Follow EXACTLY the template structure shown in the McGill Rules above",
+        "- Replace placeholder words like Author, Title, Date with the actual values from the information provided",
+        "- If a field is null or missing, omit it entirely",
+        "- Output must end with a period",
+        '- NEVER add a pinpoint (e.g. "at para 42", "s 7(2)", "at 100") that is not explicitly present in the input fields above. Only include a pinpoint if the input fields contain a non-null value for it.',
+    ]
+    if detected_type in ("secondary_sources.websites", "secondary_sources.news_sources"):
+        strict_rules.append(
+            '- For web sources: Author (if any), "Title", (Date), online: <site domain> [archived URL].'
+        )
+    strict_text = "\n".join(strict_rules)
+
     return f"""You are a McGill legal citation formatter.
 Format the following information into a proper McGill citation.
 
@@ -612,16 +635,7 @@ Information to format:
 {fields_text}
 
 STRICT OUTPUT RULES:
-- Output ONLY the McGill citation, nothing else
-- No sentences like "can be found online at" or "is available at"
-- No numbers or bullets at the start
-- No explanation, no commentary
-- Follow EXACTLY the template structure shown in the McGill Rules above
-- Replace placeholder words like Author, Title, Date with the actual values from the information provided
-- If a field is null or missing, omit it entirely
-- For websites: Author (if any), "Title", (Date), online: Site Name <URL>.
-- Output must end with a period
-- NEVER add a pinpoint (e.g. "at para 42", "s 7(2)", "at 100") that is not explicitly present in the input fields above. Only include a pinpoint if the input fields contain a non-null value for it.
+{strict_text}
 {italic_rules}"""
 
 

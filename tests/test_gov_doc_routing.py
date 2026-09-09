@@ -404,7 +404,7 @@ def test_ac1_empty_body_returns_unsupported_and_skips_format():
             "raw_text": "",
             "url": "https://www.ourcommons.ca/test",
             "page_title": "Debates (Hansard) No. 139 - House of Commons",
-            "newspaper": "OURCOMMONS",
+            "site_domain": "ourcommons.ca",
         }
 
         async def _run():

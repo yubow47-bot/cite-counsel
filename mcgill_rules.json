@@ -568,7 +568,7 @@
       },
       {
         "topic": "Websites",
-        "template": "Author, | \"title of the page/article\" | (date of the page/article) | pinpoint, | online | (type of electronic source) | : | <URL> | [archived URL].",
+        "template": "Author, | \"title of the page/article\" | (date of the page/article) | pinpoint, | online: | <site domain> | [archived URL].",
         "examples": [
           "Richard Gold, \"The Midas Conundrum: Why less can be more when it comes to intellectual property protection\" (25 April 2017) online: <cigionline.org> [perma.cc/XAP7-VWDR].",
           "Cour fèdérale, \"Tribunaux canadiens\" (last modified 14 April 2019), online: <fet-ef-gc.ca> [perma.cc/N4G2-EP7D]."
@@ -576,7 +576,7 @@
       },
       {
         "topic": "Online Videos",
-        "template": "Author, | \"title of the page/article\" | (date of the page) | pinpoint | (type of electronic source | : | <URL> | [archived URL].",
+        "template": "Author, | \"title of the page/article\" | (date of the page) | pinpoint | online: | <site domain> | [archived URL].",
         "examples": [
           "\"Supreme Court Hearings: Supreme Court Reference Case on the Appointment of Justice Marc Nadon\" (15 January 2014) at 02h:29m:30s, online (video): <cpac.ca/en> [perma.cc/J2EH-TFXL].",
           "Jagmeet Singh, \"1 Year and Now 2 Impeachments Later, I'm Still Not Joking\" (13 January 2021), online (video): <tiktok.com> [perma.cc/X7AR-A6VX]."
@@ -947,7 +947,7 @@
   },
   "website": {
     "category": "Websites",
-    "template": "Author, \"[title]\", ([date]), online: <[url]>.",
+    "template": "Author, \"[title]\" ([date]), online: <[url]>.",
     "fields": [
       {"key": "author", "label": "Author", "placeholder": "e.g. Richard Gold"},
       {"key": "title", "label": "Page Title", "placeholder": "e.g. The Midas Conundrum", "required": true},
