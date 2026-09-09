@@ -570,7 +570,7 @@ def _build_italic_rules(detected_type: str, subpattern: str | None = None) -> st
     elif detected_type == "secondary_sources.books":
         italic_rules = (
             "- YOU MUST italicize book titles using Markdown *asterisks*.\n"
-            "  Example: Jane Smith, *Book Title*, 2nd ed (Publisher, 2020).\n"
+            "  Example: Jane Smith, *Book Title*, 2nd ed (Toronto: Carswell, 2020).\n"
         )
     elif detected_type == "constitutional_statutes":
         italic_rules = (
