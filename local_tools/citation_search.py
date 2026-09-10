@@ -94,6 +94,43 @@ def _extract_case_citation(text: str) -> str:
     return m.group(0).strip() if m else ""
 
 
+# ── Case nicknames ───────────────────────────────────────────────────────────
+# Famous Canadian decisions known by a by-name that contains no party names.
+# The classifier reads these as case_name (they look like one, and the prompt
+# even says to strip a trailing "case"), so they went to the A2AJ name search,
+# which has no such title and returned nothing at all.  They belong on the
+# concept route, which expands a query into candidate decisions and verifies each
+# one — "Persons Case" then surfaces the 1928 SCC reference that A2AJ does hold.
+#
+# Matched on the normalised query (lower-cased, punctuation-free), so "Persons
+# Case", "the persons case" and "PERSONS CASE" all resolve.
+_CASE_NICKNAMES = {
+    "persons case",
+    "patriation reference",
+    "secession reference",
+    "quebec secession reference",
+    "labour trilogy",
+    "ontario egg reference",
+    "anti-inflation reference",
+    "margarine reference",
+    "prostitution reference",
+    "insite case",
+    "chicken and egg reference",
+    "bedford case",
+    "senate reform reference",
+    "securities reference",
+    "greenhouse gas references",
+    "carbon tax references",
+}
+
+
+def _case_nickname(query: str) -> str | None:
+    """Return the canonical nickname when ``query`` is a known case by-name."""
+    key = _LEADING_ARTICLE_RE.sub("", re.sub(r"[^\w\s-]", "", query.lower()).strip())
+    key = re.sub(r"\s+", " ", key).strip()
+    return key if key in _CASE_NICKNAMES else None
+
+
 def _mark_first_classify() -> bool:
     global _first_classify
     if _first_classify:
@@ -191,16 +228,27 @@ def classify_and_normalize(query: str) -> dict:
         logger.debug("[DUR] classify_and_normalize END (bill_regex_fastpath) — %.1fms", _fn_elapsed * 1000)
         return {"type": "bill", "normalized": f"{letter}-{digits}", "original": query.strip()}
 
+    # Case nickname 快速检测（"Persons Case" 等以别名著称的判例），不调 LLM
+    nickname = _case_nickname(query)
+    if nickname:
+        _fn_elapsed = time.perf_counter() - _fn_t0
+        logger.debug("[DUR] classify_and_normalize END (nickname_fastpath) — %.1fms", _fn_elapsed * 1000)
+        return {"type": "concept", "normalized": nickname, "original": query.strip()}
+
     prompt = f"""你是加拿大法律引用专家。分析以下用户输入，完成两件事：
 1. 判断输入类型（只能是以下五种之一）：
    - citation_number：已知的引用号，如 "2022 SCC 39"、"[1999] 1 SCR 688"、"RSC 1985, c C-46"
    - case_name：案件名，如 "R v Gladue"、"R. v. Sharma"、"Regina v Jordan"
    - legislation：法条名或法条缩写，如 "Criminal Code"、"CCC"、"Charter"、"CCC s.718.2(e)"、"Taxation Act"
    - bill：联邦法案编号，如 "bill c-22"、"bill c34"、"Bill S-2"、"Bill C 34"
-   - concept：法律概念或原则，如 "gladue principle"、"right to housing"、"duty to consult"
+   - concept：法律概念或原则，如 "gladue principle"、"right to housing"、"duty to consult"；
+     以及不含当事人姓名的判例别称，如 "Persons Case"、"Patriation Reference"、"Labour Trilogy"
+     （这类输入没有对应的判例标题，必须走 concept 展开，不要判成 case_name）
 
 2. 标准化输入：
    - 案件名：去掉句号（R. v. → R v），Regina/The Queen → R，去掉末尾的 "case"
+     （仅当输入含当事人姓名时适用，如 "Gladue case" → "Gladue"；
+       "Persons Case" 这类别称不是案件名，归入 concept）
    - 法条缩写（仅限已知缩写如 CCC、IRPA、CDSA、CCRF、Charter 等）：展开成完整引用
      例：CCC → Criminal Code, RSC 1985, c C-46
    - 法条缩写+条款混合（仅限已知缩写）：展开法条名，保留条款
