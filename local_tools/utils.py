@@ -88,10 +88,72 @@ def request_with_retry(
     raise last_exc  # type: ignore[misc]
 
 
-# Matches a base legal citation like "RSC 1985, c C-46", "SC 2002, c 1", "SOR/2000-111"
-_CITATION_REGEX = re.compile(
-    r"(?:RSC|SC|SOR|RRO|O\sReg|BC\sReg|RLRQ)\s[^,]+(?:,\s*c\s[^,]+)?",
+# ── Statute / regulation citation matching ───────────────────────────────────
+#
+# The old pattern was ``(?:RSC|SC|SOR|RRO|O\sReg|BC\sReg|RLRQ)\s[^,]+(?:,\s*c\s[^,]+)?``.
+# Two problems it caused:
+#   * Only federal prefixes plus a handful of others.  Every provincial
+#     citation (RSO, SO, RSA, SA, RSBC, SBC, CCSM, RSS, SNS, SNB, CQLR, …) was
+#     unrecognised, so the legislation route fell through to a CanLII
+#     title-only match that can never match a string containing a citation.
+#   * ``[^,]+`` cannot cross a comma, and the optional tail required a ``c``
+#     chapter, so regulation citations split mid-way:
+#     ``extract_pinpoint("…, RRO 1990, Reg 194, r 21.01")`` returned
+#     ``"Reg 194, r 21.01"`` — the regulation number leaked into the pinpoint.
+#
+# Built from explicit shapes instead.  Each prefix tolerates interior periods
+# ("S.O." for "SO") because that is how citations are typed by hand.
+
+
+def _dotted(letters: str) -> str:
+    """``"RSO"`` → ``r"R\\.?\\s?S\\.?\\s?O\\.?"`` — tolerate "R.S.O." / "RSO"."""
+    return r"\.?\s?".join(letters) + r"\.?"
+
+
+def _alt(*prefixes: str) -> str:
+    """Alternation of dotted prefixes, longest first so "RSO" wins over "SO"."""
+    return "|".join(_dotted(p) for p in sorted(prefixes, key=len, reverse=True))
+
+
+# Revised + annual statute volumes, federal and provincial/territorial.
+_STATUTE_VOL_YEAR = _alt(
+    "RSC", "SC",
+    "RSO", "SO", "RSA", "SA", "RSBC", "SBC", "RSM", "SM",
+    "RSS", "SS", "RSNS", "SNS", "RSNB", "SNB", "RSNL", "SNL", "RSN", "SN",
+    "RSPEI", "SPEI", "RSY", "SY", "RSYT", "SYT",
+    "RSNWT", "SNWT", "RSNu", "SNu", "SQ", "LQ",
 )
+# Consolidations with no year in the citation ("CQLR c C-25.01", "CCSM c F20").
+_STATUTE_VOL_NOYEAR = _alt("CQLR", "RLRQ", "LRQ", "CCSM", "CPLM")
+
+_YEAR = r"(?:1[89]|20)\d{2}"
+_CHAPTER = r"c\.?\s*[A-Za-z0-9][\w.\-]*"
+# "Sch 17" / "Schedule A" — part of the citation, not a pinpoint.
+_SCHEDULE = r"(?:,\s*Sch(?:ed(?:ule)?)?\.?\s*[A-Za-z0-9][\w.\-]*)?"
+# "(Supp)" / ", 5th Supp" supplement markers.
+_SUPP = r"(?:,\s*(?:\d(?:st|nd|rd|th)\s+)?Supp\.?|\s*\((?:\d(?:st|nd|rd|th)\s+)?Supp\.?\))?"
+
+_CITATION_ALTERNATIVES = [
+    # "RSC 1985, c C-46" · "SO 2019, c 7, Sch 17" · "RSO 1990, c F.3"
+    # The comma before the chapter is optional ("Courts of Justice Act RSO 1990
+    # c C.43" is typed without it), and so is the chapter itself (a bare
+    # "RSO 1990" still has to be recognised as citation text, not as title text).
+    rf"(?:{_STATUTE_VOL_YEAR})\s*{_YEAR}(?:\s*,?\s*{_CHAPTER})?{_SCHEDULE}{_SUPP}",
+    # "CQLR c C-25.01" · "CCSM c F20"
+    rf"(?:{_STATUTE_VOL_NOYEAR})\s*{_CHAPTER}{_SCHEDULE}",
+    # "SOR/2000-111" · "SI/2019-12" · "CRC, c 870"
+    rf"(?:{_alt('SOR', 'SI')})\s*/\s*\d{{2,4}}\s*-\s*\d+",
+    rf"(?:{_dotted('CRC')})(?:\s*,\s*{_CHAPTER})?",
+    # "RRO 1990, Reg 194" — revised regulations with a year
+    rf"(?:{_alt('RRO', 'RRS', 'RRNS', 'RRNB')})\s*{_YEAR}\s*,\s*Reg\.?\s*\d+",
+    # "O Reg 194/90" · "BC Reg 168/2009" · "Alta Reg 124/2001" · "NS Reg 1/2000"
+    rf"(?:{_alt('O', 'BC', 'NS', 'NB', 'PEI', 'NWT', 'Nu', 'YT')}|Alta|Sask|Man|Nfld)"
+    rf"\s*Reg\.?\s*\d+\s*/\s*\d{{2,4}}",
+]
+
+# Matches a base legal citation like "RSC 1985, c C-46", "SO 2019, c 7",
+# "CQLR c C-25.01", "SOR/2000-111", "RRO 1990, Reg 194", "O Reg 194/90".
+_CITATION_REGEX = re.compile("|".join(f"(?:{a})" for a in _CITATION_ALTERNATIVES))
 
 
 def extract_case_pinpoint(raw_input: str) -> str:
