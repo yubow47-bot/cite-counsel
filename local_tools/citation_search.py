@@ -7,7 +7,7 @@ import logging
 from llm_api.deepseek_api import ask_deepseek
 from llm_api.gemini_api import call_gemini_text, call_gemini_text_structured
 from local_tools.a2aj_api import fetch_by_citation, search_cases_multi, _map_fields, _extract_year, _extract_jurisdiction
-from local_tools.utils import extract_case_pinpoint, extract_pinpoint
+from local_tools.utils import _CITATION_REGEX, extract_case_pinpoint, extract_pinpoint
 from utils.json_util import parse_llm_json
 from local_tools import timing_util as timing
 from profiling import timing as prof
@@ -475,10 +475,7 @@ Rules:
             pass
 
         # 2. 提取引用号（与 legislation 路由同一正则）
-        cit_match = re.search(
-            r"(?:RSC|SC|SOR|RRO|O\sReg|BC\sReg|RLRQ)\s[^,]+(?:,\s*c\s[^,]+)?",
-            normalized
-        )
+        cit_match = _CITATION_REGEX.search(normalized)
         base_citation = cit_match.group(0).strip() if cit_match else normalized
 
         # 从剩余部分提取 pinpoint（共享 helper，与 search_citation() legislation 分支一致）
@@ -568,11 +565,7 @@ Rules:
                 entry["statute_title"] = _matched_canonical
                 # Extract pinpoint from the original name (same _broader pattern
                 # used by the fallback code path below).
-                _pin_match = re.search(
-                    r'(?<!, c )(?<! c )(?:,\s*)?\b((?:s|ss|art|cl|para|sub)\.?\s*[\d(][\d\w().,-]*(?:\s*\([\w\d]+\))*)\s*$',
-                    name,
-                    re.IGNORECASE
-                )
+                _pin_match = _PINPOINT_FALLBACK_RE.search(name)
                 if _pin_match:
                     entry["pinpoint"] = _pin_match.group(1)
                 # Clean up ad-hoc LLM-candidate fields (same as the main path).
@@ -586,21 +579,9 @@ Rules:
             # constitutional titles whose citation number does not match
             # _CITATION_REGEX), try a broader fallback on the original name.
             if not entry.get("pinpoint") and name:
-                # Negative lookbehinds reject Ontario-style chapter letter-number
-                # designators (e.g. "c S.15") that collide with the s/ss marker
-                # tokens.  A genuine pinpoint is never immediately preceded by
-                # the chapter marker "c " — it always follows the full citation
-                # (chapter clause already closed, then a comma, then the pinpoint).
-                # Federal-style hyphenated chapters ("c S-15") are safe because
-                # "-" is not in [\d(] and never reaches the lookbehinds.
-                # A \b word-boundary prefix prevents the "ss" alternation from
-                # matching at the second character of "SS" (s/ss chapter-letter
-                # case) where the lookbehinds would check the wrong position.
-                _broader = re.search(
-                    r'(?<!, c )(?<! c )(?:,\s*)?\b((?:s|ss|art|cl|para|sub)\.?\s*[\d(][\d\w().,-]*(?:\s*\([\w\d]+\))*)\s*$',
-                    name,
-                    re.IGNORECASE
-                )
+                # See _PINPOINT_FALLBACK_RE for why the lookbehinds and the \b
+                # prefix are there (Ontario "c S.15" chapter designators).
+                _broader = _PINPOINT_FALLBACK_RE.search(name)
                 if _broader:
                     entry["pinpoint"] = _broader.group(1)
             # Clean up ad-hoc LLM-candidate fields not part of the clean
@@ -753,6 +734,97 @@ _JURISDICTION_ARTICLE_SET = {
 }
 
 
+# ── Statute-citation prefix → jurisdiction ───────────────────────────────────
+# A citation prefix names its jurisdiction ("RSO" is Ontario, "SA" is Alberta),
+# which is usually the strongest jurisdiction signal in the whole query — and it
+# used to be thrown away: classify_and_normalize strips the citation, so
+# "Family Law Act, RSO 1990, c F.3" reached jurisdiction inference as the bare
+# title "Family Law Act", which carries no geographic signal at all and returned
+# None (_match_path="jur_none").
+#
+# Keyed by the prefix letters with periods and spaces removed and upper-cased,
+# so "S.O." / "SO" and "O Reg" / "O. Reg." all resolve through one lookup.
+_CITATION_PREFIX_JURISDICTION = {
+    # Federal
+    "RSC": "ca", "SC": "ca", "SOR": "ca", "SI": "ca", "CRC": "ca",
+    # Ontario
+    "RSO": "on", "SO": "on", "RRO": "on", "OREG": "on",
+    # Alberta
+    "RSA": "ab", "SA": "ab", "ALTAREG": "ab",
+    # British Columbia
+    "RSBC": "bc", "SBC": "bc", "BCREG": "bc",
+    # Manitoba
+    "RSM": "mb", "SM": "mb", "CCSM": "mb", "CPLM": "mb", "MANREG": "mb",
+    # Saskatchewan
+    "RSS": "sk", "SS": "sk", "RRS": "sk", "SASKREG": "sk",
+    # Nova Scotia
+    "RSNS": "ns", "SNS": "ns", "RRNS": "ns", "NSREG": "ns",
+    # New Brunswick
+    "RSNB": "nb", "SNB": "nb", "RRNB": "nb", "NBREG": "nb",
+    # Newfoundland and Labrador
+    "RSNL": "nl", "SNL": "nl", "RSN": "nl", "SN": "nl",
+    "NLR": "nl", "NFLDREG": "nl",
+    # Prince Edward Island
+    "RSPEI": "pe", "SPEI": "pe", "PEIREG": "pe",
+    # Yukon
+    "RSY": "yt", "SY": "yt", "RSYT": "yt", "SYT": "yt",
+    "YOIC": "yt", "YTREG": "yt",
+    # Northwest Territories
+    "RSNWT": "nt", "SNWT": "nt", "NWTREG": "nt",
+    # Nunavut
+    "RSNU": "nu", "SNU": "nu", "NUREG": "nu",
+    # Quebec
+    "CQLR": "qc", "RLRQ": "qc", "LRQ": "qc", "SQ": "qc", "LQ": "qc",
+}
+
+
+def _jurisdiction_from_citation(text: str) -> str | None:
+    """Jurisdiction code implied by a statute-citation prefix inside ``text``.
+
+    Matching runs through ``_CITATION_REGEX`` first, so only a full citation
+    shape counts.  That is what keeps short prefixes safe: a bare "so" or "sc"
+    in running prose is never read as a citation, because "SO" only resolves
+    when it is followed by a year (and optionally a chapter).
+
+    Returns None when no citation is present or its prefix is unmapped.
+    """
+    if not text:
+        return None
+    m = _CITATION_REGEX.search(text)
+    if not m:
+        return None
+    # Collect the leading alphabetic tokens of the matched citation.  Periods are
+    # dropped first ("S.O." → "SO"), then tokens are taken until a numeric one or
+    # a chapter marker.  Stripping spaces instead of tokenising would glue the
+    # chapter marker onto year-less prefixes ("CQLR c C-25.01" → "CQLRcC").
+    prefix_tokens: list[str] = []
+    for token in m.group(0).replace(".", "").split():
+        if not token.isalpha() or token.lower() == "c":
+            break
+        prefix_tokens.append(token)
+    if not prefix_tokens:
+        return None
+    return _CITATION_PREFIX_JURISDICTION.get("".join(prefix_tokens).upper())
+
+
+# ── Pinpoint markers ─────────────────────────────────────────────────────────
+# "r" / "rr" (rule) were missing, so a rules-of-court pinpoint was never
+# recognised: "Ontario Rules of Civil Procedure r 21.01" kept "r 21.01" inside
+# the title, and the CanLII title match could then never succeed.
+_PINPOINT_MARKERS = r"ss|s|arts|art|cl|paras|para|sub|rr|r|Rules|Rule"
+
+# Trailing-pinpoint fallback, used when the citation regex finds no base citation
+# to split on.  The negative lookbehinds reject Ontario-style chapter designators
+# ("c S.15") whose letter collides with the s/ss markers; a genuine pinpoint
+# always follows a closed citation, never the chapter marker itself.  The \b
+# prefix stops the "ss" alternative matching at the second character of "SS".
+_PINPOINT_FALLBACK_RE = re.compile(
+    r'(?<!, c )(?<! c )(?:,\s*)?\b((?:' + _PINPOINT_MARKERS +
+    r')\.?\s*[\d(][\d\w().,-]*(?:\s*\([\w\d]+\))*)\s*$',
+    re.IGNORECASE,
+)
+
+
 _LEADING_ARTICLE_RE = re.compile(r'^(the|a|an)\s+', re.IGNORECASE)
 
 # Pattern: a comma followed by an all-caps statute-citation abbreviation
@@ -810,6 +882,9 @@ def _prescan_jurisdiction(query: str) -> str | None:
     _PROVINCE_TOKEN_MAP.  Multi-word names (e.g. "british columbia") must
     appear as adjacent tokens.
 
+    Also reads the jurisdiction off a statute-citation prefix ("RSO 1990" →
+    Ontario), which survives even when the query names no province.
+
     Returns a single jurisdiction code if exactly one distinct code is found,
     or None if zero or multiple distinct codes are found (ambiguity falls
     through to the LLM-based _infer_jurisdiction_canlii).
@@ -821,6 +896,11 @@ def _prescan_jurisdiction(query: str) -> str | None:
     query_lower = query.lower().strip()
     tokens = query_lower.split()
     found_codes = set()
+
+    # Citation prefix (case-sensitive shape match via _CITATION_REGEX)
+    cit_jur = _jurisdiction_from_citation(query)
+    if cit_jur:
+        found_codes.add(cit_jur)
 
     # Multi-word entries: check adjacency via token-slice comparison
     multi = sorted(
@@ -1095,11 +1175,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
             if norm.startswith(_norm_prefix):
                 _pin = extract_pinpoint(normalized) or None
                 if not _pin:
-                    _pin_match = re.search(
-                        r'(?:,\s*)?((?:s|ss|art|cl|para|sub)\.?\s*[\d(][\d\w().,-]*(?:\s*\([\w\d]+\))*)\s*$',
-                        normalized,
-                        re.IGNORECASE
-                    )
+                    _pin_match = _PINPOINT_FALLBACK_RE.search(normalized)
                     if _pin_match:
                         _pin = _pin_match.group(1)
                 return [{
@@ -1112,23 +1188,15 @@ def search_citation(query: str, classification: dict | None = None) -> list:
 
         from local_tools.utils import a2aj_session, request_with_retry
 
-        # 从标准化文本中提取基础引用号
-        # 匹配 SC/RSC/SOR 等编号（去掉法条名和条款部分）
-        cit_match = re.search(
-            r"(?:RSC|SC|SOR|RRO|O\sReg|BC\sReg|RLRQ)\s[^,]+(?:,\s*c\s[^,]+)?",
-            normalized
-        )
+        # 从标准化文本中提取基础引用号（共享 _CITATION_REGEX，覆盖省级前缀）
+        cit_match = _CITATION_REGEX.search(normalized)
         base_citation = cit_match.group(0).strip() if cit_match else normalized
 
         # 从 normalized 中提取 pinpoint（共享 helper，与 _verify_legislation() 一致）
         pinpoint = extract_pinpoint(normalized) or None
         if not cit_match:
             # cit_match 未命中时，尝试从末尾提取 pinpoint 模式
-            pin_match = re.search(
-                r'(?:,\s*)?((?:s|ss|art|cl|para|sub)\.?\s*[\d(][\d\w().,-]*(?:\s*\([\w\d]+\))*)\s*$',
-                normalized,
-                re.IGNORECASE
-            )
+            pin_match = _PINPOINT_FALLBACK_RE.search(normalized)
             if pin_match:
                 pinpoint = pin_match.group(1)
 
