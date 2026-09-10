@@ -259,9 +259,14 @@ class TestVerifyCaseFix:
         assert len(results) == 1
         r = results[0]
         assert r["verified"] is True, f"Expected verified=True, got {r}"
-        # Must resolve to [1993] 3 SCR 3, not anything else
-        assert r.get("neutral_citation") == "[1993] 3 SCR 3", (
-            f"Expected [1993] 3 SCR 3, got {r.get('neutral_citation')}"
+        # Must resolve to [1993] 3 SCR 3, not anything else.  Creighton is a
+        # pre-neutral case, so the print citation lands in reporter and
+        # neutral_citation stays empty (see _map_fields shape slotting).
+        assert r.get("reporter") == "[1993] 3 SCR 3", (
+            f"Expected [1993] 3 SCR 3, got {r.get('reporter')}"
+        )
+        assert r.get("neutral_citation") == "", (
+            f"Pre-neutral case must not claim a neutral cite, got {r.get('neutral_citation')!r}"
         )
         # Must NOT be the 2022 BCSC case
         assert r.get("neutral_citation") != "2022 BCSC 1728", (
@@ -435,7 +440,8 @@ class TestVerifyCaseFix:
         assert r["verified"] is True, (
             f"French prefix 'R c' should normalize to match 'R. v.' — got {r}"
         )
-        assert r.get("neutral_citation") == "[1993] 3 SCR 3"
+        assert r.get("reporter") == "[1993] 3 SCR 3"
+        assert r.get("neutral_citation") == ""
 
     # ── Test 7: No year + 0 name-normalization matches → verified=False ──
     def test_no_year_zero_name_matches(self):
