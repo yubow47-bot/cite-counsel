@@ -53,15 +53,20 @@ def fetch_by_citation(citation: str, doc_type: str = "cases") -> dict:
             else:
                 try:
                     t0 = time.time()
-                    with prof.measure("http.a2aj_fetch_fallback", endpoint="/fetch", doc_type="legislation"):
+                    # doc_type must be "laws" — A2AJ answers 422 to
+                    # doc_type="legislation", so this whole fallback used to be
+                    # dead: every statute citation that reached the
+                    # citation_number route (e.g. "Criminal Code, RSC 1985,
+                    # c C-46, s 718.2(e)") failed here.
+                    with prof.measure("http.a2aj_fetch_fallback", endpoint="/fetch", doc_type="laws"):
                         response = request_with_retry(
                             a2aj_session, "GET",
                             f"{A2AJ_BASE}/fetch",
-                            params={"citation": citation, "doc_type": "legislation"},
+                            params={"citation": citation, "doc_type": "laws"},
                             read_timeout=15,
                         )
                     if timing.ENABLE_TIMING:
-                        timing.report().add_a2aj(f"fetch(legislation fallback) {citation[:40]}", time.time() - t0)
+                        timing.report().add_a2aj(f"fetch(laws fallback) {citation[:40]}", time.time() - t0)
                     response.raise_for_status()
                     fallback_data = response.json()
                     results = (
@@ -164,17 +169,40 @@ def _map_fields(result: dict) -> dict:
         }
 
 
+# A2AJ legislation datasets are "<KIND>-<JURISDICTION>": "LEGISLATION-ON",
+# "REGULATIONS-QC", "LEGISLATION-FED".
+_JURISDICTION_NAMES = {
+    "FED": "Canada",
+    "CA": "Canada",
+    "AB": "Alberta",
+    "BC": "British Columbia",
+    "MB": "Manitoba",
+    "NB": "New Brunswick",
+    "NL": "Newfoundland and Labrador",
+    "NS": "Nova Scotia",
+    "NT": "Northwest Territories",
+    "NU": "Nunavut",
+    "ON": "Ontario",
+    "PE": "Prince Edward Island",
+    "QC": "Quebec",
+    "SK": "Saskatchewan",
+    "YT": "Yukon",
+    "YK": "Yukon",
+}
+
+
 def _extract_jurisdiction(dataset: str) -> str:
-    """从 dataset 字段提取管辖区。"""
-    mapping = {
-        "FED": "Canada",
-        "ON": "Ontario",
-        "BC": "British Columbia",
-    }
-    for key, value in mapping.items():
-        if key in dataset.upper():
-            return value
-    return ""
+    """从 dataset 字段提取管辖区（"LEGISLATION-AB" → "Alberta"）。
+
+    Reads the code after the final hyphen.  The previous implementation tested
+    ``"ON" in dataset`` — and "LEGISLATION" itself contains "ON", so EVERY
+    non-federal statute came back as Ontario (an Alberta statute was cited as
+    Ontario legislation).
+    """
+    if not dataset:
+        return ""
+    code = dataset.upper().rsplit("-", 1)[-1].strip()
+    return _JURISDICTION_NAMES.get(code, "")
 
 
 def _extract_year(text: str) -> tuple[str, str | None]:
