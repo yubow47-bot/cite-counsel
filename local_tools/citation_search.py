@@ -68,6 +68,32 @@ def _bracket_reporter_year(s: str) -> str:
     return s
 
 
+# Case citation shapes, for pulling the citation out of a "name + citation" query:
+#   "[1959] SCR 121" · "[1999] 1 SCR 688" · "[1930] AC 124"   bracketed year
+#   "(1993), 83 CCC (3d) 346"                                  parenthesised year
+#   "2012 SCC 13" · "2012 CanLII 27167"                        neutral
+_CASE_CITATION_RE = re.compile(
+    r"\[(?:1[89]|20)\d{2}\]\s*(?:\d+\s+)?[A-Za-z][A-Za-z.]*(?:\s+[A-Za-z][A-Za-z.]*)*\s+\d+"
+    r"|\((?:1[89]|20)\d{2}\)\s*,?\s*(?:\d+\s+)?[A-Za-z][A-Za-z.]*"
+    r"(?:\s*\(\d+[a-z]{0,2}\))?\s+\d+"
+    r"|\b(?:1[89]|20)\d{2}\s+[A-Za-z]{2,10}\s+\d+\b"
+)
+
+
+def _extract_case_citation(text: str) -> str:
+    """Pull a case citation out of a free-text query, or "" if there is none.
+
+    "Roncarelli v Duplessis [1959] SCR 121" → "[1959] SCR 121"
+    "R v Gladue [1999] 1 SCR 688"           → "[1999] 1 SCR 688"
+    "2012 SCC 13"                           → "2012 SCC 13"
+    "Roncarelli v Duplessis"                → ""
+    """
+    if not text:
+        return ""
+    m = _CASE_CITATION_RE.search(text)
+    return m.group(0).strip() if m else ""
+
+
 def _mark_first_classify() -> bool:
     global _first_classify
     if _first_classify:
@@ -1255,6 +1281,48 @@ def search_citation(query: str, classification: dict | None = None) -> list:
         if "error" not in result and "raw_input" not in result:
             result["verified"] = True
             return [result]
+
+        # ── Statute citations land here too ──────────────────────────────
+        # The classifier routes "S.O. 2019, c. 7" and "Criminal Code, RSC 1985,
+        # c C-46, s 718.2(e)" to citation_number, where the only lookup used to
+        # be A2AJ /fetch on the whole string.  Hand those to the legislation
+        # branch instead, which knows the A2AJ laws endpoint and the CanLII
+        # statute/regulation databases.
+        if _CITATION_REGEX.search(normalized):
+            return search_citation(query, classification={
+                "type": "legislation",
+                "normalized": normalized,
+                "original": classified.get("original", query),
+            })
+
+        # ── Case name mixed in with the citation ────────────────────────
+        # "Roncarelli v Duplessis [1959] SCR 121" and "R v Gladue [1999] 1 SCR
+        # 688" are the ordinary copy-paste shape, and the classifier often calls
+        # them citation_number.  /fetch needs the citation alone — the case name
+        # in the query string makes it miss every time — so retry with just the
+        # citation substring.
+        case_cit = _extract_case_citation(bracketed)
+        if case_cit and case_cit != bracketed:
+            result = fetch_by_citation(case_cit)
+            if "error" not in result and "raw_input" not in result:
+                result["verified"] = True
+                return [result]
+
+        # ── CanLII fallback for citations A2AJ does not carry ───────────
+        # CanLII-assigned numbers ("2012 CanLII 27167") and courts outside
+        # A2AJ's coverage resolve here.
+        for candidate in (case_cit or bracketed, bracketed):
+            if not candidate:
+                continue
+            try:
+                from local_tools.canlii_api import fetch_case_by_citation
+                canlii_result = fetch_case_by_citation(candidate)
+            except Exception:
+                canlii_result = {"raw_input": candidate}
+            if "raw_input" not in canlii_result:
+                canlii_result["verified"] = True
+                return [canlii_result]
+
         return [{
             "name": normalized,
             "verified": False,

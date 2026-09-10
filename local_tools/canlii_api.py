@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import logging
 
@@ -101,6 +102,80 @@ def get_case_metadata(
     except requests.exceptions.RequestException as e:
         logger.warning("CanLII get_case_metadata failed: %s", type(e).__name__)
         return {"error": "Legal database lookup failed. Try again or enter the citation manually."}
+
+
+# ── Citation → caseId resolution ─────────────────────────────────────────────
+# A CanLII case id is its neutral citation with the spaces removed and
+# lower-cased: "2012 CanLII 27167" → "2012canlii27167", "2012 SCC 13" →
+# "2012scc13".  The database id in the request path is NOT used for lookup —
+# the API resolves the case from the id alone and reports the real database in
+# the response — so a citation can be resolved without knowing its court.
+_NEUTRAL_CITATION_RE = re.compile(r"^(\d{4})\s+([A-Za-z]{2,10})\s+(\d+)$")
+
+# "(CanLII)", "(NL SC)", "(SCC)" — the court/publisher tag CanLII appends.
+_CITATION_TAG_RE = re.compile(r"\s*\([^)]*\)\s*$")
+
+
+def citation_to_case_id(citation: str) -> str | None:
+    """``"2012 CanLII 27167"`` → ``"2012canlii27167"``; None if not neutral-shaped."""
+    m = _NEUTRAL_CITATION_RE.match((citation or "").strip())
+    if not m:
+        return None
+    return f"{m.group(1)}{m.group(2).lower()}{m.group(3)}"
+
+
+def _split_canlii_citation(citation: str) -> tuple[str, str]:
+    """Split a CanLII ``citation`` field into (neutral, parallel reporter).
+
+    "2012 SCC 13 (CanLII), [2012] 1 SCR 433"  → ("2012 SCC 13", "[2012] 1 SCR 433")
+    "2012 CanLII 27167 (NL SC)"               → ("2012 CanLII 27167", "")
+    "1959 CanLII 50 (SCC), [1959] SCR 121"    → ("1959 CanLII 50", "[1959] SCR 121")
+    """
+    if not citation:
+        return ("", "")
+    head, _, tail = citation.partition(",")
+    neutral = _CITATION_TAG_RE.sub("", head).strip()
+    reporter = _CITATION_TAG_RE.sub("", tail).strip().rstrip(",").strip()
+    return (neutral, reporter)
+
+
+def fetch_case_by_citation(citation: str) -> dict:
+    """Resolve a case by neutral citation through CanLII, for citations A2AJ lacks.
+
+    Fills the gap A2AJ leaves: CanLII-assigned numbers ("2012 CanLII 27167", used
+    for decisions with no court-assigned neutral citation) and provincial courts
+    outside A2AJ's coverage.
+
+    Returns the same field shape as ``a2aj_api._map_fields`` for a case, or
+    ``{"raw_input": citation}`` when the citation does not resolve.
+
+    Citation slotting follows McGill: a CanLII-ASSIGNED number ("1959 CanLII 50")
+    is a last-resort identifier, so when CanLII also reports an official reporter
+    the reporter is cited alone.  A COURT-assigned neutral citation ("2012 SCC
+    13") is the preferred first citation and keeps the reporter as a parallel.
+    """
+    case_id = citation_to_case_id(citation)
+    if not case_id:
+        return {"raw_input": citation}
+
+    # databaseId is ignored by the API for id lookups; "csc-scc" is a placeholder.
+    result = get_case_metadata("csc-scc", case_id)
+    if "error" in result or not result.get("title"):
+        return {"raw_input": citation}
+
+    neutral, reporter = _split_canlii_citation(result.get("citation", ""))
+    if neutral.lower().split()[1:2] == ["canlii"] and reporter:
+        neutral, reporter = "", reporter
+
+    date = result.get("decisionDate", "") or ""
+    return {
+        "style_of_cause": result.get("title", ""),
+        "neutral_citation": neutral,
+        "reporter": reporter,
+        "year": date[:4],
+        "date": date,
+        "url": result.get("longUrl", "") or result.get("url", ""),
+    }
 
 
 def get_legislation_databases(language: str = "en") -> dict:

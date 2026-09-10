@@ -471,8 +471,14 @@ async def citation_query(body: CitationInput, request: Request):
                 disabled_message=disabled_msg,
             )
 
-    # ── bill / case_name / legislation with multiple candidates → needs_selection ──
-    if route in ("bill", "case_name", "legislation") and len(results) > 1:
+    # ── multiple candidates → needs_selection ──
+    # citation_number belongs here too: a statute citation entered on its own is
+    # handed to the legislation lookup, which can legitimately answer with
+    # several candidates — an omnibus statute is indexed by its schedules, so
+    # "SO 2019, c 7" matches "SO 2019, c 7, Sch 7", "… Sch 9", and so on.
+    # Without this the route silently formatted the first schedule, citing the
+    # Cannabis Taxation Coordination Act for a query about a different Act.
+    if route in ("bill", "case_name", "legislation", "citation_number") and len(results) > 1:
         candidates = []
         for item in results:
             candidates.append({
