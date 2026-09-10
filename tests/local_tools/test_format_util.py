@@ -57,11 +57,59 @@ class TestExtractPinpoint:
         assert extract_pinpoint("Youth Criminal Justice Act, SC 2002, c 1, s 3(1)(a)(ii)") == "s 3(1)(a)(ii)"
 
     def test_sor_regulation(self):
-        # CRC is not in the citation regex; returns "" (known boundary, not broadened)
-        assert extract_pinpoint("Migratory Birds Regulations, CRC, c 1035, s 4") == ""
+        # CRC used to be outside the citation regex (documented boundary); the
+        # provincial-prefix rewrite covers it, so the pinpoint now extracts.
+        assert extract_pinpoint("Migratory Birds Regulations, CRC, c 1035, s 4") == "s 4"
 
     def test_bc_regulation(self):
         assert extract_pinpoint("Some Act, BC Reg 123/2020, s 7(2)") == "s 7(2)"
+
+    # ── Provincial / regulation prefixes (previously unrecognised) ─────────
+
+    def test_ontario_revised_statute(self):
+        assert extract_pinpoint("Family Law Act, RSO 1990, c F.3") == ""
+
+    def test_ontario_revised_statute_with_pinpoint(self):
+        assert extract_pinpoint("Courts of Justice Act, RSO 1990, c C.43, s 137") == "s 137"
+
+    def test_ontario_annual_statute_dotted(self):
+        """Hand-typed dotted form "S.O. 2019, c. 7" is citation text, not title."""
+        assert extract_pinpoint("S.O. 2019, c. 7") == ""
+
+    def test_schedule_is_part_of_the_citation(self):
+        """"Sch 17" belongs to the citation — it must not become the pinpoint."""
+        assert extract_pinpoint("Crown Liability and Proceedings Act, 2019, SO 2019, c 7, Sch 17") == ""
+
+    def test_regulation_number_not_leaked_into_pinpoint(self):
+        """Regression: the old regex stopped at "RRO 1990" and returned
+        "Reg 194, r 21.01" — the regulation number leaked into the pinpoint."""
+        assert extract_pinpoint(
+            "Rules of Civil Procedure, RRO 1990, Reg 194, r 21.01"
+        ) == "r 21.01"
+
+    def test_quebec_consolidation(self):
+        assert extract_pinpoint("Code of Civil Procedure, CQLR c C-25.01, art 165") == "art 165"
+
+    def test_manitoba_consolidation(self):
+        assert extract_pinpoint("The Family Law Act, CCSM c F20") == ""
+
+    def test_alberta_annual_statute(self):
+        assert extract_pinpoint("Family Law Act, SA 2003, c F-4.5, s 1") == "s 1"
+
+    def test_bc_revised_statute(self):
+        assert extract_pinpoint("Interpretation Act, RSBC 1996, c 238") == ""
+
+    def test_chapter_without_comma(self):
+        """"RSO 1990 c C.43" — typed without the comma before the chapter."""
+        assert extract_pinpoint("Courts of Justice Act RSO 1990 c C.43") == ""
+
+    def test_supplement_marker_stays_in_citation(self):
+        assert extract_pinpoint("Income Tax Act, RSC 1985, c 1 (5th Supp), s 2") == "s 2"
+
+    def test_bare_title_with_year_is_not_a_citation(self):
+        """A title that merely ends in a year has no volume prefix → no match."""
+        assert extract_pinpoint("Taxation Act, 2007") == ""
+        assert extract_pinpoint("Constitution Act, 1867") == ""
 
     def test_empty_string(self):
         assert extract_pinpoint("") == ""
