@@ -216,6 +216,39 @@ def _extract_year(text: str) -> tuple[str, str | None]:
     return text, None
 
 
+def search_laws_by_name(name: str, size: int = 6) -> list:
+    """按名称搜索法规（A2AJ /search, doc_type=laws），返回结果列表。
+
+    Covers statutes AND regulations across every jurisdiction, which is the one
+    lookup that answers a title-only query with no jurisdiction to go on
+    ("Rules of Civil Procedure" → RRO 1990, Reg 194).  Nothing used this endpoint
+    before: the legislation route only ever searched by citation, and with no
+    citation it fell through to a per-jurisdiction CanLII browse that needs the
+    jurisdiction guessed up front.
+    """
+    if not name or not name.strip():
+        return []
+    try:
+        with prof.measure("http.a2aj_search_laws", endpoint="/search", doc_type="laws"):
+            resp = request_with_retry(
+                a2aj_session, "GET",
+                f"{A2AJ_BASE}/search",
+                params={
+                    "query": name.strip(),
+                    "doc_type": "laws",
+                    "size": size,
+                    "search_type": "name",
+                },
+                read_timeout=15,
+            )
+        resp.raise_for_status()
+        data = resp.json()
+        results = data.get("results", []) if isinstance(data, dict) else []
+        return [r for r in results if isinstance(r, dict)]
+    except requests.exceptions.RequestException:
+        return []
+
+
 def search_cases_multi(query: str, size: int = 45,
                        search_type: str = "name",
                        start_date: str | None = None,
