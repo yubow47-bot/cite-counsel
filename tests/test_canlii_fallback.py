@@ -109,7 +109,9 @@ def test_canlii_fallback_no_match():
     r = result[0]
     assert r["verified"] is False
     assert "建议在 CanLII 手动确认" in r["warning"]
-    mock_canlii.assert_called_once()
+    # A title-only query tries the consolidated statutes, then the regulations
+    # database (rules of court and the like live there).  Both miss here.
+    assert [c.args[0] for c in mock_canlii.call_args_list] == ["abs", "abr"]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -159,11 +161,18 @@ def test_canlii_fallback_api_error():
 # ═════════════════════════════════════════════════════════════════════════════
 
 def test_canlii_fallback_jurisdiction_unknown():
-    """_infer_jurisdiction_canlii returns None -> skip CanLII, return warning."""
+    """_infer_jurisdiction_canlii returns None -> skip CanLII, return warning.
+
+    With no jurisdiction the per-jurisdiction CanLII databases are unusable, so
+    the only remaining lookup is A2AJ's jurisdiction-wide laws name-search;
+    mocked empty here, leaving the original warning outcome.
+    """
     mock_infer = MagicMock(return_value=None)
     mock_canlii = MagicMock()
+    mock_names = MagicMock(return_value=[])
 
     with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.citation_search.search_laws_by_name", mock_names), \
          patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
         result = search_citation("Some Unknown Act", CLASSIFICATION_AB)
 
@@ -173,6 +182,66 @@ def test_canlii_fallback_jurisdiction_unknown():
     assert "建议在 CanLII 手动确认" in r["warning"]
     mock_infer.assert_called_once()
     mock_canlii.assert_not_called()  # CanLII never triggered
+
+
+def test_jurisdiction_unknown_resolved_by_a2aj_name_search():
+    """No jurisdiction, but A2AJ's name-search knows the title → verified.
+
+    This is the path that used to dead-end on "tell us which province".
+    """
+    mock_infer = MagicMock(return_value=None)
+    mock_canlii = MagicMock()
+    mock_names = MagicMock(return_value=[{
+        "name_en": "Human Rights Act",
+        "citation_en": "RSA 2000, c A-25.5",
+        "dataset": "LEGISLATION-AB",
+    }])
+
+    # The query must not name a province, or the deterministic prescan resolves
+    # the jurisdiction and the CanLII branch answers instead.
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.citation_search.search_laws_by_name", mock_names), \
+         patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
+        result = search_citation("Human Rights Act", {
+            "type": "legislation",
+            "normalized": "Human Rights Act",
+            "original": "Human Rights Act",
+        })
+
+    assert len(result) == 1
+    r = result[0]
+    assert r["verified"] is True
+    assert r["_match_path"] == "a2aj_name"
+    assert r["statute_title"] == "Human Rights Act"
+    assert r["jurisdiction"] == "Alberta"
+    assert r["chapter"] == "c A-25.5"
+    mock_canlii.assert_not_called()
+
+
+def test_jurisdiction_unknown_name_search_multiple_jurisdictions():
+    """Same title in several provinces → offer the choice instead of guessing."""
+    mock_infer = MagicMock(return_value=None)
+    mock_names = MagicMock(return_value=[
+        {"name_en": "Family Law Act", "citation_en": "SA 2003, c F-4.5",
+         "dataset": "LEGISLATION-AB"},
+        {"name_en": "Family Law Act", "citation_en": "RSO 1990, c F3",
+         "dataset": "LEGISLATION-ON"},
+        {"name_en": "Some Unrelated Act", "citation_en": "SBC 2019, c 1",
+         "dataset": "LEGISLATION-BC"},
+    ])
+
+    with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.citation_search.search_laws_by_name", mock_names):
+        result = search_citation("Family Law Act", {
+            "type": "legislation",
+            "normalized": "Family Law Act",
+            "original": "Family Law Act",
+        })
+
+    # Only exact title matches are offered; the unrelated third hit is dropped.
+    assert len(result) == 2
+    assert [r["jurisdiction"] for r in result] == ["Alberta", "Ontario"]
+    assert all(r["verified"] is True for r in result)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -706,7 +775,12 @@ def test_rso_expanded_exact_match():
     mock_canlii = MagicMock(return_value=_canlii_resp(FLA_RECORD))
     mock_infer = MagicMock(side_effect=Exception("LLM should not be called"))
 
+    # The citation is recognised now, so A2AJ is tried first; mock it as a miss
+    # so the CanLII title path under test is the one that answers.
+    mock_a2aj = MagicMock(return_value=_mock_a2aj_response(_A2AJ_EMPTY_RESPONSE))
+
     with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.utils.request_with_retry", mock_a2aj), \
          patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
         result = search_citation("family law act ontario", CLASSIFICATION_FLA_EXPANDED)
 
@@ -716,8 +790,10 @@ def test_rso_expanded_exact_match():
         f"Expected verified=True for expanded FLA, got verified={r['verified']!r} "
         f"with _match_path={r['_match_path']!r}"
     )
-    assert r["_match_path"] == "exact", (
-        f"Expected _match_path='exact', got {r['_match_path']!r}"
+    # The CanLII record's citation equals the query citation, so the stronger
+    # citation-equality path answers before the title comparison is reached.
+    assert r["_match_path"] == "citation", (
+        f"Expected _match_path='citation', got {r['_match_path']!r}"
     )
     assert r["statute_title"] == "Family Law Act"
     assert r["chapter"] == "c F.3"
@@ -791,7 +867,12 @@ def test_rsa_expanded_exact_match():
     mock_canlii = MagicMock(return_value=_canlii_resp(CYCARE_RECORD))
     mock_infer = MagicMock(side_effect=Exception("LLM should not be called"))
 
+    # The citation is recognised now, so A2AJ is tried first; mock it as a miss
+    # so the CanLII title path under test is the one that answers.
+    mock_a2aj = MagicMock(return_value=_mock_a2aj_response(_A2AJ_EMPTY_RESPONSE))
+
     with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.utils.request_with_retry", mock_a2aj), \
          patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
         result = search_citation("alberta child and youth care act", CLASSIFICATION_CYCARE_RSA)
 
@@ -800,7 +881,8 @@ def test_rsa_expanded_exact_match():
     assert r["verified"] is True, (
         f"RSA test failed: verified={r['verified']!r} _match_path={r['_match_path']!r}"
     )
-    assert r["_match_path"] == "exact"
+    # Record citation "RSA 2000, c C-12" equals the query citation → citation path.
+    assert r["_match_path"] == "citation"
     assert r["statute_title"] == "Child and Youth Care Act"
     mock_infer.assert_not_called()
 
@@ -810,7 +892,12 @@ def test_rsbc_expanded_exact_match():
     mock_canlii = MagicMock(return_value=_canlii_resp(FLA_BC_RECORD))
     mock_infer = MagicMock(side_effect=Exception("LLM should not be called"))
 
+    # The citation is recognised now, so A2AJ is tried first; mock it as a miss
+    # so the CanLII title path under test is the one that answers.
+    mock_a2aj = MagicMock(return_value=_mock_a2aj_response(_A2AJ_EMPTY_RESPONSE))
+
     with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.utils.request_with_retry", mock_a2aj), \
          patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
         result = search_citation("british columbia family law act", CLASSIFICATION_FLA_RSBC)
 
@@ -829,7 +916,12 @@ def test_rsm_expanded_exact_match():
     mock_canlii = MagicMock(return_value=_canlii_resp(CFS_RECORD))
     mock_infer = MagicMock(side_effect=Exception("LLM should not be called"))
 
+    # The citation is recognised now, so A2AJ is tried first; mock it as a miss
+    # so the CanLII title path under test is the one that answers.
+    mock_a2aj = MagicMock(return_value=_mock_a2aj_response(_A2AJ_EMPTY_RESPONSE))
+
     with patch("local_tools.citation_search._infer_jurisdiction_canlii", mock_infer), \
+         patch("local_tools.utils.request_with_retry", mock_a2aj), \
          patch("local_tools.canlii_api.browse_legislation_in_database", mock_canlii):
         result = search_citation("manitoba child and family services act", CLASSIFICATION_CFS_RSM)
 

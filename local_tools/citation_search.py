@@ -6,7 +6,14 @@ import logging
 
 from llm_api.deepseek_api import ask_deepseek
 from llm_api.gemini_api import call_gemini_text, call_gemini_text_structured
-from local_tools.a2aj_api import fetch_by_citation, search_cases_multi, _map_fields, _extract_year, _extract_jurisdiction
+from local_tools.a2aj_api import (
+    fetch_by_citation,
+    search_cases_multi,
+    search_laws_by_name,
+    _map_fields,
+    _extract_year,
+    _extract_jurisdiction,
+)
 from local_tools.utils import _CITATION_REGEX, extract_case_pinpoint, extract_pinpoint
 from utils.json_util import parse_llm_json
 from local_tools import timing_util as timing
@@ -875,6 +882,160 @@ def _normalize_for_match(s: str) -> str:
     return s
 
 
+def _normalize_statute_citation(citation: str) -> str:
+    """Normalise a statute citation for equality comparison.
+
+    Drops periods, commas and whitespace and lower-cases, so the many ways one
+    citation gets typed all collapse to one key:
+    "S.O. 2019, c. 7" / "SO 2019, c 7" / "SO 2019 c 7"  →  "so2019c7".
+    """
+    return re.sub(r"[.,\s]", "", citation or "").casefold()
+
+
+# Citation prefixes that name a REGULATION rather than a statute.  Used to pick
+# which CanLII database to browse first — browsing the wrong one is a wasted
+# multi-second request (the Ontario regulation database alone is ~4 100 entries).
+_REGULATION_PREFIXES = {
+    "SOR", "SI", "CRC", "RRO", "RRS", "RRNS", "RRNB", "OREG", "BCREG",
+    "ALTAREG", "SASKREG", "MANREG", "NSREG", "NBREG", "PEIREG", "NWTREG",
+    "NUREG", "YTREG", "YOIC", "NLR", "NFLDREG",
+}
+
+
+def _canlii_db_order(jur: str, citation: str | None) -> list[str]:
+    """CanLII database ids to try for ``jur``, best candidate first.
+
+    A citation's prefix says which kind of instrument it is, so a regulation
+    citation ("RRO 1990, Reg 194") resolves against the regulation database
+    alone.  The list is kept short on purpose: each browse is a multi-second
+    request (Ontario's regulation database is ~4 100 entries), and callers stop
+    at the first database that yields a match, so the tail is rarely fetched.
+    """
+    db_map, db_map_ok = _load_canlii_db_map()
+    available = db_map.get(jur) if isinstance(db_map, dict) else None
+    if not isinstance(available, dict):
+        # File missing or corrupt → hardcoded statute-only fallback
+        fallback = _CANLII_STATUTE_DB.get(jur) if not db_map_ok else None
+        return [fallback] if fallback else []
+
+    prefix = None
+    if citation:
+        tokens = []
+        for token in citation.replace(".", "").split():
+            if not token.isalpha() or token.lower() == "c":
+                break
+            tokens.append(token)
+        prefix = "".join(tokens).upper() if tokens else None
+
+    if prefix and prefix in _REGULATION_PREFIXES:
+        order = ["regulation"]
+    elif prefix:
+        # A statute citation can name a consolidation, an annual volume, or a
+        # revised volume — CanLII splits those into separate databases.
+        order = ["statute", "annual_statute", "revised_statute"]
+    else:
+        # Title-only query: consolidated statutes first, then regulations (for
+        # rules of court and the like).  Annual/revised volumes repeat titles
+        # already in the consolidation, so they add latency without reach.
+        order = ["statute", "regulation"]
+
+    return [available[k] for k in order if available.get(k)]
+
+
+def _canlii_match_listing(
+    legislations: list,
+    norm_target: str,
+    citation: str | None = None,
+) -> tuple[str, list, bool]:
+    """Match a CanLII database listing against a query.
+
+    Returns ``(match_path, matches, allow_selection)``:
+      * ``matches`` holds the raw CanLII items that matched (possibly empty)
+      * ``allow_selection`` is True when 2+ matches should be offered to the
+        user as a choice, and False when ambiguity means "do not guess"
+
+    Strategy order, most to least certain:
+      1. citation equality — an exact citation is the strongest signal there is
+      2. exact normalised title (2+ exact title matches → refuse to guess,
+         preserving the original no-false-positive contract)
+      3. Direction-A substring with the jurisdiction/article residual gate
+      4. the same, with a trailing year stripped off the official title
+    """
+    if citation:
+        target_cit = _normalize_statute_citation(citation)
+        cit_matches = [
+            item for item in legislations
+            if _normalize_statute_citation(item.get("citation", "")) == target_cit
+        ]
+        if cit_matches:
+            return ("citation", cit_matches, True)
+        # An omnibus statute is indexed by its schedules, not by the bare
+        # chapter ("SO 2019, c 7" exists only as "SO 2019, c 7, Sch 7", "…Sch 9",
+        # …).  Offer the schedules rather than reporting the citation unknown.
+        sched_matches = [
+            item for item in legislations
+            if _normalize_statute_citation(item.get("citation", "")).startswith(target_cit + "sch")
+        ]
+        if sched_matches:
+            return ("citation_schedules", sched_matches[:20], True)
+
+    exact = [
+        item for item in legislations
+        if _normalize_for_match(item.get("title", "")) == norm_target
+    ]
+    if len(exact) == 1:
+        return ("exact", exact, False)
+    if len(exact) >= 2:
+        # 2+ identical titles in one database → ambiguous, do not guess
+        return ("no_exact_match", [], False)
+
+    fuzzy = []
+    for item in legislations:
+        item_norm = _normalize_for_match(item.get("title", ""))
+        if item_norm and item_norm in norm_target:
+            residual = norm_target.replace(item_norm, '', 1).strip()
+            res_tokens = residual.split()
+            if not residual or all(t in _JURISDICTION_ARTICLE_SET for t in res_tokens):
+                fuzzy.append(item)
+    if fuzzy:
+        return ("direction_a_residual_ok", fuzzy[:10], True)
+
+    # Some official CanLII titles carry a trailing year as part of the name
+    # (e.g. "Taxation Act, 2007").  Strip it and retry the substring check.
+    year_stripped = []
+    for item in legislations:
+        title = item.get("title", "")
+        m = _TRAILING_YEAR_RE.search(title)
+        if not m:
+            continue
+        item_norm = _normalize_for_match(title[:m.start()].strip())
+        if item_norm and item_norm in norm_target:
+            residual = norm_target.replace(item_norm, '', 1).strip()
+            res_tokens = residual.split()
+            if not residual or all(t in _JURISDICTION_ARTICLE_SET for t in res_tokens):
+                year_stripped.append(item)
+    if year_stripped:
+        return ("year_stripped_match", year_stripped, True)
+
+    return ("no_exact_match", [], False)
+
+
+def _canlii_item_to_result(item: dict, jur: str, pinpoint: str | None,
+                           fallback_title: str) -> dict:
+    """Map one CanLII legislation item to the legislation result schema."""
+    canlii_cit = item.get("citation", "") or ""
+    ch_match = re.search(r'(c\s[\w.-]+)', canlii_cit) if canlii_cit else None
+    return {
+        "statute_title": item.get("title", fallback_title),
+        "jurisdiction": jur.upper(),
+        "chapter": ch_match.group(1) if ch_match else None,
+        "pinpoint": pinpoint,
+        "citation": canlii_cit,
+        "verified": True,
+        "source": "canlii",
+    }
+
+
 def _prescan_jurisdiction(query: str) -> str | None:
     """Scan ORIGINAL query for explicit province/territory/country names.
 
@@ -1225,6 +1386,7 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                 verified = len(results) > 0
                 if results:
                     r0 = results[0]
+                    _match_path = "a2aj"
                     jurisdiction = _extract_jurisdiction(r0.get("dataset", ""))
                     cit_en = r0.get("citation_en", "")
                     citation = cit_en
@@ -1233,14 +1395,19 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                     statute_title = r0.get("name_en", normalized)
             except Exception:
                 verified = False
-        else:
-            # ── CanLII fallback（cit_match 未命中，跳过无意义 A2AJ）──
-            # Deterministic jurisdiction prescan on the original query.
-            # If the query text explicitly names a single province/territory,
-            # use that directly and skip the LLM.  Rationale: jurisdiction
-            # misinference is safe by construction — the downstream
-            # exact-title-match gate is unchanged, so a wrong jurisdiction
-            # yields a miss (verified=False), never a false positive.
+        if not verified:
+            # ── CanLII fallback ──
+            # Reached both when the query carries no recognisable citation AND
+            # when a citation was found but A2AJ could not resolve it.  The second
+            # case used to dead-end: A2AJ has no provincial annual statutes, so
+            # "SO 2019, c 7" was reported unverified even though CanLII indexes
+            # 754 Ontario "SO …" citations.
+            #
+            # Deterministic jurisdiction prescan on the original query first: an
+            # explicit province name or a citation prefix ("RSO" → Ontario) skips
+            # the LLM entirely.  Rationale: jurisdiction misinference is safe by
+            # construction — the match gates below are unchanged, so a wrong
+            # jurisdiction yields a miss (verified=False), never a false positive.
             jur = None
             prescan_jur = _prescan_jurisdiction(query)
             if prescan_jur:
@@ -1252,157 +1419,108 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                     jur = None
             if jur:
                 from local_tools.canlii_api import browse_legislation_in_database
-                db_id = None
-                # 优先从 data/canlii_legislation_databases.json 读取（缓存）
-                db_map, db_map_ok = _load_canlii_db_map()
-                try:
-                    db_id = db_map[jur]["statute"]
-                except (KeyError, TypeError):
-                    db_id = None
-                if db_id is None and not db_map_ok:
-                    # 文件缺失/损坏 → 用硬编码兜底
-                    db_id = _CANLII_STATUTE_DB.get(jur)
-                if db_id:
+
+                # Reduce the query to a bare title: drop the pinpoint, then the
+                # citation itself.  Leaving either in place is why
+                # "Ontario Rules of Civil Procedure r 21.01" and
+                # "Courts of Justice Act RSO 1990 c C.43" could never match —
+                # no CanLII title contains a pinpoint or a citation.
+                title_for_match = normalized
+                if pinpoint:
+                    title_for_match = re.sub(
+                        r'\s*,?\s*' + re.escape(pinpoint) + r'\s*$',
+                        '',
+                        title_for_match,
+                        flags=re.IGNORECASE
+                    ).strip().rstrip(',').strip()
+                if cit_match:
+                    title_for_match = title_for_match.replace(cit_match.group(0), '')
+                title_for_match = _strip_citation_suffix_for_title_match(
+                    title_for_match.strip().rstrip(',').strip()
+                )
+                norm_target = _normalize_for_match(title_for_match)
+
+                db_ids = _canlii_db_order(jur, base_citation if cit_match else None)
+                if not db_ids:
+                    _match_path = "no_exact_match"
+                for db_id in db_ids:
                     try:
                         canlii_result = browse_legislation_in_database(db_id)
-                        if "error" not in canlii_result:
-                            legislations = canlii_result.get("legislations", [])
-                            # Strip pinpoint from normalized for title matching,
-                            # then strip any trailing citation-year suffix (e.g.
-                            # ", RSO 1990") that cit_match didn't recognize.
-                            title_for_match = normalized
-                            if pinpoint:
-                                title_for_match = re.sub(
-                                    r'\s*,?\s*' + re.escape(pinpoint) + r'\s*$',
-                                    '',
-                                    title_for_match,
-                                    flags=re.IGNORECASE
-                                ).strip().rstrip(',').strip()
-                            title_for_match = _strip_citation_suffix_for_title_match(title_for_match)
-                            norm_target = _normalize_for_match(title_for_match)
-                            matches = [
-                                item for item in legislations
-                                if _normalize_for_match(item.get("title", "")) == norm_target
-                            ]
-                            if len(matches) == 1:
-                                item = matches[0]
-                                _match_path = "exact"
-                                verified = True
-                                statute_title = item.get("title", normalized)
-                                canlii_cit = item.get("citation", "")
-                                citation = canlii_cit
-                                jurisdiction = jur.upper()
-                                if canlii_cit:
-                                    ch_match = re.search(r'(c\s[\w.-]+)', canlii_cit)
-                                    chapter = ch_match.group(1) if ch_match else None
-                            elif len(matches) == 0:
-                                # ── Direction-A-only fuzzy match ＋ residual gate ──
-                                # A candidate matches iff its normalized title is a substring
-                                # of the normalized query (Direction A).  Direction B (query
-                                # is substring of longer candidate) is REMOVED — no blacklist
-                                # needed.  After the substring check, the residual (query
-                                # minus the matched substring) must be empty or consist solely
-                                # of jurisdiction/article tokens; otherwise the match is
-                                # rejected as a likely false positive.
-                                fuzzy = []
-                                for item in legislations:
-                                    item_norm = _normalize_for_match(item.get("title", ""))
-                                    if item_norm in norm_target:
-                                        residual = norm_target.replace(item_norm, '', 1).strip()
-                                        res_tokens = residual.split()
-                                        if not residual or all(t in _JURISDICTION_ARTICLE_SET for t in res_tokens):
-                                            fuzzy.append(item)
-                                fuzzy = fuzzy[:10]
-                                if len(fuzzy) >= 2:
-                                    # 多候选 → 返回列表让用户选择
-                                    candidates = []
-                                    for item in fuzzy:
-                                        canlii_cit = item.get("citation", "")
-                                        ch = None
-                                        if canlii_cit:
-                                            ch_m = re.search(r'(c\s[\w.-]+)', canlii_cit)
-                                            ch = ch_m.group(1) if ch_m else None
-                                        candidates.append({
-                                            "statute_title": item.get("title", normalized),
-                                            "jurisdiction": jur.upper(),
-                                            "chapter": ch,
-                                            "pinpoint": pinpoint,
-                                            "citation": canlii_cit,
-                                            "verified": True,
-                                            "source": "canlii",
-                                        })
-                                    return candidates
-                                elif len(fuzzy) == 1:
-                                    item = fuzzy[0]
-                                    _match_path = "direction_a_residual_ok"
-                                    verified = True
-                                    statute_title = item.get("title", normalized)
-                                    canlii_cit = item.get("citation", "")
-                                    citation = canlii_cit
-                                    jurisdiction = jur.upper()
-                                    if canlii_cit:
-                                        ch_match = re.search(r'(c\s[\w.-]+)', canlii_cit)
-                                        chapter = ch_match.group(1) if ch_match else None
-                                else:
-                                    # 0 fuzzy matches — try year-stripped Direction-A
-                                    # Some official CanLII titles carry a trailing year
-                                    # as part of the name (e.g. "Taxation Act, 2007").
-                                    # Strip that year and check the shorter form.
-                                    year_stripped = []
-                                    for item in legislations:
-                                        title = item.get("title", "")
-                                        m = _TRAILING_YEAR_RE.search(title)
-                                        if not m:
-                                            continue
-                                        stripped = title[:m.start()].strip()
-                                        item_norm = _normalize_for_match(stripped)
-                                        if item_norm in norm_target:
-                                            residual = norm_target.replace(item_norm, '', 1).strip()
-                                            res_tokens = residual.split()
-                                            if not residual or all(t in _JURISDICTION_ARTICLE_SET for t in res_tokens):
-                                                year_stripped.append(item)
-                                    if len(year_stripped) >= 2:
-                                        # 多候选 → 返回列表让用户选择
-                                        candidates = []
-                                        for item in year_stripped:
-                                            canlii_cit = item.get("citation", "")
-                                            ch = None
-                                            if canlii_cit:
-                                                ch_m = re.search(r'(c\s[\w.-]+)', canlii_cit)
-                                                ch = ch_m.group(1) if ch_m else None
-                                            candidates.append({
-                                                "statute_title": item.get("title", normalized),
-                                                "jurisdiction": jur.upper(),
-                                                "chapter": ch,
-                                                "pinpoint": pinpoint,
-                                                "citation": canlii_cit,
-                                                "verified": True,
-                                                "source": "canlii",
-                                            })
-                                        return candidates
-                                    elif len(year_stripped) == 1:
-                                        item = year_stripped[0]
-                                        _match_path = "year_stripped_match"
-                                        verified = True
-                                        statute_title = item.get("title", normalized)
-                                        canlii_cit = item.get("citation", "")
-                                        citation = canlii_cit
-                                        jurisdiction = jur.upper()
-                                        if canlii_cit:
-                                            ch_match = re.search(r'(c\s[\w.-]+)', canlii_cit)
-                                            chapter = ch_match.group(1) if ch_match else None
-                                    # else: 0 year-stripped matches → 保持 verified=False
-                            # else: ≥2 条精确匹配 → 保持 verified=False，不猜
-                            # _match_path is diagnostic-only; stripped at API boundary via _without_internal
-                            if not verified:
-                                _match_path = "no_exact_match"
-                        else:
+                        if not isinstance(canlii_result, dict) or "error" in canlii_result:
                             _match_path = "canlii_error"
+                            continue
+                        legislations = canlii_result.get("legislations", [])
+                        path, matches, allow_selection = _canlii_match_listing(
+                            legislations, norm_target,
+                            citation=base_citation if cit_match else None,
+                        )
                     except Exception:
                         _match_path = "canlii_error"
+                        continue
+                    if len(matches) >= 2 and allow_selection:
+                        # 多候选 → 返回列表让用户选择
+                        return [
+                            _canlii_item_to_result(item, jur, pinpoint, normalized)
+                            for item in matches
+                        ]
+                    if len(matches) == 1:
+                        item = matches[0]
+                        _match_path = path
+                        verified = True
+                        statute_title = item.get("title", normalized)
+                        citation = item.get("citation", "") or ""
+                        jurisdiction = jur.upper()
+                        ch_match = re.search(r'(c\s[\w.-]+)', citation) if citation else None
+                        chapter = ch_match.group(1) if ch_match else None
+                        break
+                    # No match in this database — try the next one, if any.
+                    # _match_path is diagnostic-only; stripped at the API
+                    # boundary via _without_internal.
+                    _match_path = path
             else:
-                # No jurisdiction resolved (prescan miss AND LLM returned None)
+                # ── No jurisdiction resolved (prescan miss AND LLM None) ──
+                # The CanLII databases are per-jurisdiction, so without a
+                # jurisdiction there was nothing left to try and the route
+                # reported "tell us which province".  A2AJ's laws name-search is
+                # jurisdiction-wide, so ask it instead and let the user pick
+                # between the provinces that actually have such a statute.
                 _match_path = "jur_none"
+                title_for_match = normalized
+                if pinpoint:
+                    title_for_match = re.sub(
+                        r'\s*,?\s*' + re.escape(pinpoint) + r'\s*$',
+                        '',
+                        title_for_match,
+                        flags=re.IGNORECASE
+                    ).strip().rstrip(',').strip()
+                name_hits = search_laws_by_name(title_for_match)
+                norm_target = _normalize_for_match(title_for_match)
+                exact_hits = [
+                    r for r in name_hits
+                    if _normalize_for_match(r.get("name_en", "")) == norm_target
+                ]
+                if exact_hits:
+                    candidates = []
+                    for r0 in exact_hits[:10]:
+                        cit_en = r0.get("citation_en", "") or ""
+                        ch_m = re.search(r'(c\s[\w.-]+)', cit_en) if cit_en else None
+                        candidates.append({
+                            "statute_title": r0.get("name_en", normalized),
+                            "jurisdiction": _extract_jurisdiction(r0.get("dataset", "")),
+                            "chapter": ch_m.group(1) if ch_m else None,
+                            "pinpoint": pinpoint,
+                            "citation": cit_en,
+                            "verified": True,
+                            "source": "a2aj",
+                        })
+                    if len(candidates) > 1:
+                        return candidates
+                    _match_path = "a2aj_name"
+                    verified = True
+                    statute_title = candidates[0]["statute_title"]
+                    jurisdiction = candidates[0]["jurisdiction"]
+                    chapter = candidates[0]["chapter"]
+                    citation = candidates[0]["citation"]
 
         return [{
             "statute_title": statute_title,

@@ -131,6 +131,20 @@ def get_legislation_databases(language: str = "en") -> dict:
         return {"error": "Legal database lookup failed. Try again or enter the citation manually."}
 
 
+# ── Process-lifetime cache for legislation listings ──────────────────────────
+# A listing is a multi-second, multi-megabyte request (Ontario's regulations are
+# ~4 100 entries / 1.3 MB) and changes only when CanLII publishes, so re-fetching
+# it per query both adds latency and burns quota — enough of it that consecutive
+# queries could be throttled into a spurious "couldn't verify" answer.
+# Successful responses only: an error must stay retryable.
+_LEGISLATION_CACHE: dict[tuple[str, str], dict] = {}
+
+
+def clear_legislation_cache() -> None:
+    """Drop the cached legislation listings (tests; not used in production)."""
+    _LEGISLATION_CACHE.clear()
+
+
 def browse_legislation_in_database(
     database_id: str,
     language: str = "en",
@@ -155,6 +169,12 @@ def browse_legislation_in_database(
     if not key:
         return {"error": "CANLII_API_KEY not configured"}
 
+    cache_key = (database_id, language)
+    cached = _LEGISLATION_CACHE.get(cache_key)
+    if cached is not None:
+        logger.debug("[DUR] CanLII browse_legislation_in_database(%s) — cache hit", database_id)
+        return cached
+
     try:
         _is_first = _mark_first_canlii()
         if _is_first:
@@ -175,7 +195,10 @@ def browse_legislation_in_database(
                 _http_elapsed,
             )
         response.raise_for_status()
-        return response.json()
+        payload = response.json()
+        if isinstance(payload, dict) and "error" not in payload:
+            _LEGISLATION_CACHE[cache_key] = payload
+        return payload
     except requests.exceptions.RequestException as e:
         logger.warning("CanLII browse_legislation_in_database failed: %s", type(e).__name__)
         return {"error": "Legal database lookup failed. Try again or enter the citation manually."}
