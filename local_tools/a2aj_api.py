@@ -91,6 +91,18 @@ def _same_citation(a: str, b: str) -> bool:
     return _norm(a) == _norm(b)
 
 
+# Neutral citation shape: "YYYY COURT N" — a bare year, a court/publisher code,
+# and a sequence number ("2012 SCC 13", "2022 ONCA 39", "2012 CanLII 27167").
+# A print/reporter citation instead leads with a bracketed or parenthesised year
+# ("[1999] 1 SCR 688", "(1883) 8 App Cas 354"), which this deliberately rejects.
+_NEUTRAL_CITATION_RE = re.compile(r"^\d{4}\s+[A-Za-z][A-Za-z]{1,9}\s+\d+$")
+
+
+def _is_neutral_citation(citation: str) -> bool:
+    """True when ``citation`` has the neutral-citation shape (no brackets)."""
+    return bool(_NEUTRAL_CITATION_RE.match(citation.strip()))
+
+
 def _map_fields(result: dict) -> dict:
     """将 A2AJ 返回字段映射到 detect_type 能识别的格式。"""
     citation = result.get("citation_en", "")
@@ -111,15 +123,40 @@ def _map_fields(result: dict) -> dict:
             "url": result.get("url_en", ""),
         }
     else:
-        reporter = result.get("citation2_en", "")
-        # A2AJ 对 pre-neutral 时代判例（如 R v Gladue）会把同一条印刷引文
-        # 同时填进 citation_en 和 citation2_en —— 原样映射会让并引路由输出
-        # "X, X."，同值时置空 reporter 退回单引文模式。
-        if reporter and _same_citation(reporter, citation):
+        # ── Shape-based slotting, not positional ──────────────────────────
+        # A2AJ puts the primary citation in citation_en and the parallel one in
+        # citation2_en, but for pre-neutral-era cases (R v Gladue, Roncarelli)
+        # citation_en holds a PRINT citation and citation2_en repeats it.
+        # Slotting by position put a reporter citation into neutral_citation,
+        # which routed the case to the juris.neutral subpattern — whose prompt
+        # carries a neutral example ("R v King, 2002 SCC 10").  The model then
+        # manufactured a neutral citation to fit the shape it was shown
+        # ("[1999] 1 SCR 688" → "R v Gladue, 1999 SCC 688, [1999] 1 SCR 688";
+        # "[1959] SCR 121" → the example citation verbatim).  Slotting by shape
+        # leaves neutral_citation empty for these, so select_subpattern routes
+        # to juris.reported_only and no neutral citation can be invented.
+        neutral = ""
+        reporter = ""
+        for candidate in (citation, result.get("citation2_en", "") or ""):
+            candidate = candidate.strip()
+            if not candidate:
+                continue
+            if _is_neutral_citation(candidate):
+                if not neutral:
+                    neutral = candidate
+            elif not reporter:
+                reporter = candidate
+        # Pre-neutral duplicates ("[1999] 1 SCR 688" twice, or with a dotted
+        # "[1999] 1 S.C.R. 688" variant) collapse in the loop above — both are
+        # print-shaped, so the second never reaches the free reporter slot.
+        # This guard covers the remaining case: a dotted NEUTRAL variant
+        # ("2012 SCC. 13") fails the shape test, lands in reporter, and would
+        # otherwise render as "X, X."
+        if neutral and reporter and _same_citation(neutral, reporter):
             reporter = ""
         return {
             "style_of_cause": name,
-            "neutral_citation": citation,
+            "neutral_citation": neutral,
             "reporter": reporter,
             "year": year,
             "date": date,
