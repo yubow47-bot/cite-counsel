@@ -187,7 +187,7 @@ Text:
 
     from llm_api.deepseek_api import ask_deepseek
     try:
-        result = ask_deepseek(prompt).strip().lower()
+        result = ask_deepseek(prompt, disable_thinking=True).strip().lower()
         valid = {"journal_article", "book", "book_chapter", "thesis", "report",
                  "newspaper", "case", "legislation", "government_document", "website", "other"}
         if result in valid:

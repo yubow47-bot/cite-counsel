@@ -90,10 +90,16 @@ def _call_deepseek(messages: list, temperature: float = 0, model: str | None = N
         "messages": messages,
         "temperature": temperature,
     }
-    if disable_thinking and COMPLETIONS_URL == DEEPSEEK_API_URL:
-        # DeepSeek-specific extension — other OpenAI-compatible endpoints
-        # (OpenRouter upstreams) reject unknown params.
-        body["thinking"] = {"type": "disabled"}
+    if disable_thinking:
+        if COMPLETIONS_URL == DEEPSEEK_API_URL:
+            # DeepSeek-specific extension.
+            body["thinking"] = {"type": "disabled"}
+        else:
+            # OpenRouter upstreams reject DeepSeek's "thinking" param; their
+            # cross-provider equivalent is reasoning.enabled=false.  Without
+            # it, default-thinking models (qwen3.7-flash) burn ~1400 reasoning
+            # tokens per call (~10x latency) on tiny formatting prompts.
+            body["reasoning"] = {"enabled": False}
 
     with timing.measure("http.deepseek", model=actual_model):
         response = request_with_retry(

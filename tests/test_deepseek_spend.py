@@ -134,6 +134,52 @@ class TestDisableThinking:
             "Should not use extra_body wrapper when building raw HTTP JSON"
         )
 
+    def test_call_deepseek_thinking_disabled_openrouter_reasoning(self):
+        """Non-DeepSeek endpoint (OpenRouter): disable_thinking=True -> 'reasoning': {'enabled': False}.
+
+        OpenRouter upstreams reject DeepSeek's 'thinking' param; without the
+        reasoning flag, default-thinking models (qwen3.7-flash) burn ~1400
+        reasoning tokens per call (~10x latency).
+        """
+        fake_data = {
+            "choices": [{"message": {"content": "x"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        }
+        with patch("llm_api.deepseek_api.COMPLETIONS_URL", "https://openrouter.ai/api/v1/chat/completions"), \
+             patch("llm_api.deepseek_api.deepseek_session.request") as m_post:
+            m_post.return_value = _mock_response(fake_data)
+            result = ask_deepseek("x", disable_thinking=True)
+
+        assert result == "x"
+        call_kwargs = m_post.call_args[1]
+        sent_json = call_kwargs.get("json", {})
+        assert sent_json.get("reasoning") == {"enabled": False}, (
+            f"Expected 'reasoning': {{'enabled': False}} on OpenRouter endpoint, "
+            f"got {sent_json.get('reasoning')!r}"
+        )
+        assert "thinking" not in sent_json, (
+            f"DeepSeek's 'thinking' param must not be sent to OpenRouter, "
+            f"got 'thinking': {sent_json.get('thinking')!r}"
+        )
+
+    def test_call_deepseek_thinking_default_no_reasoning_key(self):
+        """disable_thinking=False (default) -> no 'reasoning' key, regardless of endpoint."""
+        fake_data = {
+            "choices": [{"message": {"content": "x"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        }
+        with patch("llm_api.deepseek_api.COMPLETIONS_URL", "https://openrouter.ai/api/v1/chat/completions"), \
+             patch("llm_api.deepseek_api.deepseek_session.request") as m_post:
+            m_post.return_value = _mock_response(fake_data)
+            result = ask_deepseek("x")
+
+        assert result == "x"
+        sent_json = m_post.call_args[1].get("json", {})
+        assert "reasoning" not in sent_json, (
+            f"Expected no 'reasoning' key with default disable_thinking, "
+            f"got 'reasoning': {sent_json.get('reasoning')!r}"
+        )
+
     def test_call_deepseek_thinking_default_no_thinking_key(self):
         """disable_thinking=False (default) -> no 'thinking' key in the request json."""
         fake_data = {
