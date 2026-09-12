@@ -10,6 +10,7 @@ LEGISinfo; it only asserts the classification and routing layers.
 import os
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 # Ensure project root is on sys.path
 _PROJ = Path(__file__).resolve().parent.parent
@@ -44,12 +45,14 @@ def test_classifier_llm_bill_fallback():
     from local_tools.citation_search import classify_and_normalize
 
     # "bill c 34" with a space between letter and digits won't match the regex,
-    # so it falls through to the LLM classifier.  The LLM should return bill.
-    result = classify_and_normalize("bill c 34")
-    # LLM may vary; accept bill or legislation so the test isn't flaky.
-    assert result["type"] in ("bill", "legislation"), (
-        f"LLM fallback for 'bill c 34' returned unexpected type: {result['type']}"
-    )
+    # so it falls through to the LLM classifier. Mock that boundary to keep the
+    # test offline while exercising the real JSON parser and validation.
+    llm_json = '{"type":"bill","normalized":"C-34","original":"bill c 34"}'
+    with patch("local_tools.citation_search.call_gemini_text", return_value=llm_json):
+        result = classify_and_normalize("bill c 34")
+
+    assert result["type"] == "bill"
+    assert result["normalized"] == "C-34"
 
 
 def test_bill_route_not_legislation():
