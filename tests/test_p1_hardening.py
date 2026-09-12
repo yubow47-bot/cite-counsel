@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pytest
 from fastapi.testclient import TestClient
 
-from api.main import app
+from api.main import app, _sign_candidate
 from api.rate_limiter import RateLimiter, _int_env
 
 client = TestClient(app)
@@ -57,14 +57,15 @@ def test_select_fabricated_bill_citation_is_ignored():
     with patch("local_tools.legisinfo_api.fetch_legisinfo_bills",
                MagicMock(return_value=[fake_bill])), \
          patch("api.main.classify_document_type") as mock_cls:
-        resp = client.post("/api/citation/select", json={
-            "candidates": [{
+        candidate = _sign_candidate({
                 "verified": True,
                 "style_of_cause": "Bill C-22",
                 "bill_session": "44-1",
                 "bill_title": "An Act respecting real measures",
                 "_bill_citation": "EVIL INJECTED CITATION TEXT",
-            }],
+            })
+        resp = client.post("/api/citation/select", json={
+            "candidates": [candidate],
             "selected_index": 0,
         })
 
@@ -79,12 +80,13 @@ def test_select_fabricated_bill_citation_is_ignored():
 def test_select_bill_not_reconfirmable_degrades():
     """bill_session candidate that LEGISinfo can't confirm → unsupported."""
     with patch("local_tools.legisinfo_api.fetch_legisinfo_bills", MagicMock(return_value=[])):
-        resp = client.post("/api/citation/select", json={
-            "candidates": [{
+        candidate = _sign_candidate({
                 "verified": True,
                 "style_of_cause": "Bill X-99",
                 "bill_session": "44-1",
-            }],
+            })
+        resp = client.post("/api/citation/select", json={
+            "candidates": [candidate],
             "selected_index": 0,
         })
     body = resp.json()
@@ -95,15 +97,16 @@ def test_select_strips_all_internal_keys():
     """Non-bill candidate: every underscore-prefixed key is stripped before
     formatting — format_citation never sees client internal fields."""
     with patch("api.main.format_citation", MagicMock(return_value="Citation.")) as mock_fmt:
-        resp = client.post("/api/citation/select", json={
-            "candidates": [{
+        candidate = _sign_candidate({
                 "verified": True,
                 "style_of_cause": "R v Legit",
                 "neutral_citation": "2025 SCC 7",
                 "_bill_citation": "should be dropped",
                 "_match_path": "smuggled",
                 "_anything": "gone",
-            }],
+            })
+        resp = client.post("/api/citation/select", json={
+            "candidates": [candidate],
             "selected_index": 0,
         })
     assert resp.json()["status"] == "done"

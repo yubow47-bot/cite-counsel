@@ -118,7 +118,8 @@ Search and format a legal citation.
         "year": "1986",
         "date": "1986-02-28",
         "url": "https://canlii.ca/t/1ft6f",
-        "verified": true
+        "verified": true,
+        "candidate_signature": "<server-generated HMAC>"
       }
     ]
   }
@@ -126,8 +127,9 @@ Search and format a legal citation.
 ```
 
 Each candidate carries the full structured fields that `format_citation` needs
-(not just the display string).  Frontend stores the array and passes it back
-to `/api/citation/select`.
+(not just the display string) plus a server-generated integrity signature.
+Frontend stores the array unchanged and passes it back to
+`/api/citation/select`.
 
 **Response** — grounding failed, show scaffold (`status="needs_input"`):
 
@@ -169,10 +171,12 @@ user may switch to any other type.
 
 ---
 
-### 2. POST `/api/citation/select` — Candidate selection (stateless)
+### 2. POST `/api/citation/select` — Signed candidate selection
 
-Format a previously-returned candidate.  No server state — frontend passes the
-same candidates array back.
+Format a previously-returned candidate. The frontend passes the same candidates
+array back, including each `candidate_signature`. The backend verifies the
+selected candidate before performing database rechecks or formatting. Missing
+or modified signatures return `status="unsupported"` and require a new search.
 
 **Request:**
 ```json
@@ -361,7 +365,9 @@ lookup.  Result is always `verified: false`.
 | `DEBUG_RESPONSES` | `false` | expose debug payload in responses (dev only) |
 | `MAX_UPLOAD_MB` | `10` | max uploaded file size |
 | `ALLOWED_ORIGINS` | `http://localhost:3000` | CORS allowed origins, comma-separated |
-| `RATE_LIMIT_PER_MINUTE` | `30` | max requests/IP/minute |
+| `RATE_LIMIT_PER_MIN` | `30` | max requests/IP/minute |
+| `RATE_LIMIT_PER_HOUR` | `200` | max requests/IP/hour |
+| `CANDIDATE_SIGNING_KEY` | random per process | HMAC key for candidate integrity; set the same secret on every worker/replica and preserve it across restarts |
 | `DEEPSEEK_DAILY_LIMIT` | `500` | max DeepSeek API calls/day |
 | `DEEPSEEK_API_KEY` | — | DeepSeek API key (already in `.env`) |
 | `LLM_DEFAULT_MODEL` | `deepseek-v4-flash` | default model for classification/formatting |
@@ -372,8 +378,8 @@ lookup.  Result is always `verified: false`.
 - Model routing (flash default, pro for `expand_concept`) is an implementation
   detail of `deepseek_api.py` via env variables.  API does not expose model
   selection.
-- `selection_token` / server-side session **not used** — selection is fully
-  stateless via frontend-passed `candidates` array.
+- No server-side selection session is used. Selection remains stateless via the
+  frontend-passed `candidates` array, whose integrity is protected by HMAC.
 
 ## Deployment notes
 

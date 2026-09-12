@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from unittest.mock import patch
 from fastapi.testclient import TestClient
-from api.main import app
+from api.main import app, _sign_candidate
 
 client = TestClient(app)
 
@@ -96,7 +96,7 @@ def test_concept_legislation_via_select_pinpoint_once():
 
     with patch("api.main.format_citation", return_value=formatted):
         resp = client.post("/api/citation/select", json={
-            "candidates": [candidate],
+            "candidates": [_sign_candidate(candidate)],
             "selected_index": 0,
         })
 
@@ -131,7 +131,7 @@ def test_case_citation_select_has_pinpoint_field():
 
     with patch("api.main.format_citation", return_value=formatted):
         resp = client.post("/api/citation/select", json={
-            "candidates": [candidate],
+            "candidates": [_sign_candidate(candidate)],
             "selected_index": 0,
         })
 
