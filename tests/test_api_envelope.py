@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from unittest.mock import patch
 from fastapi.testclient import TestClient
-from api.main import app, _JUR_NONE_MSG, _SCAFFOLD_DISABLED_MSG
+from api.main import app, _JUR_NONE_MSG, _SCAFFOLD_DISABLED_MSG, _sign_candidate
 
 client = TestClient(app)
 
@@ -210,7 +210,7 @@ def test_citation_select_has_pinpoint_field():
     }
     with patch("api.main.format_citation", return_value=_CIT_CASE_WITHOUT_PIN):
         resp = client.post("/api/citation/select", json={
-            "candidates": [candidate],
+            "candidates": [_sign_candidate(candidate)],
             "selected_index": 0,
         })
 

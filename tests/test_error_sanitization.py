@@ -17,7 +17,7 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, ".")
 
 from fastapi.testclient import TestClient
-from api.main import app, _USER_FACING_ERROR
+from api.main import app, _USER_FACING_ERROR, _sign_candidate
 
 client = TestClient(app)
 
@@ -138,7 +138,7 @@ def test_formatting_failure_select_sanitized(caplog):
     with patch("api.main.format_citation") as mock_fmt:
         mock_fmt.side_effect = _DummyException(_DUMMY_EXC_TEXT)
         resp = client.post("/api/citation/select", json={
-            "candidates": [{"style_of_cause": "Test", "verified": True}],
+            "candidates": [_sign_candidate({"style_of_cause": "Test", "verified": True})],
             "selected_index": 0,
         })
 

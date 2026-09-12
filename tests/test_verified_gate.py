@@ -19,6 +19,7 @@ from api.main import (
     app,
     _handle_concept,
     _SCAFFOLD_DISABLED_MSG,
+    _sign_candidate,
 )
 from api.scaffold import SUGGESTED_TYPE_MAP, build_prefill
 
@@ -195,7 +196,7 @@ def test_6_select_unverified_returns_unsupported():
 
     with patch("api.main.format_citation") as mock_fmt:
         resp = client.post("/api/citation/select", json={
-            "candidates": [candidate],
+            "candidates": [_sign_candidate(candidate)],
             "selected_index": 0,
         })
 
@@ -221,7 +222,7 @@ def test_7_select_verified_returns_done():
 
     with patch("api.main.format_citation", return_value=formatted):
         resp = client.post("/api/citation/select", json={
-            "candidates": [candidate],
+            "candidates": [_sign_candidate(candidate)],
             "selected_index": 0,
         })
 
@@ -247,7 +248,7 @@ def test_8_select_truthy_non_true_returns_unsupported():
 
         with patch("api.main.format_citation") as mock_fmt:
             resp = client.post("/api/citation/select", json={
-                "candidates": [candidate],
+                "candidates": [_sign_candidate(candidate)],
                 "selected_index": 0,
             })
 

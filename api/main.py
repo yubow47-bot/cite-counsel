@@ -9,6 +9,9 @@ import os
 import re
 import sys
 import json
+import hashlib
+import hmac
+import secrets
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -100,6 +103,21 @@ ALLOWED_ORIGINS = [
 
 
 _USER_FACING_ERROR = "We couldn't process this request. Please try again in a moment."
+_INVALID_CANDIDATE_MSG = (
+    "This selection could not be verified. Please search again and choose a new result."
+)
+
+# A configured key is shared by every worker/container and survives restarts.
+# The random fallback keeps local and single-process deployments secure without
+# shipping a public default, at the cost of invalidating outstanding candidates
+# when the process restarts.
+_configured_candidate_key = os.getenv("CANDIDATE_SIGNING_KEY", "").strip()
+_CANDIDATE_SIGNING_KEY = (
+    _configured_candidate_key.encode("utf-8")
+    if _configured_candidate_key
+    else secrets.token_bytes(32)
+)
+_CANDIDATE_SIGNATURE_FIELD = "candidate_signature"
 
 
 def _without_internal(d: dict) -> dict:
@@ -122,6 +140,56 @@ def _strip_internal_keys(d: dict) -> dict:
     client and candidate dicts received back on /api/citation/select.
     """
     return {k: v for k, v in d.items() if not k.startswith("_")}
+
+
+def _candidate_signature(candidate: dict) -> str:
+    """Sign all server-owned candidate fields in a stable JSON encoding.
+
+    The signature field itself is excluded so signed candidates can be
+    verified after their client round trip. Every other field, including a
+    candidate's server-derived pinpoint, is integrity-protected.
+    """
+    signed_fields = {
+        key: value
+        for key, value in candidate.items()
+        if key != _CANDIDATE_SIGNATURE_FIELD
+    }
+    payload = json.dumps(
+        signed_fields,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hmac.new(_CANDIDATE_SIGNING_KEY, payload, hashlib.sha256).hexdigest()
+
+
+def _sign_candidate(candidate: dict) -> dict:
+    """Return a client-safe candidate carrying an integrity signature."""
+    signed = dict(candidate)
+    signed[_CANDIDATE_SIGNATURE_FIELD] = _candidate_signature(signed)
+    return signed
+
+
+def _candidate_signature_valid(candidate: dict) -> bool:
+    """Verify a candidate without trusting any client-controlled metadata."""
+    supplied = candidate.get(_CANDIDATE_SIGNATURE_FIELD)
+    if not isinstance(supplied, str) or re.fullmatch(r"[0-9a-f]{64}", supplied) is None:
+        return False
+    try:
+        expected = _candidate_signature(candidate)
+    except (TypeError, ValueError):
+        return False
+    return hmac.compare_digest(supplied, expected)
+
+
+def _selection_candidate(item: dict) -> dict:
+    """Build and sign the exact candidate representation sent to a client."""
+    candidate = {
+        "display": _candidate_display(item),
+        **_strip_internal_keys(item),
+    }
+    return _sign_candidate(candidate)
 
 
 _BILL_STYLE_RE = re.compile(r"(?i)^bill\s+([A-Za-z]+-\d+)$")
@@ -481,10 +549,7 @@ async def citation_query(body: CitationInput, request: Request):
     if route in ("bill", "case_name", "legislation", "citation_number") and len(results) > 1:
         candidates = []
         for item in results:
-            candidates.append({
-                "display": _candidate_display(item),
-                **_strip_internal_keys(item),
-            })
+            candidates.append(_selection_candidate(item))
         return _envelope(True, route, "needs_selection", {
             "candidates": candidates,
         })
@@ -559,10 +624,7 @@ async def _handle_concept(results: list, query: str) -> dict:
     # 2+ verified → needs_selection with only verified candidates
     candidates = []
     for item in verified:
-        candidates.append({
-            "display": _candidate_display(item),
-            **_strip_internal_keys(item),
-        })
+        candidates.append(_selection_candidate(item))
     return _envelope(True, "concept", "needs_selection", {
         "candidates": candidates,
     })
@@ -622,11 +684,21 @@ async def citation_select(body: CitationSelectInput):
 
     item = body.candidates[body.selected_index]
 
+    # Candidates are bearer data returned by this service and echoed by the
+    # client.  Verify their complete server-owned representation before any
+    # external re-confirmation or formatting work.
+    if not isinstance(item, dict) or not _candidate_signature_valid(item):
+        return _envelope(
+            True, "select", "unsupported", {},
+            error={"reason": _INVALID_CANDIDATE_MSG},
+        )
+
     # ── Grounding hardening: internal fields are server-owned ──
     # The client only echoes a previously-returned candidate.  Strip every
     # underscore-prefixed key so a tampered payload cannot smuggle in raw
     # citation text (_bill_citation) or internal markers (_match_path).
     item = _strip_internal_keys(item)
+    item.pop(_CANDIDATE_SIGNATURE_FIELD, None)
 
     # ── Verified gate: refuse to format unverified candidates ──
     # Explicit boolean identity: only True passes — "false" (string), 1, or
