@@ -1323,25 +1323,23 @@ def search_citation(query: str, classification: dict | None = None) -> list:
 
     # 1. citation_number：按引用号精确查
     if input_type == "citation_number":
-        # Apply bracket normalization before calling fetch_by_citation
-        bracketed = _bracket_reporter_year(normalized)
-        result = fetch_by_citation(bracketed)
-        if "error" not in result and "raw_input" not in result:
-            result["verified"] = True
-            return [result]
-
-        # ── Statute citations land here too ──────────────────────────────
-        # The classifier routes "S.O. 2019, c. 7" and "Criminal Code, RSC 1985,
-        # c C-46, s 718.2(e)" to citation_number, where the only lookup used to
-        # be A2AJ /fetch on the whole string.  Hand those to the legislation
-        # branch instead, which knows the A2AJ laws endpoint and the CanLII
-        # statute/regulation databases.
+        # Known statute/regulation citation shapes belong to the legislation
+        # pipeline. Route them before the generic A2AJ case lookup so that the
+        # laws endpoint, pinpoint extraction, chapter parsing, and candidate
+        # disambiguation are all applied consistently.
         if _CITATION_REGEX.search(normalized):
             return search_citation(query, classification={
                 "type": "legislation",
                 "normalized": normalized,
                 "original": classified.get("original", query),
             })
+
+        # Apply bracket normalization before calling fetch_by_citation
+        bracketed = _bracket_reporter_year(normalized)
+        result = fetch_by_citation(bracketed)
+        if "error" not in result and "raw_input" not in result:
+            result["verified"] = True
+            return [result]
 
         # ── Case name mixed in with the citation ────────────────────────
         # "Roncarelli v Duplessis [1959] SCR 121" and "R v Gladue [1999] 1 SCR

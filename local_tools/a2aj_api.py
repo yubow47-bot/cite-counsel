@@ -117,12 +117,13 @@ def _map_fields(result: dict) -> dict:
 
     # 判断是判例还是法规（dataset may be present-but-null in degraded payloads）
     dataset = result.get("dataset") or ""
-    is_legislation = "LEGISLATION" in dataset.upper()
+    dataset_kind = re.split(r"[-_]", dataset.upper(), maxsplit=1)[0]
+    is_legislation = dataset_kind in {"LEGISLATION", "REGULATIONS"}
 
     if is_legislation:
         return {
             "statute_title": name,
-            "neutral_citation": citation,
+            "citation": citation,
             "jurisdiction": _extract_jurisdiction(dataset),
             "year": year,
             "url": result.get("url_en", ""),
@@ -201,7 +202,7 @@ def _extract_jurisdiction(dataset: str) -> str:
     """
     if not dataset:
         return ""
-    code = dataset.upper().rsplit("-", 1)[-1].strip()
+    code = re.split(r"[-_]", dataset.upper())[-1].strip()
     return _JURISDICTION_NAMES.get(code, "")
 
 

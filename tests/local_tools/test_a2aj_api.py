@@ -1,9 +1,11 @@
 """Tests for a2aj_api._map_fields — deterministic field mapping, no I/O."""
 import sys, os
+from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from local_tools.a2aj_api import _map_fields
-from core.mcgill_engine import select_subpattern
+from core.mcgill_engine import detect_type, select_subpattern
+from local_tools.citation_search import search_citation
 
 
 class TestMapFieldsReporter:
@@ -213,3 +215,47 @@ class TestMapFieldsReporter:
         mapped = _map_fields(record)
         assert "reporter" not in mapped
         assert mapped["statute_title"] == "Criminal Code"
+        assert mapped["citation"] == "RSC 1985, c C-46"
+        assert "neutral_citation" not in mapped
+
+    def test_regulations_dataset_maps_to_legislation_schema(self):
+        record = {
+            "citation_en": "RRO 1990, Reg 194",
+            "name_en": "Rules of Civil Procedure",
+            "dataset": "REGULATIONS-ON",
+        }
+        mapped = _map_fields(record)
+
+        assert mapped["citation"] == "RRO 1990, Reg 194"
+        assert "neutral_citation" not in mapped
+        assert mapped["jurisdiction"] == "Ontario"
+        assert detect_type(mapped) == "legislation"
+        assert select_subpattern("legislation", mapped) == "leg.statute"
+
+
+def test_statute_shaped_citation_number_uses_legislation_pipeline_first():
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"results": [{
+        "citation_en": "RSC 1985, c C-46",
+        "name_en": "Criminal Code",
+        "dataset": "LEGISLATION-FED",
+    }]}
+    classification = {
+        "type": "citation_number",
+        "normalized": "Criminal Code, RSC 1985, c C-46, s 718.2(e)",
+        "original": "Criminal Code, RSC 1985, c C-46, s 718.2(e)",
+    }
+
+    with patch("local_tools.citation_search.fetch_by_citation") as generic_fetch, \
+         patch("local_tools.utils.request_with_retry", return_value=response) as laws_fetch:
+        result = search_citation(classification["original"], classification=classification)
+
+    generic_fetch.assert_not_called()
+    assert laws_fetch.call_args.kwargs["params"] == {
+        "citation": "RSC 1985, c C-46",
+        "doc_type": "laws",
+    }
+    assert result[0]["verified"] is True
+    assert result[0]["chapter"] == "c C-46"
+    assert result[0]["pinpoint"] == "s 718.2(e)"
