@@ -1,19 +1,20 @@
 # Cite Counsel
 
-**A source-grounded McGill Guide (10th ed.) citation tool for Canadian legal research.**
+**An in-development McGill Guide (10th ed.) citation tool for Canadian legal research.**
 
-Cite Counsel helps students, researchers, and legal professionals create citations from a search, a URL/DOI/ISBN, or an uploaded document. It verifies metadata against the appropriate public source where possible, then formats the result for the *Canadian Guide to Uniform Legal Citation* (McGill Guide), 10th edition.
+Cite Counsel helps students, researchers, and legal professionals create citations from a search, a URL/DOI/ISBN, or an uploaded document. It combines structured metadata, user-provided material, and optional external services to format results for the *Canadian Guide to Uniform Legal Citation* (McGill Guide), 10th edition.
 
 > Citations are provided as a research aid. Always check the final result against the official McGill Guide and the source material before relying on it.
 
 ## What it does
 
 - Searches Canadian cases, legislation, and federal bills using plain-language queries or citation details.
-- Resolves legal sources through A2AJ, CanLII, and LEGISinfo; retrieves article and book metadata from Crossref and Open Library.
+- Uses guided candidate selection where a lookup returns more than one plausible result.
 - Creates citations from a URL, DOI, or ISBN.
 - Extracts citation-relevant information from PDF, DOCX, PPTX, XLSX, JPG, PNG, and WEBP uploads.
-- Uses a guided candidate-selection flow rather than silently choosing among ambiguous results.
 - Provides a manual citation form for source types that cannot be verified automatically.
+
+Coverage and external-service availability vary by source type and deployment. In particular, the repository contains experimental CanLII integration code, but it is not currently presented as a supported or reliably verified product capability.
 
 ## Architecture
 
@@ -22,8 +23,8 @@ Cite Counsel helps students, researchers, and legal professionals create citatio
 | Web app | Next.js 16, React 19, TypeScript, Tailwind CSS | Search, source selection, uploads, results, and feedback UI |
 | API | FastAPI, Uvicorn, Pydantic | Citation endpoints, file handling, validation, rate limits, and CORS |
 | Extraction | pdfplumber, PyMuPDF, python-docx, python-pptx, openpyxl, trafilatura | Read uploaded files and web content |
-| Data sources | CanLII, A2AJ, LEGISinfo, Crossref, Open Library | Source metadata and legal-research verification |
-| Optional AI services | Configurable DeepSeek-compatible and Gemini endpoints | Classification and extraction fallbacks; never the sole source of verified metadata |
+| External services | A2AJ, LEGISinfo, Crossref, Open Library, and optional LLM providers | Lookup, metadata, classification, and extraction support; availability varies |
+| Experimental integration | CanLII adapter code | Not a documented supported capability; do not rely on it for verification |
 
 The repository contains two independently runnable applications:
 
@@ -71,7 +72,6 @@ Create a local `.env` file for the API. It is intentionally ignored by Git; do n
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `CANLII_API_KEY` | For CanLII lookups | CanLII API access |
 | `DEEPSEEK_API_KEY` | For DeepSeek features | Default compatible-completions provider |
 | `GEMINI_API_KEY` | For Gemini features | Gemini extraction/classification features |
 | `CANDIDATE_SIGNING_KEY` | Multi-worker production | Long, random secret used to sign candidate metadata; keep identical across replicas |
