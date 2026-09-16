@@ -1,123 +1,185 @@
 # Cite Counsel
 
-**An in-development McGill Guide (10th ed.) citation tool for Canadian legal research.**
+Cite Counsel is an experimental web application for producing citations in the style of the *Canadian Guide to Uniform Legal Citation* (McGill Guide), 10th edition. It combines public metadata services, document extraction, and language-model-assisted classification and formatting.
 
-Cite Counsel helps students, researchers, and legal professionals create citations from a search, a URL/DOI/ISBN, or an uploaded document. It combines structured metadata, user-provided material, and optional external services to format results for the *Canadian Guide to Uniform Legal Citation* (McGill Guide), 10th edition.
+This repository is under active development. A successful response is a research aid, not a guarantee that a citation is correct. Check every result against the source and the official McGill Guide before relying on it.
 
-> Citations are provided as a research aid. Always check the final result against the official McGill Guide and the source material before relying on it.
+## What is implemented
 
-## What it does
+The browser application exposes three user flows:
 
-- Searches Canadian cases, legislation, and federal bills using plain-language queries or citation details.
-- Uses guided candidate selection where a lookup returns more than one plausible result.
-- Creates citations from a URL, DOI, or ISBN.
-- Extracts citation-relevant information from PDF, DOCX, PPTX, XLSX, JPG, PNG, and WEBP uploads.
-- Provides a manual citation form for source types that cannot be verified automatically.
-
-Coverage and external-service availability vary by source type and deployment. In particular, the repository contains experimental CanLII integration code, but it is not currently presented as a supported or reliably verified product capability.
-
-## Architecture
-
-| Layer | Technology | Responsibility |
+| Flow | Implemented path | Important limits |
 | --- | --- | --- |
-| Web app | Next.js 16, React 19, TypeScript, Tailwind CSS | Search, source selection, uploads, results, and feedback UI |
-| API | FastAPI, Uvicorn, Pydantic | Citation endpoints, file handling, validation, rate limits, and CORS |
-| Extraction | pdfplumber, PyMuPDF, python-docx, python-pptx, openpyxl, trafilatura | Read uploaded files and web content |
-| External services | A2AJ, LEGISinfo, Crossref, Open Library, and optional LLM providers | Lookup, metadata, classification, and extraction support; availability varies |
-| Experimental integration | CanLII adapter code | Not a documented supported capability; do not rely on it for verification |
+| Citation search | A query is classified, searched, and either formatted directly or returned as signed candidates for the user to choose from. Case and legislation lookups primarily use A2AJ; federal bill lookup uses LEGISinfo. | Classification and most formatting require an LLM provider. Coverage is limited by the upstream services. A database match verifies source metadata, not the final McGill formatting. |
+| URL, DOI, or ISBN | DOI metadata is resolved through Crossref; ISBN metadata through Open Library. Ordinary web pages are fetched and parsed before classification and formatting. | URL extraction does not execute JavaScript and rejects or fails on many blocked, dynamic, empty, or PDF URLs. DOI/ISBN lookup depends on upstream coverage. |
+| File or image | The API accepts PDF, DOCX, PPTX, XLSX, JPG/JPEG, PNG, and WebP files, extracts available content, classifies the source, and formats a citation. | Images and scanned PDFs require Gemini vision; scanned PDFs use at most the first three rendered pages. Text extraction and model output can be incomplete or wrong. The default upload limit is 10 MB. |
 
-The repository contains two independently runnable applications:
+When a search has several verified matches, the frontend asks the user to select one before formatting. Candidate payloads are HMAC-signed by the API and are rejected if altered.
+
+A deterministic manual form also exists, but it is disabled by default. It must be enabled in both the frontend and API, and its output is explicitly marked unverified.
+
+### CanLII status
+
+The repository contains a CanLII adapter and fallback branches for selected case and legislation lookups. They require `CANLII_API_KEY`, but they are experimental and are **not a supported or reliably verified product capability**. Unit tests around these branches use mocks and do not establish live API coverage. The normal documented setup does not require a CanLII key.
+
+## How a request moves through the project
 
 ```text
-frontend/       Next.js client (default: http://localhost:3000)
-api/            FastAPI application
-core/           Citation formatting, spend tracking, and integrations
-local_tools/    Source adapters and extraction utilities
-tests/          Backend test suite
+Next.js frontend
+  ├─ citation query ──> POST /api/citation ──> optional candidate selection
+  │                                           POST /api/citation/select
+  ├─ file/image ─────> POST /api/extract/file
+  └─ URL/DOI/ISBN ──> POST /api/extract/url
+
+FastAPI
+  ├─ input validation, upload checks, rate limiting, and candidate signatures
+  ├─ A2AJ / LEGISinfo / Crossref / Open Library lookups
+  ├─ local document and web-page extraction
+  └─ Gemini or an OpenAI-compatible completion endpoint for model-assisted steps
 ```
 
-## Run locally
+Other implemented API routes include health and warm-up checks, feedback collection, scaffold configuration/assembly, and a non-streaming chat endpoint. The current frontend does not expose the chat endpoint.
 
-### Prerequisites
+## Technology stack
+
+- Frontend: Next.js 16, React 19, TypeScript 5.7, Tailwind CSS 4, Base UI, Vitest, and Testing Library.
+- Backend: Python 3.11, FastAPI, Uvicorn, and Pydantic.
+- Extraction: trafilatura, pdfplumber, PyMuPDF, python-docx, python-pptx, and openpyxl.
+- Integrations: A2AJ, LEGISinfo, Crossref, Open Library, Gemini, and DeepSeek or another OpenAI-compatible completion service.
+
+Key directories:
+
+```text
+frontend/       Next.js application and component tests
+api/            FastAPI routes, request guards, and manual scaffold
+core/           citation formatting, spend tracking, and persistence helpers
+local_tools/    database adapters, URL guards, and file extraction
+llm_api/        Gemini and compatible-completions clients
+tests/          backend unit and contract tests
+data/           static lookup data and ignored runtime records
+```
+
+## Local development
+
+### Requirements
 
 - Python 3.11+
-- Node.js 20+ and npm
+- Node.js 20.9+ and npm
 
-### 1. Start the API
+### Backend
 
-```bash
+From the repository root:
+
+```powershell
 python -m venv .venv
-.venv\\Scripts\\activate       # Windows PowerShell
-pip install -r requirements.txt
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 uvicorn api.main:app --reload --port 8000
 ```
 
 On macOS or Linux, activate the environment with `source .venv/bin/activate`.
 
-### 2. Start the web app
+The health endpoint is `http://localhost:8000/api/health`.
 
-In a separate terminal:
+### Frontend
 
-```bash
+In a second terminal:
+
+```powershell
 cd frontend
 npm ci
 npm run dev
 ```
 
-Open `http://localhost:3000`. The frontend uses `http://localhost:8000` unless `NEXT_PUBLIC_API_BASE_URL` is set.
+Open `http://localhost:3000`. Unless overridden at build time, the frontend calls `http://localhost:8000`.
 
 ## Configuration
 
-Create a local `.env` file for the API. It is intentionally ignored by Git; do not commit keys, tokens, webhooks, or deployment-specific URLs.
+Put backend secrets in a root `.env` file or in the deployment platform's secret store. `.env` is ignored by Git. Do not prefix private values with `NEXT_PUBLIC_`; Next.js embeds those variables in browser-delivered code.
 
-| Variable | Required | Purpose |
+### Core settings
+
+| Variable | When needed | Description |
 | --- | --- | --- |
-| `DEEPSEEK_API_KEY` | For DeepSeek features | Default compatible-completions provider |
-| `GEMINI_API_KEY` | For Gemini features | Gemini extraction/classification features |
-| `CANDIDATE_SIGNING_KEY` | Multi-worker production | Long, random secret used to sign candidate metadata; keep identical across replicas |
-| `ALLOWED_ORIGINS` | Production | Comma-separated browser origins allowed to call the API |
-| `MAX_UPLOAD_MB` | No | Upload limit; defaults to `10` |
-| `RATE_LIMIT_PER_MIN` / `RATE_LIMIT_PER_HOUR` | No | Per-client API rate-limit overrides |
-| `LLM_COMPLETIONS_URL`, `LLM_API_KEY`, `LLM_DEFAULT_MODEL` | No | Override the compatible LLM endpoint and model |
-| `NEXT_PUBLIC_API_BASE_URL` | Frontend production | Public API base URL used at build time by Next.js |
-| `NEXT_PUBLIC_GA_MEASUREMENT_ID` | No | Google Analytics measurement ID (safe to expose as a public client setting) |
+| `GEMINI_API_KEY` | Search classification and image/scanned-PDF extraction | Gemini API credential. |
+| `DEEPSEEK_API_KEY` | Default formatting and fallback model calls | Credential for the default DeepSeek completions endpoint. |
+| `LLM_COMPLETIONS_URL` | Optional | Replaces the default DeepSeek URL with an OpenAI-compatible endpoint. |
+| `OPENROUTER_API_KEY` or `LLM_API_KEY` | With a custom completions URL | Credential used for the compatible endpoint. |
+| `LLM_DEFAULT_MODEL` | Optional | Model identifier for compatible completion calls; defaults to `deepseek-v4-flash`. |
+| `GEMINI_TEXT_MODEL`, `GEMINI_VISION_MODEL` | Optional | Override the Gemini text and vision models. |
+| `NEXT_PUBLIC_API_BASE_URL` | Frontend deployment | Public base URL of the FastAPI service. |
+| `ALLOWED_ORIGINS` | Backend deployment | Comma-separated CORS origins; defaults to `http://localhost:3000`. |
+| `CANDIDATE_SIGNING_KEY` | Production, especially multiple workers | High-entropy shared secret used to sign candidate payloads. Without it, each process creates an ephemeral key. |
 
-Client-side variables prefixed `NEXT_PUBLIC_` are deliberately visible in browser bundles. Never put a private key or webhook URL in one.
+### Operational and optional settings
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MAX_UPLOAD_MB` | `10` | Maximum accepted upload size. |
+| `RATE_LIMIT_PER_MIN` / `RATE_LIMIT_PER_HOUR` | `30` / `200` | In-memory per-client request limits. |
+| `DAILY_SPEND_CAP_USD` | `10` | Daily model-spend guard. |
+| `DEBUG_RESPONSES` | `false` | Includes internal debug data in API responses when enabled; keep off publicly. |
+| `SCAFFOLD_ENABLED` | `false` | Enables the API manual-assembly route. |
+| `NEXT_PUBLIC_SCAFFOLD_ENABLED` | unset | Shows the manual form in the frontend when set to `true`; this is a public build-time flag. |
+| `HF_SPEND_DATASET` / `HF_TOKEN` | unset | Optional Hugging Face Dataset persistence for spend and feedback records. |
+| `DISCORD_FEEDBACK_WEBHOOK` | unset | Optional feedback notification destination. |
+| `NEXT_PUBLIC_GA_MEASUREMENT_ID` | unset | Optional public Google Analytics measurement ID. |
 
 ## Verification
 
-Run the backend tests from the repository root:
+Backend unit tests are collected only from `tests/`; scripts under `profiling/` may make live paid API calls and are intentionally excluded by `pytest.ini`.
 
-```bash
-pytest
-```
+```powershell
+python -m pytest
 
-Run frontend checks from `frontend/`:
-
-```bash
-npm run lint
+cd frontend
 npm test
+npm run lint
 npm run build
 ```
 
+Most integration tests mock external providers. Passing the suite does not prove that an upstream API, credential, model, or deployment is currently available. Use the scripts under `scripts/` only when you intentionally want a live provider check and understand its credential and cost implications.
+
 ## Deployment
 
-The included `Dockerfile` packages the FastAPI service and listens on port `7860`, which is suitable for Hugging Face Spaces-style deployments:
+The root `Dockerfile` builds the FastAPI service only and starts it on port `7860`:
 
-```bash
+```powershell
 docker build -t cite-counsel-api .
 docker run --rm -p 7860:7860 --env-file .env cite-counsel-api
 ```
 
-Deploy the Next.js app separately and set `NEXT_PUBLIC_API_BASE_URL` to the public HTTPS address of the API. Set `ALLOWED_ORIGINS` on the API to the exact deployed frontend origin(s), and use a persistent, high-entropy `CANDIDATE_SIGNING_KEY` whenever the API has multiple workers or replicas.
+Deploy `frontend/` separately. Set `NEXT_PUBLIC_API_BASE_URL` before the frontend production build and configure the backend's CORS policy for the deployed frontend.
 
-## Security notes
+Before a public deployment, review these implementation details:
 
-- Keep secrets in deployment secret stores or local `.env` files only; rotate a key immediately if it is ever committed or exposed.
-- The API restricts upload extensions and checks file signatures before parsing. Keep `MAX_UPLOAD_MB` and rate limits appropriate for your deployment.
-- Candidate data returned to the browser is HMAC-signed to prevent client-side tampering during the selection flow.
-- Treat user-provided URLs and documents as untrusted input. Run the application behind HTTPS and configure CORS narrowly in production.
+- API routes are unauthenticated. The included rate limiter is per-process memory, so it is not a distributed abuse-control system.
+- `api/main.py` allows configured origins and also contains a `https://*.vercel.app` CORS regex. Narrow or remove that regex if previews from arbitrary Vercel subdomains should not reach the API.
+- Keep `DEBUG_RESPONSES=false`. Treat uploaded documents, URLs, citation queries, and feedback as potentially sensitive user data.
+- Feedback is written to `data/feedback.jsonl` and may also be sent to Hugging Face and Discord when configured. Establish retention and disclosure policies before enabling public traffic.
+- Uploads are restricted by extension, size, and file signature, and temporary files are deleted after processing. Continue to isolate parsers and keep dependencies patched.
+- URL fetching uses an SSRF guard, but it should still run with restricted network permissions in production.
+- Use HTTPS and a stable, random `CANDIDATE_SIGNING_KEY`; never place provider keys in frontend variables or commit `.env` files.
 
-## License and guide content
+## API response contract
 
-This repository contains application code and does not reproduce the McGill Guide. The *Canadian Guide to Uniform Legal Citation* is a separate publication; obtain and consult the official guide for authoritative rules.
+Application routes return a common JSON envelope:
+
+```json
+{
+  "ok": true,
+  "route": "bill",
+  "status": "done",
+  "data": {},
+  "debug": null,
+  "error": null
+}
+```
+
+`status` can be `done`, `needs_selection`, `needs_input`, `unsupported`, or `error`. See `api_contract.md` for the route-level contract.
+
+## Legal and project status
+
+This code does not include or replace the McGill Guide. The Guide is a separate copyrighted publication and remains the authoritative source for its rules.
+
+No open-source license file is currently included. Until one is added, public visibility does not grant permission to copy, modify, or redistribute the code.
