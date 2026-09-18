@@ -1,3 +1,9 @@
+# 已禁用（实验副本 E:\mcgill-实验版）
+# 原文件: .github/workflows/sync-to-hf.yml
+# 原因: 该 workflow 在 push 到 main 时会把仓库同步上传到现有 HF Space。
+#       实验副本禁止自动部署到当前 HF/生产目标，故移出 workflows/ 目录。
+# 如需在实验副本中恢复，请先确认目标 Space 不是生产 Space。
+
 name: Sync to Hugging Face Space
 
 on:
