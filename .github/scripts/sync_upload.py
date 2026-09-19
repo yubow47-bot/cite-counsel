@@ -11,7 +11,7 @@ import sys
 if os.environ.get("MCGILL_ALLOW_PROD_DEPLOY", "").strip() != "1":
     sys.exit(
         "BLOCKED: 实验副本禁止部署到 HF/production。\n"
-        "此门禁由 E:/mcgill-实验版 的隔离要求设置（见 EXPERIMENT_README.md）。\n"
+        "此门禁由 E:/mcgill-实验版 的隔离要求设置（见 docs/internal/EXPERIMENT_README.md）。\n"
         "如确需部署到独立测试 Space，请自行显式导出 MCGILL_ALLOW_PROD_DEPLOY=1。"
     )
 
