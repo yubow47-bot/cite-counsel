@@ -13,6 +13,10 @@ logger = logging.getLogger(__name__)
 
 def _load_env():
     """Load .env file for API key."""
+    # The local Chatbox launcher owns environment configuration.  Do this
+    # before even looking for .env so desktop requests never touch it.
+    if os.getenv("MCGILL_SKIP_DOTENV") == "1":
+        return
     env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
     if os.path.exists(env_path):
         with open(env_path, "r", encoding="utf-8") as f:
@@ -76,6 +80,9 @@ def _get_api_key() -> str:
 
 def _call_deepseek(messages: list, temperature: float = 0, model: str | None = None, disable_thinking: bool = False) -> str:
     """Internal: call DeepSeek API with messages, return response text."""
+    from llm_api.openrouter_api import chatbox_mode, check_budget
+    if chatbox_mode() and not check_budget():
+        raise RuntimeError("Daily LLM spend cap reached.")
     _http_t0 = time.perf_counter()
     _is_first = _mark_first_deepseek_http()
 
@@ -127,7 +134,8 @@ def _call_deepseek(messages: list, temperature: float = 0, model: str | None = N
         out_tokens = usage.get("completion_tokens", 0)
         if in_tokens or out_tokens:
             from core.spend_tracker import spend_tracker
-            spend_tracker.record_cost("deepseek", actual_model, in_tokens, out_tokens)
+            provider = "openrouter" if COMPLETIONS_URL != DEEPSEEK_API_URL else "deepseek"
+            spend_tracker.record_cost(provider, actual_model, in_tokens, out_tokens)
     except Exception as e:
         logger.warning("DeepSeek spend tracking failed: %s", e)
 
@@ -251,6 +259,38 @@ def extract_url(url: str) -> str | None:
     return trafilatura.extract(html, include_comments=False)
 
 
+def _meta_content(html: str, prop: str) -> str:
+    """Return the unescaped content of ``<meta property|name=prop>``, or ""."""
+    import html as html_lib
+    import re
+    for tag in re.findall(r"<meta\b[^>]*>", html, re.I):
+        if re.search(r"""(?:property|name)\s*=\s*["']%s["']""" % re.escape(prop), tag, re.I):
+            match = re.search(r"""content\s*=\s*(["'])(.*?)\1""", tag, re.I | re.S)
+            if match:
+                return html_lib.unescape(match.group(2)).strip()
+    return ""
+
+
+def _best_title(meta_title: str | None, html: str) -> str:
+    """Pick between trafilatura's title (usually og:title) and the HTML <title>.
+
+    When one contains the other, the shorter is the article title: the longer
+    one carries either a site suffix ("X | Site") or a publisher typo
+    ("WhOn Holding's ..." vs "On Holding's ...").
+    """
+    import html as html_lib
+    import re
+    meta_title = (meta_title or "").strip()
+    match = re.search(r"<title[^>]*>(.*?)</title>", html[:300_000], re.I | re.S)
+    page_title = re.sub(r"\s+", " ", html_lib.unescape(match.group(1))).strip() if match else ""
+    if meta_title and page_title and meta_title != page_title:
+        if page_title in meta_title:
+            return page_title
+        if meta_title in page_title:
+            return meta_title
+    return meta_title or page_title
+
+
 def extract_from_url(url: str) -> dict:
     """Fetch a URL with curl_cffi and extract structured citation fields.
 
@@ -294,7 +334,8 @@ def extract_from_url(url: str) -> dict:
 
     fields = {
         "url": url,
-        "page_title": meta.get("title") or None,
+        "page_title": _best_title(meta.get("title"), html) or None,
+        "site_name": _meta_content(html, "og:site_name") or meta.get("source-hostname") or None,
         "author": meta.get("author") or None,
         "date": meta.get("date") or None,
         "site_domain": hostname or None,

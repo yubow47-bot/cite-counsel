@@ -39,6 +39,11 @@ _PRICING: dict[str, dict[str, float]] = {
     "qwen/qwen3.7-flash":     {"input": 0.03, "output": 0.13},
     "openai/gpt-oss-20b":     {"input": 0.03, "output": 0.13},
     "z-ai/glm-4.7-flash":     {"input": 0.0605, "output": 0.40},
+    # TypeSafe Jev is a decision-only model.  Keep a canonical key here and
+    # normalize all provider aliases below so a known Jev request never falls
+    # through to the deliberately expensive unknown-model fallback.
+    # Source: https://docs.typesafe.ai/models (checked 2026-09-18).
+    "jev":                     {"input": 0.042, "output": 0.0},
 }
 
 # Models priced in CNY (need FX conversion at spend time).
@@ -50,6 +55,33 @@ _FALLBACK_RATE = max(
     max(m["input"], m["output"]) * (USD_PER_CNY if model in _CNY_MODELS else 1.0)
     for model, m in _PRICING.items()
 )
+
+
+def normalize_model_key(model: str) -> str:
+    """Return the canonical pricing key for known provider model aliases.
+
+    This is intentionally a narrow allowlist. Unknown values remain unknown
+    and retain the conservative fallback behaviour in ``_compute_cost``.
+    """
+    normalized = (model or "").strip().lower()
+    jev_aliases = {
+        "jev",
+        "jev-latest",
+        "jev-preview",
+        "jev-1.13",
+        "jev-1.13.0",
+        "typesafe/jev-latest",
+        "typesafe/jev-preview",
+        "typesafe/jev-1.13",
+        "typesafe/jev-1.13.0",
+        "~typesafe/jev-latest",
+        "~typesafe/jev-preview",
+        "~typesafe/jev-1.13",
+        "~typesafe/jev-1.13.0",
+    }
+    if normalized in jev_aliases:
+        return "jev"
+    return normalized
 
 _DAILY_CAP = float(os.getenv("DAILY_SPEND_CAP_USD", "10"))
 
@@ -110,7 +142,8 @@ class SpendTracker:
         DeepSeek prices are stored in CNY and converted via USD_PER_CNY.
         Gemini prices are stored in USD directly.
         """
-        rates = _PRICING.get(model)
+        pricing_key = normalize_model_key(model)
+        rates = _PRICING.get(pricing_key)
         if rates is None:
             logger.warning("Unknown model %s — using fallback rate $%.4f/1M", model, _FALLBACK_RATE)
             input_rate = output_rate = _FALLBACK_RATE
@@ -121,7 +154,7 @@ class SpendTracker:
         cost = (input_tokens * input_rate + output_tokens * output_rate) / 1_000_000
 
         # Convert CNY→USD for DeepSeek models
-        if model in _CNY_MODELS:
+        if pricing_key in _CNY_MODELS:
             cost *= USD_PER_CNY
 
         return cost

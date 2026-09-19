@@ -28,6 +28,17 @@ def extract_from_file(file_path: str) -> dict:
         return {"raw_input": f"Unsupported file type: {ext}"}
 
 
+def head_tail(text: str, head: int, tail: int) -> str:
+    """Keep the start and the end of long text.
+
+    Source notes ("All passages are from ...", reference lists) usually sit at
+    the end of a document, so a plain prefix would cut them off.
+    """
+    if len(text) <= head + tail:
+        return text
+    return text[:head].rstrip() + "\n[…]\n" + text[-tail:].lstrip()
+
+
 def _extract_docx(file_path: str) -> dict:
     from docx import Document
     doc = Document(file_path)
@@ -40,7 +51,7 @@ def _extract_docx(file_path: str) -> dict:
         "author":    props.author or "",
         "date":      str(props.created.date()) if props.created else "",
         "publisher": props.last_modified_by or "",
-        "raw_text":  text[:3000],
+        "raw_text":  head_tail(text, 3000, 1500),
     }
 
 

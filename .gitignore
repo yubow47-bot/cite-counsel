@@ -3,6 +3,9 @@
 __pycache__/
 *.pyc
 .env
+.env.chatbox.tmp
+config/chatbox.local.json
+.chatbox-runtime/
 .zcode/
 config/settings.py
 

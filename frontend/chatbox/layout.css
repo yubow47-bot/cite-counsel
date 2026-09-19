@@ -1,0 +1,37 @@
+[hidden] { display: none !important; }
+body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+.empty-state h1 { font-family: Georgia, "Noto Serif SC", "Songti SC", serif; line-height: 1.4; }
+.main { padding-top: 26px; }
+.startup { margin: 0 auto 26px; padding: 12px 18px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; width: min(800px, 100%); }
+.startup span { font-size: 12px; }
+.settings-content div { display: grid; gap: 2px; margin-bottom: 9px; }
+.settings-content b { overflow-wrap: anywhere; font-size: 12px; }
+.key-form { display: grid; gap: 9px; padding: 10px 0 2px; border-top: 1px solid var(--line); }
+.key-form label { display: grid; gap: 4px; color: var(--ink); font-size: 12px; }
+.key-form input { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: white; font: 12px "Segoe UI", sans-serif; }
+.key-form button { border: 0; border-radius: 5px; background: var(--red); color: white; padding: 8px 10px; font: inherit; cursor: pointer; }
+.key-form small { color: var(--muted); line-height: 1.45; }
+.field-card { white-space: normal; }
+.field-card > p { margin-top: 0; }
+.field-inputs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.field-form input, .field-form select { width: 100%; min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: 5px; background: white; font: inherit; }
+.field-form select { max-width: 300px; }
+.field-form input:focus, .field-form select:focus { outline: 2px solid var(--red); outline-offset: 1px; }
+.result-note { margin: 10px 0 0; font-size: 12px; color: var(--muted); }
+.attachment-name { display: block; margin-top: 5px; color: var(--muted); }
+.assistant-block, .user-message { overflow-wrap: anywhere; }
+.transcript > * { scroll-margin-bottom: 120px; }
+.sidebar { position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+.retry { display: block; margin-top: 12px; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+button:focus-visible { outline: 2px solid var(--red); outline-offset: 3px; }
+@media(max-width:720px) {
+  .sidebar { position: static; height: auto; }
+  .main { padding-top: 20px; }
+  .startup { margin-bottom: 16px; }
+  .empty-state { margin: 6vh auto; }
+  .sidebar .settings { display: block; grid-column: 1 / -1; margin: 0; padding: 8px 0; }
+  .field-inputs { grid-template-columns: 1fr; }
+  .empty-state h1 { font-size: 32px; }
+  textarea { font-size: 14px; }
+}

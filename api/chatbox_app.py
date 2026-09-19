@@ -1,0 +1,202 @@
+"""Single-port local HTTP UI and controlled citation workflow.
+
+Start with run_chatbox.py so isolated OpenRouter settings load first.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import tempfile
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from starlette.concurrency import run_in_threadpool
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+from core import chatbox_service as service
+
+logger = logging.getLogger(__name__)
+ROOT = Path(__file__).resolve().parent.parent
+
+
+class Turn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    input: str = Field(min_length=1, max_length=2000)
+
+
+class Selection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    candidate_set_id: str = Field(min_length=1, max_length=64)
+    access_token: str = Field(min_length=1, max_length=128)
+    candidate_id: str = Field(min_length=1, max_length=64)
+
+
+class ApiKeys(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    openrouter_api_key: SecretStr | None = Field(default=None)
+    typesafe_api_key: SecretStr | None = Field(default=None)
+
+
+def success(blocks):
+    return {"ok": True, "blocks": blocks}
+
+
+def failure(message, status=400):
+    return JSONResponse(status_code=status, content={"ok": False, "message": message,
+                                                    "blocks": [service.notice(message, "error")]})
+
+
+def create_app(settings: dict | None = None) -> FastAPI:
+    if settings is None:
+        from core.chatbox_settings import configure
+        settings = configure()
+    app = FastAPI(title="Cite Counsel Chatbox", docs_url=None, redoc_url=None, openapi_url=None)
+    max_bytes = settings["max_upload_mb"] * 1024 * 1024
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "testserver"])
+    from api.rate_limiter import RateLimiter
+    limiter = RateLimiter()
+    # Local beta has no persistent sessions: only two external operations run
+    # concurrently, candidate sets expire, and refresh clears the conversation.
+    slots = asyncio.Semaphore(2)
+
+    @app.middleware("http")
+    async def local_boundary(request: Request, call_next):
+        if request.method == "POST":
+            origin = request.headers.get("origin")
+            if origin and origin != str(request.base_url).rstrip("/"):
+                return failure("不允许跨站请求。", 403)
+            size = request.headers.get("content-length", "0")
+            if not size.isdigit() or int(size) > max_bytes + 1024 * 1024:
+                return failure(f"请求太大，文件上限为 {settings['max_upload_mb']} MB。", 413)
+            if not limiter.check(request.client.host if request.client else "local"):
+                return failure("请求较频繁，请稍后重试。", 429)
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+        return response
+
+    @app.get("/")
+    @app.get("/chatbox")
+    def page():
+        return FileResponse(ROOT / "frontend/chatbox/index.html")
+
+    app.mount("/assets", StaticFiles(directory=ROOT / "frontend/chatbox"), name="assets")
+
+    @app.get("/api/chatbox/config")
+    def config():
+        llm_configured = bool(settings["openrouter_api_key"])
+        jev_configured = bool(settings["typesafe_api_key"])
+        configured = llm_configured and jev_configured
+        return {"provider": "openrouter", "jev_provider": "typesafe",
+                "configured": configured, "llm_configured": llm_configured,
+                "jev_configured": jev_configured,
+                "mode": "live" if configured else "partial" if llm_configured or jev_configured else "unconfigured",
+                "llm_model": settings["llm_model"], "vision_model": settings["vision_model"],
+                "jev_model": settings["jev_model"], "jev_shadow": settings["jev_shadow"],
+                "max_upload_mb": settings["max_upload_mb"]}
+
+    @app.get("/api/health")
+    def health():
+        return {"ok": True, "service": "chatbox"}
+
+    @app.post("/api/chatbox/settings/keys")
+    def save_keys(body: ApiKeys):
+        openrouter_key = body.openrouter_api_key.get_secret_value() if body.openrouter_api_key else None
+        typesafe_key = body.typesafe_api_key.get_secret_value() if body.typesafe_api_key else None
+        if not (openrouter_key and openrouter_key.strip()) and not (typesafe_key and typesafe_key.strip()):
+            return failure("请至少填写一个 API Key。")
+        try:
+            from core.chatbox_settings import save_api_keys
+            status = save_api_keys(openrouter_key, typesafe_key)
+            settings["openrouter_api_key"] = os.getenv("OPENROUTER_API_KEY", "").strip()
+            settings["typesafe_api_key"] = os.getenv("TYPESAFE_API_KEY", "").strip()
+            return {"ok": True, **status, "message": "API Key 已保存到本机 .env，当前服务已应用。"}
+        except ValueError as exc:
+            return failure(str(exc))
+        except OSError:
+            logger.exception("Could not persist Chatbox API keys")
+            return failure("无法写入本机 .env，请检查项目目录权限。", 500)
+
+    @app.post("/api/chatbox/turns")
+    async def turns(body: Turn):
+        text = body.input.strip()
+        if not text:
+            return failure("请输入内容。")
+        if text.lower() in {"你好", "hello", "hi", "help", "帮助"}:
+            return success([service.notice("把案名、引用号、URL、DOI、ISBN 或文件发到这里即可。")])
+        if len([line for line in text.splitlines() if line.strip()]) > 1:
+            return success([service.notice("目前每次处理一条引用。请拆开发送，避免遗漏。", "warning")])
+        kind, value = service.route_input(text)
+        if kind == "invalid_url":
+            return failure("请只粘贴一个完整的 HTTP(S) URL。")
+        if kind in {"query", "url"} and not settings["openrouter_api_key"]:
+            return success([service.notice("请先在左侧“API Key 设置”填入 OpenRouter API Key。", "warning")])
+        try:
+            async with slots:
+                if kind in {"doi", "isbn"}:
+                    blocks = await run_in_threadpool(service.identifier_blocks, kind, value)
+                elif kind == "url":
+                    from llm_api.deepseek_api import extract_from_url
+                    fields = await run_in_threadpool(extract_from_url, value)
+                    blocks = await run_in_threadpool(service.extracted_blocks, fields, settings["jev_shadow"], webpage=True)
+                else:
+                    blocks = await run_in_threadpool(service.query_blocks, value)
+            return success(blocks)
+        except Exception as exc:
+            logger.warning("Chatbox turn failed: %s", type(exc).__name__)
+            return failure("本次检索未完成，请检查网络、OpenRouter 配置或稍后重试。", 502)
+
+    @app.post("/api/chatbox/select")
+    async def select(body: Selection):
+        try:
+            record = service.candidate_store.get(body.candidate_set_id, body.access_token, body.candidate_id)
+            async with slots:
+                return success(await run_in_threadpool(service.record_blocks, record))
+        except ValueError as exc:
+            return failure(str(exc), 409)
+        except Exception as exc:
+            logger.warning("Candidate selection failed: %s", type(exc).__name__)
+            return failure("候选处理未完成，请重新查询。", 502)
+
+    @app.post("/api/chatbox/files")
+    async def files(file: UploadFile = File(...), input: str = Form(default="", max_length=2000)):
+        path = None
+        try:
+            from api.main import _magic_byte_ok, _UPLOAD_SUFFIXES
+            suffix = Path(file.filename or "").suffix.lower()
+            if suffix not in _UPLOAD_SUFFIXES:
+                return failure("请上传 PDF、DOCX、PPTX、XLSX 或 JPG/PNG/WebP 图片。")
+            contents = await file.read(max_bytes + 1)
+            if len(contents) > max_bytes:
+                return failure(f"文件上限为 {settings['max_upload_mb']} MB。", 413)
+            if not _magic_byte_ok(contents[:16], suffix):
+                return failure("文件内容与扩展名不匹配，请检查文件。")
+            if not settings["openrouter_api_key"]:
+                return success([service.notice("文件识别需要 OpenRouter API Key。请填写本机配置并重启服务。", "warning")])
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                path = tmp.name
+                tmp.write(contents)
+            from local_tools.file_extractor import extract_from_file
+            async with slots:
+                fields = await run_in_threadpool(extract_from_file, path)
+                blocks = await run_in_threadpool(service.extracted_blocks, fields, settings["jev_shadow"])
+            if input.strip():
+                blocks.insert(0, service.notice("已保留附件说明：" + input.strip() + "\n本次按附件内容处理；若说明包含另一条引用，请另行发送。"))
+            return success(blocks)
+        except Exception as exc:
+            logger.warning("Chatbox file failed: %s", type(exc).__name__)
+            return failure("文件提取未完成，请检查配置或尝试更清晰的文件。", 502)
+        finally:
+            await file.close()
+            if path:
+                Path(path).unlink(missing_ok=True)
+
+    return app
