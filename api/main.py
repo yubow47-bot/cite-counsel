@@ -28,14 +28,6 @@ if str(_PROJ) not in sys.path:
 
 # ── API-local modules ──
 from api.rate_limiter import RateLimiter, extract_client_ip
-from api.scaffold import (
-    assemble,
-    build_prefill,
-    get_type_options,
-    get_field_configs,
-    SCAFFOLD_ELIGIBLE_ROUTES,
-    SUGGESTED_TYPE_MAP,
-)
 
 # ── Spend cap tracker ──
 from core.spend_tracker import spend_tracker
@@ -68,7 +60,6 @@ from local_tools.utils import (
 # ═══════════════════════════════════════════════════════════════════
 
 DEBUG = os.getenv("DEBUG_RESPONSES", "false").lower() in ("1", "true", "yes")
-SCAFFOLD_ENABLED = os.getenv("SCAFFOLD_ENABLED", "false").lower() in ("1", "true", "yes")
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "10"))
 EMPTY_BODY_THRESHOLD = 50  # chars — below this, treat the extracted body as unusable
 
@@ -202,7 +193,7 @@ def _rebuild_bill_citation(item: dict) -> str | None:
     bill_session, bill_title) — the raw record never reaches the client, so
     the citation is rebuilt from LEGISinfo (module-cached) instead of trusting
     any client-supplied text.  Returns None when the bill cannot be
-    re-confirmed against LEGISinfo; the caller degrades to the scaffold.
+    re-confirmed against LEGISinfo; the caller reports it as unsupported.
     """
     from local_tools.legisinfo_api import (
         build_bill_citation,
@@ -313,19 +304,6 @@ class FeedbackInput(BaseModel):
     note: Optional[str] = Field(default=None, max_length=4000)
 
 
-class AssemblyInput(BaseModel):
-    type: str = Field(..., max_length=100)
-    fields: dict = Field(default_factory=dict)
-
-    @field_validator("fields")
-    @classmethod
-    def _cap_fields(cls, v: dict) -> dict:
-        """Bound the manual-scaffold payload: field count and value length."""
-        if len(v) > 60:
-            raise ValueError("too many fields")
-        return {str(k)[:60]: (str(val)[:500] if val is not None else "") for k, val in v.items()}
-
-
 # ═══════════════════════════════════════════════════════════════════
 #  Helpers
 # ═══════════════════════════════════════════════════════════════════
@@ -409,15 +387,15 @@ def _collect_debug_info(route_label: str):
     }
 
 
-# ── Scaffold gating ───────────────────────────────────────────────────
+# ── Unsupported responses ───────────────────────────────────────────────────
 
-_SCAFFOLD_DISABLED_MSG = (
+_UNVERIFIED_MSG = (
     "We couldn't verify this against our legal databases, so no citation was "
     "generated. This tool currently covers sources it can verify — cases, "
     "legislation, journals, and books."
 )
 
-_SCAFFOLD_DISABLED_MSG_URL = (
+_URL_UNREADABLE_MSG = (
     "We couldn't read this URL (some sites block automated access). "
     "Try uploading a full-page screenshot instead."
 )
@@ -428,36 +406,9 @@ _JUR_NONE_MSG = (
 )
 
 
-def _scaffold_response(
-    route: str,
-    message: str,
-    *,
-    prefill: dict | None = None,
-    suggested_type: str | None = None,
-    disabled_message: str | None = None,
-) -> dict:
-    """Return needs_input when scaffold is enabled, unsupported when disabled.
-
-    When disabled, returns an unsupported envelope with ``disabled_message``
-    (falls back to ``message`` when no specific disabled_message given).
-    Always includes ``suggested_type`` in data so the frontend can default the
-    manual scaffold form to the correct source type.
-    """
-    if SCAFFOLD_ENABLED:
-        data: dict = {"message": message}
-        if prefill:
-            data["prefill"] = prefill
-        if suggested_type:
-            data["type"] = suggested_type
-        return _envelope(True, route, "needs_input", data)
-
-    data: dict = {}
-    if suggested_type:
-        data["type"] = suggested_type
-    return _envelope(
-        True, route, "unsupported", data,
-        error={"reason": disabled_message or message},
-    )
+def _unsupported(route: str, reason: str) -> dict:
+    """No citation could be produced; say why instead of guessing."""
+    return _envelope(True, route, "unsupported", {}, error={"reason": reason})
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -500,44 +451,24 @@ async def citation_query(body: CitationInput, request: Request):
         )
 
     if not results:
-        # Grounding failed — offer scaffold if a template exists for this route
-        if route in SCAFFOLD_ELIGIBLE_ROUTES:
-            prefill = build_prefill(route, query)
-            suggested = SUGGESTED_TYPE_MAP.get(route, route)
-            return _scaffold_response(
-                route,
-                "Could not verify against our databases. Fill in the fields below to generate a McGill 10th citation.",
-                prefill=prefill,
-                suggested_type=suggested,
-                disabled_message=_SCAFFOLD_DISABLED_MSG,
-            )
-        return _envelope(
-            True, route, "unsupported",
-            {}, error={"reason": "No matching results found. Try different keywords."},
-        )
+        # Grounding failed — never format an unverified guess.
+        if route in ("citation_number", "case_name", "legislation", "bill", "concept"):
+            return _unsupported(route, _UNVERIFIED_MSG)
+        return _unsupported(route, "No matching results found. Try different keywords.")
 
     # ── concept: multi-result, format each ──
     if route == "concept":
         return await _handle_concept(results, query)
 
-    # ── citation_number / legislation / bill with unverified result → scaffold or unsupported ──
+    # ── citation_number / legislation / bill with unverified result → unsupported ──
     if route in ("citation_number", "legislation", "bill") and len(results) == 1:
         item = results[0]
         if not item.get("verified"):
-            prefill = build_prefill(route, query, partial=item)
-            suggested = SUGGESTED_TYPE_MAP.get(route, route)
-            disabled_msg = (
+            return _unsupported(route, (
                 _JUR_NONE_MSG
                 if route == "legislation" and item.get("_match_path") == "jur_none"
-                else _SCAFFOLD_DISABLED_MSG
-            )
-            return _scaffold_response(
-                route,
-                "Could not verify against our databases. Fill in the fields below to generate a McGill 10th citation.",
-                prefill=prefill,
-                suggested_type=suggested,
-                disabled_message=disabled_msg,
-            )
+                else _UNVERIFIED_MSG
+            ))
 
     # ── multiple candidates → needs_selection ──
     # citation_number belongs here too: a statute citation entered on its own is
@@ -594,30 +525,24 @@ async def citation_query(body: CitationInput, request: Request):
 async def _handle_concept(results: list, query: str) -> dict:
     """Handle concept-expansion results with needs_selection for multiple candidates.
 
-    Single result (verified) → format directly; single unverified → scaffold.
+    Single result (verified) → format directly; single unverified → unsupported.
     Multiple results → filter to verified candidates only.
     """
     # ── Empty (no results at all) ──
     if not results:
-        return _concept_scaffold(query)
+        return _unsupported("concept", _UNVERIFIED_MSG)
 
     # ── Single result: check verified ──
     if len(results) == 1:
         item = results[0]
         if not item.get("verified"):
-            return _scaffold_response(
-                "concept",
-                "Could not verify against our databases. Fill in the fields below to generate a McGill 10th citation.",
-                prefill=build_prefill("concept", query, partial=item),
-                suggested_type=SUGGESTED_TYPE_MAP.get("concept", "concept"),
-                disabled_message=_SCAFFOLD_DISABLED_MSG,
-            )
+            return _unsupported("concept", _UNVERIFIED_MSG)
         return await _format_concept(item)
 
     # ── Multiple candidates: filter to verified only ──
     verified = [r for r in results if r.get("verified")]
     if not verified:
-        return _concept_scaffold(query)
+        return _unsupported("concept", _UNVERIFIED_MSG)
     if len(verified) == 1:
         return await _format_concept(verified[0])
 
@@ -647,20 +572,6 @@ async def _format_concept(item: dict) -> dict:
             True, "concept", "error", {},
             error={"reason": _USER_FACING_ERROR},
         )
-
-
-def _concept_scaffold(query: str) -> dict:
-    """Return scaffold/unsupported when concept has no verified results."""
-    suggested = SUGGESTED_TYPE_MAP.get("concept", "jurisprudence")
-    return _scaffold_response(
-        "concept",
-        "Could not verify against our databases. Fill in the fields below to generate a McGill 10th citation.",
-        # Prefill from the user's own query — never a hardcoded example, which
-        # the user could accidentally submit as a "verified" citation.
-        prefill=build_prefill("concept", query),
-        suggested_type=suggested,
-        disabled_message=_SCAFFOLD_DISABLED_MSG,
-    )
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -706,20 +617,20 @@ async def citation_select(body: CitationSelectInput):
     if item.get("verified") is not True:
         return _envelope(
             True, "select", "unsupported", {},
-            error={"reason": _SCAFFOLD_DISABLED_MSG},
+            error={"reason": _UNVERIFIED_MSG},
         )
 
     try:
         if item.get("bill_session"):
             # Re-derive the deterministic bill citation from LEGISinfo
             # (cached).  A candidate carrying bill_session but not
-            # re-confirmable against LEGISinfo degrades to the scaffold
+            # re-confirmable against LEGISinfo is reported as unsupported
             # instead of echoing client-controlled text as "verified".
             rebuilt = await run_in_threadpool(_rebuild_bill_citation, item)
             if rebuilt is None:
                 return _envelope(
                     True, "select", "unsupported", {},
-                    error={"reason": _SCAFFOLD_DISABLED_MSG},
+                    error={"reason": _UNVERIFIED_MSG},
                 )
             item["_bill_citation"] = rebuilt
 
@@ -893,7 +804,7 @@ async def extract_file(file: UploadFile = File(...)):
 async def extract_url(body: UrlInput):
     """Extract citation via DOI / ISBN (deterministic) or URL (trafilatura).
 
-    Priority: doi > isbn > url.  Only URL path falls back to manual scaffold.
+    Priority: doi > isbn > url.  Only the URL path reports unsupported when extraction fails.
     Spend tracked at the chokepoint (_call_deepseek / _call_gemini), not here.
     """
     doi = (body.doi or "").strip()
@@ -963,18 +874,10 @@ async def extract_url(body: UrlInput):
                 error={"reason": _USER_FACING_ERROR},
             )
 
-    # ── URL-only — scaffold or unsupported when extraction fails ──
+    # ── URL-only — unsupported when extraction fails ──
     fields = await run_in_threadpool(extract_from_url, url)
     if "error" in fields:
-        error_msg = fields["error"]
-        prefill = {"url": url}
-        return _scaffold_response(
-            "url",
-            error_msg,
-            prefill=prefill,
-            suggested_type="news_online",
-            disabled_message=_SCAFFOLD_DISABLED_MSG_URL,
-        )
+        return _unsupported("url", _URL_UNREADABLE_MSG)
 
     # ── Empty-body guard: trafilatura may return metadata but no body
     #     for JS-rendered pages (ourcommons.ca, etc.).  Under 50 chars
@@ -1218,62 +1121,6 @@ async def health():
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  8. GET /api/scaffold/config  —  Scaffold field definitions
-# ═══════════════════════════════════════════════════════════════════
-
-@app.get("/api/scaffold/config")
-async def scaffold_config():
-    """Return all scaffold type options and their field configs.
-
-    Dynamically generated from ``mcgill_rules.json`` at call time.
-    Clients may cache; config changes only when the rules JSON is updated.
-    """
-    return {
-        "type_options": get_type_options(),
-        "field_configs": get_field_configs(),
-    }
-
-
-# ═══════════════════════════════════════════════════════════════════
-#  9. POST /api/citation/assemble  —  Manual scaffold assembly
-# ═══════════════════════════════════════════════════════════════════
-
-@app.post("/api/citation/assemble")
-async def citation_assemble(body: AssemblyInput):
-    """Deterministically assemble a citation from user-supplied fields.
-
-    No LLM, no database lookup.  Pure template substitution.
-    Result is always marked *verified: false*.
-
-    Returns unsupported when SCAFFOLD_ENABLED is False.
-    """
-    if not SCAFFOLD_ENABLED:
-        return _envelope(
-            True, "", "unsupported", {},
-            error={"reason": "Manual citation assembly is currently disabled."},
-        )
-
-    configs = get_field_configs()
-    if body.type not in configs:
-        return _envelope(
-            False, body.type, "error", {},
-            error={"reason": f"Unknown citation type: {body.type}"},
-        )
-
-    try:
-        citation = await run_in_threadpool(assemble, body.type, body.fields)
-        return _envelope(True, body.type, "done", {
-            "citations": [{"citation": citation, "verified": False, "source_type": body.type}],
-        })
-    except Exception as e:
-        _logger.warning("Assembly failed for type=%s: %s", body.type, e)
-        return _envelope(
-            True, body.type, "error", {},
-            error={"reason": _USER_FACING_ERROR},
-        )
-
-
-# ═══════════════════════════════════════════════════════════════════
 #  Timing & first-request logging middleware (outermost — wraps all handlers)
 # ═══════════════════════════════════════════════════════════════════
 
@@ -1299,7 +1146,7 @@ async def rate_limit_middleware(request: Request, call_next):
     # Free endpoints — no rate limiting.  /api/feedback is deliberately NOT
     # free: each call triggers an HF dataset write + Discord POST, so an
     # unauthenticated write-amplification vector must stay throttled.
-    free_paths = {"/api/health", "/api/warmup", "/api/scaffold/config", "/api/citation/assemble"}
+    free_paths = {"/api/health", "/api/warmup"}
     if request.url.path in free_paths:
         return await call_next(request)
 

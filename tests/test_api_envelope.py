@@ -1,6 +1,6 @@
 """Deterministic assertion for API response envelope — source_type field.
 
-Uses the deterministic /api/citation/assemble endpoint (no LLM, no database).
+Exercises envelope shapes without calling an LLM or database.
 Asserts the returned envelope contains source_type on each citation.
 Per OA Execution Skill §K: runtime acceptance criteria require direct runtime assertion.
 
@@ -12,42 +12,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from unittest.mock import patch
 from fastapi.testclient import TestClient
-from api.main import app, _JUR_NONE_MSG, _SCAFFOLD_DISABLED_MSG, _sign_candidate
+from api.main import app, _JUR_NONE_MSG, _UNVERIFIED_MSG, _sign_candidate
 
 client = TestClient(app)
 
 
-def test_assemble_scaffold_disabled_returns_unsupported():
-    """POST /api/citation/assemble returns unsupported when SCAFFOLD_ENABLED=false."""
-    payload = {
-        "type": "jurisprudence",
-        "fields": {
-            "style_of_cause": "R v Jordan",
-            "neutral_citation": "2016 SCC 27",
-        },
-    }
-    resp = client.post("/api/citation/assemble", json=payload)
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "unsupported"
-    assert body["error"]["reason"] == "Manual citation assembly is currently disabled."
-
-
-def test_assemble_scaffold_disabled_no_verified_citation():
-    """Assembled citations are not produced when SCAFFOLD_ENABLED=false."""
-    payload = {
-        "type": "legislation",
-        "fields": {
-            "statute_title": "Criminal Code",
-            "jurisdiction": "Canada",
-        },
-    }
-    resp = client.post("/api/citation/assemble", json=payload)
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "unsupported"
-    citations = body.get("data", {}).get("citations", [])
-    assert len(citations) == 0
+def test_manual_assembly_endpoints_removed():
+    """The manual scaffold (config + assembly) no longer exists."""
+    assert client.get("/api/scaffold/config").status_code in (404, 405)
+    assert client.post("/api/citation/assemble", json={"type": "jurisprudence", "fields": {}}).status_code in (404, 405)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -96,7 +69,7 @@ def test_other_match_path_shows_generic_message():
     assert body["status"] == "unsupported", (
         f"Expected unsupported status, got {body['status']!r}"
     )
-    assert body["error"]["reason"] == _SCAFFOLD_DISABLED_MSG, (
+    assert body["error"]["reason"] == _UNVERIFIED_MSG, (
         f"Expected generic disabled message, got {body['error']['reason']!r}"
     )
 

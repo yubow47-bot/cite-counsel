@@ -1,6 +1,6 @@
 """Regression test: bill c34 (and no-hyphen / mixed-case variants) must route to
 the bill path — LEGISinfo verification → build_bill_citation — not fall through
-to A2AJ legislation or scaffold.
+to A2AJ legislation or unsupported.
 
 This file self-tests when run via `pytest tests/test_bill_route.py -v` or
 `python tests/test_bill_route.py`. It does NOT make live HTTP calls to A2AJ or
@@ -78,34 +78,6 @@ def test_bill_route_not_legislation():
         assert "bill_number" in item or "style_of_cause" in item, (
             "unverified bill result must carry bill_number or style_of_cause"
         )
-
-
-def test_unsupported_response_carries_suggested_type():
-    """When SCAFFOLD_ENABLED=false, the unsupported envelope must include data.type."""
-    import asyncio
-
-    # Force SCAFFOLD_ENABLED off before importing anything that reads it
-    os.environ["SCAFFOLD_ENABLED"] = "false"
-
-    from api.main import citation_query, CitationInput
-
-    async def _run():
-        class MockReq:
-            def __init__(self):
-                self.client = type("c", (), {"host": "127.0.0.1"})()
-                self.headers = {}
-
-        req = MockReq()
-        body = CitationInput(input="bill x-999")
-        resp = await citation_query(body, req)
-
-        assert resp["route"] == "bill", f"route={resp['route']}, expected bill"
-        assert resp["status"] == "unsupported", f"status={resp['status']}, expected unsupported"
-        assert resp["data"].get("type") == "bill", (
-            f"unsupported data must carry type='bill', got {resp['data']}"
-        )
-
-    asyncio.run(_run())
 
 
 if __name__ == "__main__":

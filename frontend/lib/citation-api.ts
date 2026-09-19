@@ -6,7 +6,6 @@ export const API_BASE_URL =
 export type CitationStatus =
   | "done"
   | "needs_selection"
-  | "needs_input"
   | "unsupported"
   | "error"
 
@@ -30,24 +29,6 @@ export interface CitationData {
   citations?: Citation[]
   candidates?: Candidate[]
   reason?: string
-  /** needs_input 时后端建议的脚手架来源类型 */
-  type?: string
-  /** needs_input 时用于预填脚手架表单 */
-  prefill?: Record<string, string>
-}
-
-/** 脚手架表单的单个字段配置 */
-export interface ScaffoldField {
-  name: string
-  label: string
-  placeholder?: string
-  required?: boolean
-}
-
-/** GET /api/scaffold/config 的返回结构 */
-export interface ScaffoldConfig {
-  type_options: { value: string; label: string }[]
-  field_configs: Record<string, { fields: ScaffoldField[] }>
 }
 
 export interface Envelope {
@@ -100,23 +81,6 @@ export async function postExtractUrl(args: {
   isbn?: string
 }): Promise<Envelope> {
   return request("/api/extract/url", args)
-}
-
-/** GET /api/scaffold/config —— 获取手动填写表单的类型与字段配置 */
-export async function getScaffoldConfig(): Promise<ScaffoldConfig> {
-  const res = await fetch(`${API_BASE_URL}/api/scaffold/config`)
-  if (!res.ok) {
-    throw new Error(`无法获取脚手架配置（HTTP ${res.status}）`)
-  }
-  return (await res.json()) as ScaffoldConfig
-}
-
-/** POST /api/citation/assemble —— 用手动填写的字段组装引用 */
-export async function postCitationAssemble(
-  type: string,
-  fields: Record<string, string>,
-): Promise<Envelope> {
-  return request("/api/citation/assemble", { type, fields })
 }
 
 /** POST /api/feedback —— 对单条引用结果反馈（字段契约见 api/main.py 的 FeedbackInput） */

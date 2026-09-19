@@ -1,7 +1,7 @@
 """Regression tests for the verified gate on concept routes and citation_select.
 
 Three gaps were fixed:
-  A. _handle_concept() single-result branch: unverified → scaffold, not format_citation().
+  A. _handle_concept() single-result branch: unverified → unsupported, not format_citation().
   B. _handle_concept() multi-candidate branch: filter candidates to verified only.
   C. citation_select() endpoint: refuse to format unverified candidates.
 
@@ -18,10 +18,9 @@ from fastapi.testclient import TestClient
 from api.main import (
     app,
     _handle_concept,
-    _SCAFFOLD_DISABLED_MSG,
+    _UNVERIFIED_MSG,
     _sign_candidate,
 )
-from api.scaffold import SUGGESTED_TYPE_MAP, build_prefill
 
 client = TestClient(app)
 
@@ -114,7 +113,7 @@ def test_1_unverified_single_returns_scaffold():
     assert result["status"] in ("unsupported", "needs_input"), (
         f"Expected unsupported or needs_input, got {result['status']!r}"
     )
-    assert result["error"]["reason"] == _SCAFFOLD_DISABLED_MSG, (
+    assert result["error"]["reason"] == _UNVERIFIED_MSG, (
         f"Expected disabled message, got {result['error']['reason']!r}"
     )
 
@@ -166,7 +165,7 @@ def test_4_all_unverified_returns_scaffold():
     assert result["status"] in ("unsupported", "needs_input"), (
         f"Expected unsupported or needs_input, got {result['status']!r}"
     )
-    assert result["error"]["reason"] == _SCAFFOLD_DISABLED_MSG
+    assert result["error"]["reason"] == _UNVERIFIED_MSG
 
 
 def test_5_unverified_verified_pair_formats_directly():
@@ -206,7 +205,7 @@ def test_6_select_unverified_returns_unsupported():
     assert body["status"] == "unsupported", (
         f"Expected unsupported, got {body['status']!r}"
     )
-    assert body["error"]["reason"] == _SCAFFOLD_DISABLED_MSG, (
+    assert body["error"]["reason"] == _UNVERIFIED_MSG, (
         f"Expected disabled message, got {body['error']['reason']!r}"
     )
 
@@ -258,6 +257,6 @@ def test_8_select_truthy_non_true_returns_unsupported():
         assert body["status"] == "unsupported", (
             f"verified={bogus_value!r} should give unsupported, got {body['status']!r}"
         )
-        assert body["error"]["reason"] == _SCAFFOLD_DISABLED_MSG, (
+        assert body["error"]["reason"] == _UNVERIFIED_MSG, (
             f"verified={bogus_value!r} should give disabled message"
         )

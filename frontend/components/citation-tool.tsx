@@ -1,12 +1,11 @@
 "use client"
 
 import { useRef, useState } from "react"
-import { AlertCircle, Info, Loader2, PencilLine, Search } from "lucide-react"
+import { AlertCircle, Info, Loader2, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { CitationCard } from "@/components/citation-card"
 import { CandidateList } from "@/components/candidate-list"
-import { ScaffoldForm } from "@/components/scaffold-form"
 import {
   postCitation,
   postCitationSelect,
@@ -14,19 +13,13 @@ import {
   type Citation,
   type Envelope,
 } from "@/lib/citation-api"
-import { SCAFFOLD_ENABLED } from "@/lib/scaffold"
 import { trackEvent } from "@/lib/analytics"
 
 type View =
   | { kind: "idle" }
   | { kind: "done"; citations: Citation[] }
   | { kind: "needs_selection"; candidates: Candidate[] }
-  | {
-      kind: "needs_input"
-      initialType?: string
-      prefill?: Record<string, string>
-    }
-  | { kind: "unsupported"; reason: string; suggestedType?: string }
+  | { kind: "unsupported"; reason: string }
   | { kind: "error"; reason: string }
 
 export function CitationTool({ autoFocus }: { autoFocus?: boolean }) {
@@ -35,12 +28,9 @@ export function CitationTool({ autoFocus }: { autoFocus?: boolean }) {
   const [loading, setLoading] = useState(false)
   const [selectingIndex, setSelectingIndex] = useState<number | null>(null)
   const [view, setView] = useState<View>({ kind: "idle" })
-  // Manual override: scaffold form opened by user from a result state
-  const [manualOpen, setManualOpen] = useState(false)
   const isComposingRef = useRef(false)
 
   function applyEnvelope(env: Envelope) {
-    setManualOpen(false)
     switch (env.status) {
       case "done":
         setView({ kind: "done", citations: env.data.citations ?? [] })
@@ -54,19 +44,11 @@ export function CitationTool({ autoFocus }: { autoFocus?: boolean }) {
           candidates: env.data.candidates ?? [],
         })
         break
-      case "needs_input":
-        setView({
-          kind: "needs_input",
-          initialType: env.data.type,
-          prefill: env.data.prefill,
-        })
-        break
       case "unsupported":
         setView({
           kind: "unsupported",
           reason:
             env.error?.reason ?? "This type of citation isn't supported yet.",
-          suggestedType: env.data.type,
         })
         break
       case "error":
@@ -92,7 +74,6 @@ export function CitationTool({ autoFocus }: { autoFocus?: boolean }) {
 
     setLoading(true)
     setSubmittedInput(trimmed)
-    setManualOpen(false)
     setView({ kind: "idle" })
     try {
       const env = await postCitation(trimmed)
@@ -212,15 +193,6 @@ Examples: r v ..., bill ..., ccc, gladue principle, charter s.7"
               <CitationCard key={i} item={item} sourceInput={submittedInput} />
             ))
           )}
-          {SCAFFOLD_ENABLED && !manualOpen ? (
-            <button
-              type="button"
-              onClick={() => setManualOpen(true)}
-              className="self-start text-xs text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
-            >
-              Not what you&apos;re looking for? Build a citation manually &rarr;
-            </button>
-          ) : null}
         </section>
       ) : null}
 
@@ -231,20 +203,7 @@ Examples: r v ..., bill ..., ccc, gladue principle, charter s.7"
             onSelect={handleSelect}
             selectingIndex={selectingIndex}
           />
-          {SCAFFOLD_ENABLED && !manualOpen ? (
-            <button
-              type="button"
-              onClick={() => setManualOpen(true)}
-              className="self-start text-sm text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
-            >
-              Not what you&apos;re looking for? Build a citation manually &rarr;
-            </button>
-          ) : null}
         </div>
-      ) : null}
-
-      {SCAFFOLD_ENABLED && !loading && view.kind === "needs_input" ? (
-        <ScaffoldForm initialType={view.initialType} prefill={view.prefill} />
       ) : null}
 
       {!loading && view.kind === "unsupported" ? (
@@ -256,29 +215,7 @@ Examples: r v ..., bill ..., ccc, gladue principle, charter s.7"
               <p className="mt-1 text-muted-foreground">{view.reason}</p>
             </div>
           </div>
-          {SCAFFOLD_ENABLED && !manualOpen ? (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setManualOpen(true)}
-              className="self-start gap-2"
-            >
-              <PencilLine className="size-4" aria-hidden="true" />
-              Build a citation manually
-            </Button>
-          ) : null}
         </div>
-      ) : null}
-
-      {SCAFFOLD_ENABLED && !loading &&
-      manualOpen &&
-      (view.kind === "done" ||
-        view.kind === "needs_selection" ||
-        view.kind === "unsupported") ? (
-        <ScaffoldForm
-          onClose={() => setManualOpen(false)}
-          initialType={view.kind === "unsupported" ? view.suggestedType : undefined}
-        />
       ) : null}
 
       {!loading && view.kind === "error" ? (

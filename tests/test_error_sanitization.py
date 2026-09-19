@@ -303,31 +303,6 @@ def test_feedback_save_failure_sanitized(caplog):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 14. POST /api/citation/assemble  —  Assembly failure
-# ═══════════════════════════════════════════════════════════════════
-
-def test_assembly_failure_sanitized(caplog):
-    """Assembly exception is logged; envelope uses friendly message."""
-    caplog.set_level(logging.WARNING)
-    # The assemble route only works when SCAFFOLD_ENABLED is true — we mock its
-    # dependency to force the route past the disabled gate.
-    with (
-        patch("api.main.SCAFFOLD_ENABLED", True),
-        patch("api.main.get_field_configs") as mock_cfgs,
-        patch("api.main.assemble") as mock_asm,
-    ):
-        mock_cfgs.return_value = {"jurisprudence": {"style_of_cause": {"type": "string"}}}
-        mock_asm.side_effect = _DummyException(_DUMMY_EXC_TEXT)
-        resp = client.post("/api/citation/assemble", json={
-            "type": "jurisprudence",
-            "fields": {"style_of_cause": "R v Jordan"},
-        })
-
-    assert resp.status_code == 200
-    _assert_sanitized(resp.json(), caplog.records)
-
-
-# ═══════════════════════════════════════════════════════════════════
 #  Sanity: non-exception error.reason values are left intact
 # ═══════════════════════════════════════════════════════════════════
 
@@ -352,10 +327,3 @@ def test_validation_errors_retain_their_messages():
     resp = client.post("/api/chat", json={"messages": []})
     assert resp.json()["error"]["reason"] == "messages cannot be empty"
 
-    # Unknown citation type (SCAFFOLD_ENABLED=true)
-    with patch("api.main.SCAFFOLD_ENABLED", True):
-        resp = client.post("/api/citation/assemble", json={
-            "type": "nonexistent_99",
-            "fields": {},
-        })
-    assert "Unknown citation type" in resp.json()["error"]["reason"]

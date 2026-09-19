@@ -88,7 +88,7 @@ class TestConceptNeedsSelection:
         m_fmt.assert_called_once()
 
     def test_empty_results_returns_needs_input(self):
-        """0 concept results → status=unsupported (scaffold disabled by default)."""
+        """0 concept results → status=unsupported."""
         with (
             patch("api.main.classify_and_normalize") as m_cls,
             patch("api.main.search_citation") as m_search,
