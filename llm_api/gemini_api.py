@@ -40,6 +40,9 @@ Rules:
 
 def _load_env():
     """Load .env file for API key (mirrors deepseek_api.py)."""
+    # Chatbox passes only explicit process settings; do not inspect .env.
+    if os.getenv("MCGILL_SKIP_DOTENV") == "1":
+        return
     env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
     if os.path.exists(env_path):
         with open(env_path, "r", encoding="utf-8") as f:
@@ -92,6 +95,10 @@ def _call_gemini(image_paths: list[str]) -> dict | None:
 
     Returns None if the API call or JSON parsing fails.
     """
+    from llm_api.openrouter_api import chatbox_mode
+    if chatbox_mode():
+        return _call_openrouter_vision(image_paths)
+
     api_key = _get_api_key()
     model = GEMINI_VISION_MODEL
     url = f"{GEMINI_BASE_URL}/{model}:generateContent"
@@ -130,6 +137,39 @@ def _call_gemini(image_paths: list[str]) -> dict | None:
         return None
 
     try:
+        return parse_llm_json(text)
+    except Exception:
+        return None
+
+
+def _call_openrouter_vision(image_paths: list[str]) -> dict | None:
+    """Run the existing image extraction prompt through OpenRouter."""
+    from llm_api.openrouter_api import check_budget, choice_text, post_chat_completion, track_usage
+
+    if not check_budget():
+        return None
+    model = os.getenv("OPENROUTER_VISION_MODEL", "google/gemini-2.5-flash")
+    content = [{"type": "text", "text": _EXTRACTION_PROMPT}]
+    try:
+        for path in image_paths:
+            b64, mime = _read_image(path)
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime};base64,{b64}"},
+            })
+        body = {
+            "model": model,
+            "messages": [{"role": "user", "content": content}],
+            "temperature": 0,
+            "max_tokens": 4096,
+            "response_format": {"type": "json_object"},
+        }
+        with prof.measure("http.openrouter_vision", model=model):
+            resp = post_chat_completion(body, read_timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        text = choice_text(data)
+        track_usage(model, data)
         return parse_llm_json(text)
     except Exception:
         return None
@@ -298,6 +338,11 @@ def call_gemini_text(prompt: str) -> str | None:
     (network error, non-200, JSON parse error in the response envelope).
     The caller is responsible for parsing the JSON *within* the response text.
     """
+    from llm_api.openrouter_api import chatbox_mode
+    # Let the established DeepSeek wrapper use OpenRouter in Chatbox mode.
+    if chatbox_mode():
+        return None
+
     body = {
         "contents": [{
             "parts": [{"text": prompt}],
@@ -336,6 +381,11 @@ def call_gemini_text_structured(
     ``thinking_budget``: Gemini thinking budget in tokens.  0 = no thinking.
     2048 recommended for associative-reasoning tasks like concept expansion.
     """
+    from llm_api.openrouter_api import chatbox_mode
+    # Schema generation falls back to the same OpenRouter completion path.
+    if chatbox_mode():
+        return None
+
     body = {
         "contents": [{
             "parts": [{"text": prompt}],

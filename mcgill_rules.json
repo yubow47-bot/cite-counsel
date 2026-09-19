@@ -1,4 +1,76 @@
 {
+  "_chatbox_templates_v1": {
+    "jurisprudence": {
+      "label": "判例",
+      "required_any": [["neutral_citation", "reporter"]],
+      "fields": [
+        {"name": "style_of_cause", "label": "案名（保留原文）", "required": true},
+        {"name": "neutral_citation", "label": "中立引用号（如原文存在）"},
+        {"name": "reporter", "label": "报告书引用（包含报告年份、卷、页）"},
+        {"name": "court", "label": "法院缩写（需要时填写）"},
+        {"name": "pinpoint", "label": "定位引用（完整填写，如 at para 64）"}
+      ],
+      "segments": [["style_of_cause", "*", "*"], ["neutral_citation", ", ", ""], ["reporter", ", ", ""], ["court", " (", ")"], ["pinpoint", " ", ""]]
+    },
+    "legislation": {
+      "label": "法律 / 法规",
+      "fields": [
+        {"name": "title", "label": "法律 / 法规标题", "required": true},
+        {"name": "citation", "label": "完整法规引用（如 RSC 1985, c C-46）", "required": true},
+        {"name": "pinpoint", "label": "条款（如 s 718.2(e) 或 r 21.01）"}
+      ],
+      "segments": [["title", "*", "*"], ["citation", ", ", ""], ["pinpoint", ", ", ""]]
+    },
+    "website": {
+      "label": "网页",
+      "fields": [
+        {"name": "author", "label": "作者"},
+        {"name": "title", "label": "页面标题", "required": true},
+        {"name": "date", "label": "发布日期（原文格式）"},
+        {"name": "url", "label": "URL", "required": true}
+      ],
+      "segments": [["author", "", ", "], ["title", "\"", "\""], ["date", " (", ")"], ["url", ", online: <", ">"]]
+    },
+    "book": {
+      "label": "书籍",
+      "fields": [
+        {"name": "author", "label": "作者", "required": true},
+        {"name": "title", "label": "书名", "required": true},
+        {"name": "edition", "label": "版次（如 2nd ed）"},
+        {"name": "place", "label": "出版地", "required": true},
+        {"name": "publisher", "label": "出版社", "required": true},
+        {"name": "year", "label": "出版年份", "required": true},
+        {"name": "pinpoint", "label": "定位引用（如 at 23）"}
+      ],
+      "segments": [["author", "", ", "], ["title", "*", "*"], ["edition", ", ", ""], ["place", " (", ": "], ["publisher", "", ", "], ["year", "", ")"], ["pinpoint", " ", ""]]
+    },
+    "journal_article": {
+      "label": "期刊文章",
+      "fields": [
+        {"name": "author", "label": "作者（多人用 & 连接，超过三人写 et al）"},
+        {"name": "title", "label": "文章标题", "required": true},
+        {"name": "year", "label": "出版年份", "required": true},
+        {"name": "volume", "label": "卷"},
+        {"name": "issue", "label": "期"},
+        {"name": "journal", "label": "期刊名缩写（如 Osgoode Hall LJ）", "required": true},
+        {"name": "first_page", "label": "起始页", "required": true},
+        {"name": "pinpoint", "label": "定位页（只填数字，如 23）"}
+      ],
+      "segments": [["author", "", ", "], ["title", "\"", "\""], ["year", " (", ")"], ["volume", " ", ""], ["issue", ":", ""], ["journal", " *", "*"], ["first_page", " ", ""], ["pinpoint", " at ", ""]]
+    },
+    "newspaper": {
+      "label": "新闻报道",
+      "fields": [
+        {"name": "author", "label": "作者"},
+        {"name": "title", "label": "文章标题", "required": true},
+        {"name": "newspaper", "label": "报纸 / 媒体名称（正体，不加斜体）", "required": true},
+        {"name": "date", "label": "日期（如 26 November 2005）", "required": true},
+        {"name": "page", "label": "版面（如 A4）"},
+        {"name": "site", "label": "网站域名（在线来源，如 news.bbc.co.uk）"}
+      ],
+      "segments": [["author", "", ", "], ["title", "\"", "\""], ["newspaper", ", ", ""], ["date", " (", ")"], ["page", " ", ""], ["site", ", online: <", ">"]]
+    }
+  },
   "general_rules": {
     "category": "Legal Citation I – General Rules",
     "source_files": [
