@@ -5,7 +5,7 @@
   const input = $('input');
   const candidateSets = new Map();
   const extensions = new Set(['pdf', 'docx', 'pptx', 'xlsx', 'jpg', 'jpeg', 'png', 'webp']);
-  let config = null, selectedFile = null, controller = null, generation = 0, busy = false;
+  let config = null, selectedFile = null, controller = null, generation = 0, busy = false, lastInput = '';
 
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -56,6 +56,64 @@
     try { await navigator.clipboard.writeText(text); toast('引文已复制。'); }
     catch { toast('复制未完成，请选中文字手动复制。'); }
   }
+  // Ported from the original result card (frontend/components/citation-card.tsx).
+  const PINPOINT_PATTERNS = [/\bat\s+para(s)?\b/i, /\bs\s*\d/i, /\bss\s*\d/i, /\bart\b/i, /\bat\s+\d+\b/, /\bat\s+ch\b/i];
+  function pinpointPlaceholder(sourceType) {
+    const st = (sourceType || '').toLowerCase();
+    if (['case', 'case_name', 'citation_number', 'concept', 'jurisprudence'].includes(st) || st.startsWith('juris')) return '如 at para 47 或 at paras 47–49';
+    if (st === 'bill') return '如 cl 15(1)(a) 或 cl 5';
+    if (['legislation', 'statute', 'regulation'].includes(st) || st.startsWith('leg.')) return '如 s 7(2)(c) 或 ss 1–3';
+    if (st === 'treaty' || st === 'foreign') return '如 art 14 或 art 14(2)';
+    if (['book', 'journal_article', 'book_chapter', 'thesis'].includes(st) || st.startsWith('secondary_sources.')) return '如 at 47 或 at ch 7';
+    if (['website', 'webpage', 'newspaper', 'news_online', 'report', 'government_document', 'government_docs'].includes(st) || st.startsWith('gov.')) return '如 at para 6 或小标题（非官方）';
+    return '如 at para / s / art / at 页码';
+  }
+  function pinpointEditor(blockData, base, onChange) {
+    const row = el('div', 'pinpoint');
+    const field = el('input');
+    field.maxLength = 200;
+    field.placeholder = pinpointPlaceholder(blockData.source_type);
+    field.setAttribute('aria-label', '定位引用');
+    field.value = blockData.pinpoint || '';
+    field.oninput = () => onChange(field.value.trim());
+    if (field.value) row.append(field);
+    else {
+      const open = el('button', 'link-button', '＋ 添加定位引用（可选）');
+      open.type = 'button';
+      open.onclick = () => { open.replaceWith(field); field.focus(); };
+      row.append(open);
+    }
+    if (!blockData.pinpoint && PINPOINT_PATTERNS.some(re => re.test(base))) {
+      row.append(el('p', 'result-note', '这条引文可能已包含定位引用，添加前请先核对。'));
+    }
+    row.append(el('p', 'result-note', '定位引用由你填写，未经数据库核验。'));
+    return row;
+  }
+  async function sendFeedback(body) {
+    try {
+      const response = await fetch('/api/chatbox/feedback', json(body));
+      const data = await response.json();
+      toast(data.message || (response.ok ? '已记录，谢谢反馈。' : '反馈未能保存。'));
+      return response.ok;
+    } catch { toast('反馈未能保存，请检查服务是否仍在运行。'); return false; }
+  }
+  function ratingRow(sourceInput, fullCitation, sourceType) {
+    const row = el('div', 'rating');
+    row.append(el('span', '', '这条引文准确吗？'));
+    const buttons = [['up', '👍', '准确'], ['down', '👎', '不准确']].map(([verdict, icon, label]) => {
+      const button = el('button', 'rate', icon);
+      button.type = 'button';
+      button.setAttribute('aria-label', label);
+      button.onclick = async () => {
+        buttons.forEach(b => { b.disabled = true; b.dataset.selected = 'true'; });
+        button.classList.add('chosen');
+        await sendFeedback({kind: 'rating', verdict, input: sourceInput, output: fullCitation(), route: sourceType || ''});
+      };
+      return button;
+    });
+    row.append(...buttons);
+    return row;
+  }
   function render(blockData) {
     if (!blockData || typeof blockData !== 'object') return;
     switch (blockData.type) {
@@ -71,15 +129,26 @@
         header.append(el('span', verified ? 'verified' : 'unverified', verified ? '已核验' : '未核验 · 请核对原文'));
         const copy = el('button', 'copy', '复制引文');
         copy.type = 'button';
-        copy.onclick = () => copyCitation(blockData.citation || '');
         header.append(copy);
+        const base = blockData.citation || '';
+        const sourceInput = lastInput;
+        let pinpoint = (blockData.pinpoint || '').trim();
+        // Same composition as the original result card: strip the final
+        // period, append the pinpoint, re-add the period.
+        const fullCitation = () => pinpoint ? base.replace(/\.\s*$/, '') + ' ' + pinpoint + '.' : base;
         const content = el('div', 'citation-text');
-        // Only paired italic markers are recognized; data is never HTML.
-        const parts = (blockData.citation || '').split(/(\*[^*]+\*)/g);
-        for (const part of parts) content.append(part.startsWith('*') && part.endsWith('*') && part.length > 2
-          ? el('em', '', part.slice(1, -1)) : document.createTextNode(part));
+        const paint = () => {
+          content.replaceChildren();
+          // Only paired italic markers are recognized; data is never HTML.
+          for (const part of fullCitation().split(/(\*[^*]+\*)/g)) content.append(part.startsWith('*') && part.endsWith('*') && part.length > 2
+            ? el('em', '', part.slice(1, -1)) : document.createTextNode(part));
+        };
+        paint();
+        copy.onclick = () => copyCitation(fullCitation());
         card.append(header, content);
         if (Array.isArray(blockData.warnings)) blockData.warnings.forEach(warning => card.append(el('p', 'result-note', warning)));
+        card.append(pinpointEditor(blockData, base, value => { pinpoint = value; paint(); }));
+        card.append(ratingRow(sourceInput, fullCitation, blockData.source_type));
         break;
       }
       case 'candidate_list': {
@@ -151,6 +220,7 @@
   }
   function submit(text, file) {
     if (busy) return;
+    lastInput = text || file?.name || '';
     userTurn(text, file?.name);
     if (file) {
       const body = new FormData(); body.append('file', file); body.append('input', text);
@@ -221,5 +291,15 @@
   ['dragleave', 'drop'].forEach(name => document.addEventListener(name, event => { event.preventDefault(); document.body.classList.remove('dragging'); }));
   document.addEventListener('drop', event => { if (event.dataTransfer.files.length > 1) return toast('每次请只上传一个文件。'); chooseFile(event.dataTransfer.files[0]); });
   input.addEventListener('paste', event => { const file = event.clipboardData?.files[0]; if (file) { event.preventDefault(); chooseFile(file); } });
+  $('feedback-form').onsubmit = async event => {
+    event.preventDefault();
+    const note = $('feedback-note').value.trim();
+    if (!note) return toast('请先写下反馈内容。');
+    $('feedback-send').disabled = true;
+    if (await sendFeedback({kind: 'message', note})) $('feedback-note').value = '';
+    $('feedback-send').disabled = false;
+  };
   loadConfig();
+  // Original cold-start mitigation: warm lookup connections on page load.
+  fetch('/api/chatbox/warmup').catch(() => {});
 })();

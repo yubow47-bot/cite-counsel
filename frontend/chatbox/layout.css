@@ -11,12 +11,15 @@ body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
 .key-form input { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: white; font: 12px "Segoe UI", sans-serif; }
 .key-form button { border: 0; border-radius: 5px; background: var(--red); color: white; padding: 8px 10px; font: inherit; cursor: pointer; }
 .key-form small { color: var(--muted); line-height: 1.45; }
-.field-card { white-space: normal; }
-.field-card > p { margin-top: 0; }
-.field-inputs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.field-form input, .field-form select { width: 100%; min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: 5px; background: white; font: inherit; }
-.field-form select { max-width: 300px; }
-.field-form input:focus, .field-form select:focus { outline: 2px solid var(--red); outline-offset: 1px; }
+.key-form textarea { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: white; font: 12px "Segoe UI", sans-serif; resize: vertical; }
+.pinpoint { margin-top: 12px; }
+.pinpoint input { width: 100%; max-width: 360px; padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: white; font: inherit; font-size: 14px; }
+.pinpoint input:focus { outline: 2px solid var(--red); outline-offset: 1px; }
+.link-button { border: 0; padding: 0; background: transparent; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; }
+.link-button:hover { color: var(--red); text-decoration: underline; }
+.rating { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+.rate { border: 1px solid var(--line); border-radius: 6px; background: transparent; padding: 3px 8px; font-size: 14px; cursor: pointer; }
+.rate.chosen { border-color: var(--red); background: var(--rose); opacity: 1; }
 .result-note { margin: 10px 0 0; font-size: 12px; color: var(--muted); }
 .attachment-name { display: block; margin-top: 5px; color: var(--muted); }
 .assistant-block, .user-message { overflow-wrap: anywhere; }
@@ -31,7 +34,6 @@ button:focus-visible { outline: 2px solid var(--red); outline-offset: 3px; }
   .startup { margin-bottom: 16px; }
   .empty-state { margin: 6vh auto; }
   .sidebar .settings { display: block; grid-column: 1 / -1; margin: 0; padding: 8px 0; }
-  .field-inputs { grid-template-columns: 1fr; }
   .empty-state h1 { font-size: 32px; }
   textarea { font-size: 14px; }
 }

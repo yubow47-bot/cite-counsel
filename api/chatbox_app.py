@@ -37,6 +37,16 @@ class Selection(BaseModel):
     candidate_id: str = Field(min_length=1, max_length=64)
 
 
+class Feedback(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: str = Field(default="rating", max_length=20)
+    verdict: str | None = Field(default=None, max_length=10)
+    input: str | None = Field(default=None, max_length=2000)
+    output: str | None = Field(default=None, max_length=4000)
+    route: str | None = Field(default=None, max_length=100)
+    note: str | None = Field(default=None, max_length=4000)
+
+
 class ApiKeys(BaseModel):
     model_config = ConfigDict(extra="forbid")
     openrouter_api_key: SecretStr | None = Field(default=None)
@@ -165,6 +175,31 @@ def create_app(settings: dict | None = None) -> FastAPI:
         except Exception as exc:
             logger.warning("Candidate selection failed: %s", type(exc).__name__)
             return failure("候选处理未完成，请重新查询。", 502)
+
+    @app.post("/api/chatbox/feedback")
+    def feedback(body: Feedback):
+        """Original 👍/👎 and message feedback, written to data/feedback.jsonl only.
+
+        The legacy handler also queues HF Dataset / Discord delivery as
+        background tasks; those tasks are deliberately never run here.
+        """
+        from fastapi import BackgroundTasks
+        from api.main import FeedbackInput, feedback as legacy_feedback
+        envelope = legacy_feedback(FeedbackInput(**body.model_dump()), BackgroundTasks())
+        if envelope.get("status") == "done":
+            return {"ok": True, "message": "已记录，谢谢反馈。"}
+        return failure((envelope.get("error") or {}).get("reason") or "反馈未能保存。")
+
+    warm_state = {"at": 0.0}
+
+    @app.get("/api/chatbox/warmup")
+    async def warmup():
+        """Original cold-start mitigation, limited to services the Chatbox uses."""
+        import time
+        if time.monotonic() - warm_state["at"] < 300:
+            return {"ok": True, "cached": True}
+        warm_state["at"] = time.monotonic()
+        return {"ok": True, **await run_in_threadpool(service.warm_up)}
 
     @app.post("/api/chatbox/files")
     async def files(file: UploadFile = File(...), input: str = Form(default="", max_length=2000)):

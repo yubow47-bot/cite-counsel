@@ -93,10 +93,12 @@ class CandidateStore:
         self._sets: dict = {}
         self._lock = threading.Lock()
 
-    def add(self, records: list[dict]) -> dict:
+    def add(self, records: list[dict], *, presigned: bool = False) -> dict:
+        """Store candidates; ``presigned`` keeps candidates the legacy API already signed."""
         from api.main import _selection_candidate
         set_id, token = secrets.token_urlsafe(18), secrets.token_urlsafe(32)
-        signed = {secrets.token_urlsafe(12): _selection_candidate(copy.deepcopy(record)) for record in records[:20]}
+        signed = {secrets.token_urlsafe(12): copy.deepcopy(record) if presigned else _selection_candidate(copy.deepcopy(record))
+                  for record in records[:20]}
         with self._lock:
             now = time.monotonic()
             self._sets = {k: v for k, v in self._sets.items() if v["expires"] > now}
@@ -122,8 +124,62 @@ class CandidateStore:
 candidate_store = CandidateStore()
 
 
+# ── Legacy pipeline bridge ────────────────────────────────────────────
+# The Chatbox fast path (rules + JEV + template rendering) covers the common
+# shapes. Everything it cannot finish is handed to the original Cite Counsel
+# handlers unchanged, so no existing capability is lost: LLM normalization
+# (CCC -> Criminal Code, Regina -> R), constitutional statutes, concept
+# formatting, government documents and every other format_citation rule.
+
+LEGACY_NOTE = "由原版流程生成：数据库检索后由模型按 McGill 规则库格式化。请对照原文核对。"
+
+
+def _run_legacy(handler, *args):
+    """Run an async legacy route handler from a Chatbox worker thread."""
+    import asyncio
+    result = asyncio.run(handler(*args))
+    if not isinstance(result, dict):  # e.g. the spend-cap JSONResponse
+        try:
+            result = json.loads(bytes(result.body))
+        except Exception:
+            result = {"status": "error", "error": {"reason": "服务暂时不可用，请稍后重试。"}}
+    return result
+
+
+def legacy_blocks(envelope: dict) -> list[dict]:
+    """Translate a legacy API envelope into Chatbox blocks."""
+    status = envelope.get("status")
+    data = envelope.get("data") or {}
+    if status == "done":
+        blocks = []
+        for item in data.get("citations") or []:
+            if item.get("citation"):
+                block = citation_block(item["citation"], item.get("source_type") or "", warning=LEGACY_NOTE)
+                if item.get("pinpoint"):
+                    block["pinpoint"] = item["pinpoint"]
+                blocks.append(block)
+        return blocks or [notice("没有生成引文，请换个写法再试。", "warning")]
+    if status == "needs_selection" and data.get("candidates"):
+        return [candidate_store.add(data["candidates"], presigned=True)]
+    reason = (envelope.get("error") or {}).get("reason") or "本次没有生成引文，请换个写法再试。"
+    return [notice(reason, "error" if status == "error" else "warning")]
+
+
+def legacy_query_blocks(text: str) -> list[dict]:
+    from api.main import CitationInput, citation_query
+    return legacy_blocks(_run_legacy(citation_query, CitationInput(input=text), None))
+
+
+def legacy_select_blocks(candidate: dict) -> list[dict]:
+    """Format one signed candidate exactly as the original select endpoint does."""
+    from api.main import CitationSelectInput, _candidate_signature_valid, _selection_candidate, citation_select
+    if not _candidate_signature_valid(candidate):
+        candidate = _selection_candidate(candidate)
+    return legacy_blocks(_run_legacy(citation_select, CitationSelectInput(candidates=[candidate], selected_index=0)))
+
+
 def record_blocks(item: dict) -> list[dict]:
-    """Render only supported fields from a verified search record."""
+    """Render a verified record by template; hand anything else to the legacy formatter."""
     if item.get("verified") is not True:
         return [notice("数据库未能核验这条记录，没有生成引文。", "warning")]
     if item.get("bill_session"):
@@ -131,17 +187,26 @@ def record_blocks(item: dict) -> list[dict]:
         citation = _rebuild_bill_citation(item)
         if citation:
             return [citation_block(citation, "bill", True)]
-        return [notice("这条法案还需要重新核对 LEGISinfo 记录，请重试。", "warning")]
+        return legacy_select_blocks(item)
     if item.get("statute_title"):
         fields = {"title": item.get("statute_title", ""), "citation": item.get("citation", ""), "pinpoint": item.get("pinpoint") or ""}
-        source_type = "legislation"
+        source_type, pinpoint = "legislation", ""
+    elif item.get("style_of_cause"):
+        # Like the original API, a case pinpoint is returned separately so the
+        # user can edit it on the result card.
+        fields = {key: item.get(key) or "" for key in ("style_of_cause", "neutral_citation", "reporter")}
+        source_type, pinpoint = "jurisprudence", item.get("pinpoint") or ""
     else:
-        fields = {key: item.get(key) or "" for key in ("style_of_cause", "neutral_citation", "reporter", "pinpoint")}
-        source_type = "jurisprudence"
+        return legacy_select_blocks(item)
     try:
-        return [citation_block(render_fields(source_type, fields), source_type, True)]
+        block = citation_block(render_fields(source_type, fields), source_type, True)
     except ValueError:
-        return [notice("已找到记录，但缺少组装所需的字段，没有生成引文。", "warning")]
+        # e.g. the Charter: the record has a title but its full citation is a
+        # fixed constitutional form that the legacy rules supply.
+        return legacy_select_blocks(item)
+    if pinpoint:
+        block["pinpoint"] = pinpoint
+    return [block]
 
 
 def classify_query(text: str) -> dict:
@@ -220,12 +285,20 @@ def jev_route(text: str) -> str | None:
 
 
 def query_blocks(text: str) -> list[dict]:
+    import logging
     from local_tools.citation_search import search_citation
-    classification = classify_query(text)
-    records = search_citation(text, classification=classification)
+    try:
+        classification = classify_query(text)
+        records = search_citation(text, classification=classification)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Chatbox fast path failed, using legacy: %s", type(exc).__name__)
+        return legacy_query_blocks(text)
     verified = [record for record in records if record.get("verified") is True]
     if not verified:
-        return [notice("这次检索未找到可核验的记录，没有生成引文。请检查拼写，或改用引用号、完整名称再试。", "warning")]
+        # The fast path searches the literal input. The original pipeline also
+        # lets the model normalize it (abbreviations, "Regina", nicknames) and
+        # its results are still database-verified, so run it before giving up.
+        return legacy_query_blocks(text)
     if len(verified) > 1:
         return [candidate_store.add(verified)]
     return record_blocks(verified[0])
@@ -244,7 +317,47 @@ def identifier_blocks(kind: str, value: str) -> list[dict]:
             citation = build_book_citation(record)
             if citation:
                 return [citation_block(citation, "book", True)]
-    return [notice("数据库暂未返回完整记录，请检查标识符或稍后重试。", "warning")]
+    from api.main import UrlInput, extract_url
+    return legacy_blocks(_run_legacy(extract_url, UrlInput(**{kind: value})))
+
+
+def warm_up() -> dict:
+    """Load the LEGISinfo bill cache and open connections to the lookup services.
+
+    Mirrors the original startup cache warm-up and /api/warmup probes, but
+    skips providers the Chatbox never calls (DeepSeek, Gemini, CanLII).
+    """
+    from local_tools.legisinfo_api import fetch_legisinfo_bills
+    from local_tools.utils import a2aj_session, crossref_session, openlibrary_session, request_with_retry
+    warmed, failed = [], []
+    try:
+        fetch_legisinfo_bills(force_refresh=True)
+        warmed.append("legisinfo_cache")
+    except Exception:
+        failed.append("legisinfo_cache")
+    for name, session, url in (("a2aj", a2aj_session, "https://api.a2aj.ca"),
+                               ("crossref", crossref_session, "https://api.crossref.org"),
+                               ("openlibrary", openlibrary_session, "https://openlibrary.org")):
+        try:
+            request_with_retry(session, "GET", url, retries=0, read_timeout=3).close()
+            warmed.append(name)
+        except Exception:
+            failed.append(name)
+    return {"warmed": warmed, "failed": failed}
+
+
+def legacy_format_blocks(fields: dict, doc_type: str) -> list[dict]:
+    """Format extracted file/page fields with the original McGill rules engine."""
+    import logging
+    from core.mcgill_engine import format_citation
+    try:
+        citation = format_citation(fields, doc_type=doc_type)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Legacy format failed: %s", type(exc).__name__)
+        citation = ""
+    if not citation:
+        return [notice("本次没有生成引文，请稍后重试或换一个文件。", "error")]
+    return [citation_block(citation, doc_type, warning=LEGACY_NOTE)]
 
 
 DOCUMENT_TYPES = {
@@ -349,6 +462,11 @@ def extracted_blocks(fields: dict, shadow: bool, *, webpage: bool = False) -> li
     raw_text = fields.get("raw_text") or ""
     if "error" in fields or not raw_text.strip():
         return [notice("未能提取可用正文。请尝试更清晰的文件，或换一个可以直接打开的链接。", "warning")]
+    if webpage and len(raw_text.strip()) < 50:
+        # Same guard as the original URL route: JavaScript-rendered pages
+        # return metadata but no body, and would yield a wrong citation.
+        return [notice("没能读到这个网页的正文（很多政府网站用 JavaScript 加载内容）。"
+                       "请改为上传该网页的截图。", "warning")]
     from local_tools.file_extractor import head_tail
     sample = head_tail(raw_text, 400, 350)  # fits the 800-char classifier window; source notes sit at the end
     excerpt = head_tail(raw_text, 1300, 600)
@@ -368,11 +486,11 @@ def extracted_blocks(fields: dict, shadow: bool, *, webpage: bool = False) -> li
         from local_tools.file_extractor import classify_document_type
         doc_type = classify_document_type(sample)
     kind = DOC_TYPE_TEMPLATES.get(doc_type)
-    if kind is None and webpage:
-        kind = "website"
     if kind is None:
-        blocks.append(notice(f"识别到文档类型：{doc_type}。这类资料暂不支持自动生成引文；如有 DOI / ISBN，可直接粘贴。", "warning"))
-        blocks.append(notice("提取文本：\n" + excerpt))
+        # Reports, government documents, theses, chapters, ...: the original
+        # rules engine (incl. government-document routing) handles these.
+        blocks.extend(legacy_format_blocks(fields, doc_type))
+        blocks.append(notice("提取文本（请与原文核对）：\n" + excerpt))
         return blocks
     hints = {}
     if webpage:
@@ -390,7 +508,9 @@ def extracted_blocks(fields: dict, shadow: bool, *, webpage: bool = False) -> li
         blocks.append(citation_block(citation, kind, warning=(
             "字段由模型从原文逐字摘取，引文由程序按 McGill 规则拼接；原文中找不到的内容已自动剔除。请对照原文核对。")))
     else:
-        blocks.append(notice(f"未能生成完整引文：原文中找不到必需的信息（{problem}）。", "warning"))
+        # The strict template could not be filled; fall back to the original
+        # engine, which formats from the whole extracted record.
+        blocks.extend(legacy_format_blocks(fields, doc_type))
     # The excerpt stays visible so every extracted value can be checked.
     blocks.append(notice("提取文本（请与原文核对）：\n" + excerpt))
     return blocks

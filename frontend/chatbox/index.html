@@ -34,6 +34,16 @@
             <small>留空的输入框不会修改。密钥不会回显到页面。</small>
           </form>
         </details>
+        <details class="settings" id="feedback">
+          <summary>意见反馈 <span aria-hidden="true">⌄</span></summary>
+          <form id="feedback-form" class="key-form">
+            <label>发现错误或缺漏？
+              <textarea id="feedback-note" maxlength="4000" rows="3" placeholder="写下你的意见"></textarea>
+            </label>
+            <button id="feedback-send" type="submit">发送反馈</button>
+            <small>只保存在本机 data/feedback.jsonl。</small>
+          </form>
+        </details>
         <p class="sidebar-note">本地实验版 · 对话不持久保存<br />生成与视觉经 OpenRouter，JEV 判断直连 TypeSafe；检索会访问资料数据库。密钥只保存在本机服务端。</p>
       </aside>
 

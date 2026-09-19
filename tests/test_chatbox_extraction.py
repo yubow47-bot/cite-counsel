@@ -96,10 +96,12 @@ def test_shadow_mode_does_not_adopt_jev(monkeypatch, tmp_path):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     _jev(monkeypatch, "journal_article")
     monkeypatch.setattr("local_tools.file_extractor.classify_document_type", lambda _: "book")
+    calls = []
+    monkeypatch.setattr("core.mcgill_engine.format_citation", lambda fields, doc_type=None: calls.append(doc_type) or "")
     blocks = service.extracted_blocks({"raw_text": ARTICLE}, True)
     assert blocks[0]["shadow"] is True
-    # The fallback classifier (book) wins; without an LLM no book fields exist.
-    assert "出版社" in str(blocks) and "citation_result" not in [b["type"] for b in blocks]
+    # The fallback classifier (book) wins; with no book fields the legacy engine gets the document.
+    assert calls == ["book"] and "citation_result" not in [b["type"] for b in blocks]
 
 
 def test_webpage_uses_page_metadata_without_llm(monkeypatch, tmp_path, fake_llm):
@@ -108,18 +110,20 @@ def test_webpage_uses_page_metadata_without_llm(monkeypatch, tmp_path, fake_llm)
     calls = fake_llm({})
     blocks = service.extracted_blocks({
         "url": "https://example.org/post", "page_title": "Housing and the Charter",
-        "author": "Jane Roe", "date": "2024-03-05", "raw_text": "Housing and the Charter. Body text.",
+        "author": "Jane Roe", "date": "2024-03-05", "raw_text": "Housing and the Charter. " + "Body text. " * 10,
     }, False, webpage=True)
     result = next(b for b in blocks if b["type"] == "citation_result")
     assert result["citation"] == 'Jane Roe, "Housing and the Charter" (5 March 2024), online: <https://example.org/post>.'
     assert calls == []
 
 
+YAHOO_BODY = "On Holding's (ONON) entry into the soccer category ... " * 3
+
 YAHOO = {
     "url": "https://finance.yahoo.com/markets/stocks/article/on-holdings-193202945.html",
     "page_title": "On Holding's Kylian Mbappé bet 'a direct challenge to Nike and Adidas': Analyst",
     "site_name": "Yahoo Finance", "author": "Brooke DiPalma", "date": "2026-09-18",
-    "raw_text": "On Holding's (ONON) entry into the soccer category ...",
+    "raw_text": YAHOO_BODY,
 }
 
 
@@ -148,9 +152,12 @@ def test_missing_required_fields_reported_without_form(monkeypatch, tmp_path, fa
     monkeypatch.setattr(service, "_ROUTE_LOG", tmp_path / "log.jsonl")
     _jev(monkeypatch, "journal_article")
     fake_llm({"title": "The Duty to Consult: New Directions"})
+    monkeypatch.setattr("core.mcgill_engine.format_citation",
+                        lambda fields, doc_type=None: f"Legacy {doc_type} citation.")
     blocks = service.extracted_blocks({"raw_text": ARTICLE}, False)
     assert "field_question" not in [b["type"] for b in blocks]
-    assert any("未能生成完整引文" in b.get("message", "") for b in blocks)
+    result = next(b for b in blocks if b["type"] == "citation_result")
+    assert result["citation"] == "Legacy journal_article citation." and result["warnings"] == [service.LEGACY_NOTE]
 
 
 @pytest.mark.parametrize("meta_title, html, expected", [
