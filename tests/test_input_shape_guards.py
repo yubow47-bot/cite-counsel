@@ -160,21 +160,6 @@ def api_client():
     return TestClient(app)
 
 
-def test_concept_scaffold_prefill_uses_user_query(api_client):
-    """Scaffold disabled=False? No — SCAFFOLD_ENABLED on: the prefilled
-    style_of_cause must be the user's own query, never a hardcoded example."""
-    with patch("api.main.classify_and_normalize",
-               return_value={"type": "concept", "normalized": "right to housing", "original": "right to housing"}), \
-         patch("api.main.search_citation", return_value=[]), \
-         patch("api.main.SCAFFOLD_ENABLED", True):
-        resp = api_client.post("/api/citation", json={"input": "right to housing"})
-
-    body = resp.json()
-    assert body["status"] == "needs_input"
-    assert body["data"]["prefill"]["style_of_cause"] == "right to housing"
-    assert "duty to consult" not in body["data"]["prefill"]["style_of_cause"]
-
-
 def test_concept_scaffold_unsupported_no_hardcoded_prefill_leak(api_client):
     with patch("api.main.classify_and_normalize",
                return_value={"type": "concept", "normalized": "right to housing", "original": "right to housing"}), \

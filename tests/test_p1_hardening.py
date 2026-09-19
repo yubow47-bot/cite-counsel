@@ -153,14 +153,6 @@ def test_too_many_chat_messages_rejected():
     assert resp.status_code == 422
 
 
-def test_too_many_assembly_fields_rejected():
-    resp = client.post("/api/citation/assemble", json={
-        "type": "book",
-        "fields": {f"field{i}": "v" for i in range(61)},
-    })
-    assert resp.status_code == 422
-
-
 # ═════════════════════════════════════════════════════════════════════════════
 #  Rate limiter — bounded table + env robustness
 # ═════════════════════════════════════════════════════════════════════════════

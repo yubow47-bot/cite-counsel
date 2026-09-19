@@ -51,11 +51,10 @@ describe('CitationCard — render states', () => {
     expect(screen.getByText(/R v King/)).toBeTruthy()
   })
 
-  it('shows manually-entered badge when verified is false', () => {
+  it('shows unverified badge when verified is false', () => {
     render(<CitationCard item={{ ...BASE_CITATION, verified: false }} sourceInput="" />)
 
-    expect(screen.getByText(/manually entered/i)).toBeTruthy()
-    expect(screen.getByText(/not database-verified/i)).toBeTruthy()
+    expect(screen.getByText(/not database-verified — check against the source/i)).toBeTruthy()
   })
 })
 

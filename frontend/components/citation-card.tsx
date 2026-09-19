@@ -207,7 +207,7 @@ export function CitationCard({
       {item.verified === false ? (
         <p className="mt-2 inline-flex items-center gap-1.5 text-xs text-muted-foreground">
           <PencilLine className="size-3.5 shrink-0" aria-hidden="true" />
-          Manually entered — not database-verified
+          Not database-verified — check against the source
         </p>
       ) : null}
 
