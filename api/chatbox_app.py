@@ -36,6 +36,11 @@ class Turn(BaseModel):
     item_token: str | None = Field(default=None, max_length=128)
     candidate_set_id: str | None = Field(default=None, max_length=64)
     candidate_token: str | None = Field(default=None, max_length=128)
+    # The conversation this turn belongs to: the agent's memory of what has
+    # been said and what lookup is still unresolved. Issued by the server on
+    # the first turn and echoed back by the client from then on.
+    session_id: str | None = Field(default=None, max_length=64)
+    session_token: str | None = Field(default=None, max_length=128)
     # Bring-your-own key: used only for the provider calls this turn makes,
     # never persisted, never echoed back. See llm_api.request_credentials.
     openrouter_api_key: SecretStr | None = Field(default=None)
@@ -65,8 +70,19 @@ class ApiKeys(BaseModel):
     typesafe_api_key: SecretStr | None = Field(default=None)
 
 
-def success(blocks):
-    return {"ok": True, "blocks": blocks}
+class SourceTypeChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    session_id: str = Field(min_length=1, max_length=64)
+    session_token: str = Field(min_length=1, max_length=128)
+    source_type: str = Field(min_length=1, max_length=40)
+
+
+def success(blocks, context=None):
+    """Blocks, plus the session the client must echo back on the next turn."""
+    payload = {"ok": True, "blocks": blocks}
+    if context is not None and context.session_id:
+        payload["session"] = {"id": context.session_id, "token": context.session_token}
+    return payload
 
 
 def failure(message, status=400):
@@ -174,35 +190,53 @@ def create_app(settings: dict | None = None) -> FastAPI:
         # A key on this request is visible only for the provider calls this
         # turn makes below; use_credentials resets it before the handler returns.
         credentials = _credentials(body.openrouter_api_key, body.typesafe_api_key)
+        # Every turn belongs to a conversation, so the agent can remember what
+        # was said and what is still unresolved. The client echoes the session
+        # back; an unknown or expired one is replaced rather than rejected.
+        context = service.turn_context(body.item_id, body.item_token,
+                                       body.candidate_set_id, body.candidate_token,
+                                       body.session_id, body.session_token)
+        service.ensure_session(context)
+        service.remember(context, "user", text)
         # A pasted DOI/ISBN/URL is always a new source. Anything else, with a
-        # result or a candidate list on screen, may be about that instead, so the
-        # planner gets first refusal.
-        if kind == "query":
-            context = service.turn_context(body.item_id, body.item_token,
-                                           body.candidate_set_id, body.candidate_token)
-            if context.active:
-                with use_credentials(credentials):
-                    async with slots:
-                        planned = await run_in_threadpool(service.planned_blocks, text, context)
-                if planned is not None:
-                    return success(planned)
+        # result, a candidate list or an unresolved lookup in play, may be about
+        # that instead, so the planner gets first refusal.
+        if kind == "query" and context.active:
+            with use_credentials(credentials):
+                async with slots:
+                    planned = await run_in_threadpool(service.planned_blocks, text, context)
+            if planned is not None:
+                return success(planned, context)
         if kind in {"query", "url"} and not settings["openrouter_api_key"] and not credentials:
-            return success([service.notice("请先在左侧“API Key 设置”填入 OpenRouter API Key，或在本次消息中附带你自己的 Key。", "warning")])
+            return success([service.notice("请先在左侧“API Key 设置”填入 OpenRouter API Key，或在本次消息中附带你自己的 Key。", "warning")], context)
         try:
             with use_credentials(credentials):
                 async with slots:
                     if kind in {"doi", "isbn"}:
-                        blocks = await run_in_threadpool(service.identifier_blocks, kind, value)
+                        blocks = await run_in_threadpool(service.identifier_blocks, kind, value, context)
                     elif kind == "url":
                         from llm_api.deepseek_api import extract_from_url
                         fields = await run_in_threadpool(extract_from_url, value)
                         blocks = await run_in_threadpool(service.extracted_blocks, fields, settings["jev_shadow"], webpage=True)
                     else:
-                        blocks = await run_in_threadpool(service.query_blocks, value)
-            return success(blocks)
+                        blocks = await run_in_threadpool(service.query_blocks, value, context)
+            return success(blocks, context)
         except Exception as exc:
             logger.warning("Chatbox turn failed: %s", type(exc).__name__)
             return failure("本次检索未完成，请检查网络、OpenRouter 配置或稍后重试。", 502)
+
+    @app.post("/api/chatbox/types")
+    def choose_type(body: SourceTypeChoice):
+        """The user picked one of the kinds the agent offered.
+
+        Deterministic: the agent proposed, the click decides, and the server
+        opens that template's fields. No provider is called.
+        """
+        context = service.turn_context(session_id=body.session_id, session_token=body.session_token)
+        if not context.session_id:
+            return failure("这次对话已过期，请重新提问。", 409)
+        service.remember(context, "user", body.source_type)
+        return success(service.open_source_type(context, body.source_type), context)
 
     @app.post("/api/chatbox/select")
     async def select(body: Selection):

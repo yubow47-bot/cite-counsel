@@ -63,7 +63,7 @@ def test_key_settings_requires_at_least_one_value(client):
 
 
 def test_unconfigured_query_does_not_call_provider(client, monkeypatch):
-    monkeypatch.setattr(service, "query_blocks", lambda _: pytest.fail("must not call model"))
+    monkeypatch.setattr(service, "query_blocks", lambda *a, **kw: pytest.fail("must not call model"))
     blocks = client.post("/api/chatbox/turns", json={"input": "R v Gladue"}).json()["blocks"]
     assert [block["type"] for block in blocks] == ["notice"]
 
@@ -107,7 +107,7 @@ def test_malformed_url_and_cross_site_request(client):
 
 def test_identifier_routing_before_llm(client, monkeypatch):
     calls = []
-    monkeypatch.setattr(service, "identifier_blocks", lambda kind, value: calls.append((kind, value)) or [service.notice("offline test")])
+    monkeypatch.setattr(service, "identifier_blocks", lambda kind, value, context=None: calls.append((kind, value)) or [service.notice("offline test")])
     for value in ("https://doi.org/10.1038/nature12373", "ISBN 978-0-306-40615-7"):
         assert client.post("/api/chatbox/turns", json={"input": value}).status_code == 200
     assert calls == [("doi", "10.1038/nature12373"), ("isbn", "9780306406157")]
@@ -246,7 +246,7 @@ def test_a_query_without_a_server_key_is_blocked(client):
 def test_a_per_request_key_lets_an_unconfigured_server_proceed(client, monkeypatch):
     from llm_api.request_credentials import openrouter_key
     seen = []
-    monkeypatch.setattr(service, "query_blocks", lambda text: seen.append(openrouter_key()) or [service.notice("ran")])
+    monkeypatch.setattr(service, "query_blocks", lambda text, context=None: seen.append(openrouter_key()) or [service.notice("ran")])
     response = client.post("/api/chatbox/turns", json={"input": "R v Gladue", "openrouter_api_key": "byok-secret"})
     assert response.status_code == 200 and seen == ["byok-secret"]
     assert "byok-secret" not in response.text
@@ -255,7 +255,7 @@ def test_a_per_request_key_lets_an_unconfigured_server_proceed(client, monkeypat
 def test_a_per_request_key_is_scoped_to_that_request_only(client, monkeypatch):
     """After the BYOK request returns, an unconfigured request is blocked again."""
     from llm_api.request_credentials import openrouter_key
-    monkeypatch.setattr(service, "query_blocks", lambda text: [service.notice(openrouter_key() or "none")])
+    monkeypatch.setattr(service, "query_blocks", lambda text, context=None: [service.notice(openrouter_key() or "none")])
     with_key = client.post("/api/chatbox/turns", json={"input": "R v Gladue", "openrouter_api_key": "byok-secret"})
     assert with_key.json()["blocks"][0]["message"] == "byok-secret"
     without_key = client.post("/api/chatbox/turns", json={"input": "R v Gladue"})
@@ -309,7 +309,7 @@ def test_byok_reaches_file_extraction_and_lets_an_unconfigured_server_proceed(mo
 
 
 def test_a_blank_or_oversized_byok_value_is_a_no_op_not_an_error(client, monkeypatch):
-    monkeypatch.setattr(service, "query_blocks", lambda text: [service.notice("ran")])
+    monkeypatch.setattr(service, "query_blocks", lambda text, context=None: [service.notice("ran")])
     response = client.post("/api/chatbox/turns", json={"input": "R v Gladue", "openrouter_api_key": "   "})
     # Pydantic accepts the string; the empty/whitespace key just falls through
     # to "no server key configured" rather than crashing.

@@ -23,18 +23,19 @@ def test_legacy_envelopes_become_blocks():
     assert block["verified"] is False and block["warnings"] == [service.LEGACY_NOTE]
 
 
-def test_a_dead_end_with_no_matching_template_offers_link_and_file_only():
-    # No "route" in the envelope, and "" is not a key in ROUTE_TEMPLATES.
+def test_a_dead_end_without_an_agent_degrades_to_a_plain_notice():
+    """No session means no agent, and "" is not a key in ROUTE_TEMPLATES."""
     block = service.legacy_blocks({"status": "unsupported", "data": {}, "error": {"reason": "Not verifiable."}})[0]
     assert block["type"] == "notice" and block["level"] == "warning"
-    assert block["message"] == service.FALLBACK_GUIDANCE_NO_FORM
+    assert block["message"] == service.OFFLINE_FALLBACK_NO_FORM
 
 
-def test_a_dead_end_with_a_matching_route_opens_that_template_blank():
+def test_a_dead_end_without_an_agent_degrades_to_the_routed_form():
+    """Handing over an uninvited form is the last resort, not the design."""
     block = service.legacy_blocks({"status": "unsupported", "route": "case_name", "data": {},
                                    "error": {"reason": "Not verifiable."}})[0]
     assert block["type"] == "field_question" and block["source_type"] == "jurisprudence"
-    assert block["message"] == service.FALLBACK_GUIDANCE
+    assert block["message"] == service.OFFLINE_FALLBACK
     assert {f["name"] for f in block["fields"]} == {"style_of_cause", "neutral_citation", "reporter",
                                                      "court", "pinpoint"}
     assert all(f["value"] == "" for f in block["fields"])
@@ -82,7 +83,7 @@ def test_fast_path_error_falls_back_to_original(monkeypatch):
     def boom(text):
         raise RuntimeError("offline")
     monkeypatch.setattr(service, "classify_query", boom)
-    monkeypatch.setattr(service, "legacy_query_blocks", lambda text: [service.notice("legacy ran")])
+    monkeypatch.setattr(service, "legacy_query_blocks", lambda text, context=None: [service.notice("legacy ran")])
     assert service.query_blocks("anything")[0]["message"] == "legacy ran"
 
 
@@ -172,8 +173,8 @@ def test_warmup_is_cached(monkeypatch):
     assert calls == [1]
 
 
-def test_query_dead_end_opens_the_matching_form_end_to_end(monkeypatch):
-    """The whole path a real 'case not in the database' query takes."""
+def test_query_dead_end_without_an_agent_still_lets_the_user_finish(monkeypatch):
+    """The degraded path: no JEV, so the routed form is all that is left."""
     monkeypatch.setattr(service, "classify_query", lambda text: {"type": "case_name", "normalized": text, "original": text})
     monkeypatch.setattr("local_tools.citation_search.search_citation", lambda *a, **k: [])
     monkeypatch.setattr(service, "item_store", service.ItemStore())
@@ -183,12 +184,9 @@ def test_query_dead_end_opens_the_matching_form_end_to_end(monkeypatch):
                "error": {"reason": "We couldn't verify this against our legal databases."}}
     monkeypatch.setattr(legacy, "citation_query", original)
 
-    blocks = service.query_blocks("Made Up v Nonexistent")
-    question = blocks[0]
+    question = service.query_blocks("Made Up v Nonexistent")[0]
     assert question["type"] == "field_question" and question["source_type"] == "jurisprudence"
-    assert question["message"] == service.FALLBACK_GUIDANCE
 
-    # The user can now fill it in by hand; the result is unverified.
     item = service.item_store.update(question["item_id"], question["access_token"], question["revision"],
                                      {"style_of_cause": "Made Up v Nonexistent", "reporter": "2024 ONSC 1"})
     result = service.item_blocks(question["item_id"], question["access_token"], item)[0]
