@@ -354,8 +354,43 @@ def _run_legacy(handler, *args):
     return result
 
 
-def legacy_blocks(envelope: dict) -> list[dict]:
-    """Translate a legacy API envelope into Chatbox blocks."""
+# ── Manual fallback when nothing can be verified ───────────────────────
+# A dead end here means "not in a database we check automatically", not "does
+# not exist". Route (from classify_query/classify_and_normalize) or kind
+# (doi/isbn, which the legacy /extract/url envelope's own route does not
+# distinguish) tells us which template the user was plausibly trying to cite,
+# so the fallback opens exactly that blank form instead of a bare failure
+# message. A route with no template of its own (concept, bill) still gets the
+# link/file suggestions, just without a form to fill.
+ROUTE_TEMPLATES = {"case_name": "jurisprudence", "citation_number": "jurisprudence",
+                   "legislation": "legislation", "doi": "journal_article", "isbn": "book"}
+
+FALLBACK_GUIDANCE = ("没能在数据库里核实这条。你可以把判决全文链接、DOI 或 ISBN 发给我，"
+                    "上传文件或该资料的截图，或者直接在下面手动填写。")
+FALLBACK_GUIDANCE_NO_FORM = ("没能在数据库里核实这条。你可以把判决全文链接、DOI 或 ISBN 发给我，"
+                            "或者上传文件、该资料的截图。")
+
+
+def fallback_blocks(route: str) -> list[dict]:
+    """A dead-end search becomes concrete next steps instead of a bare failure."""
+    source_type = ROUTE_TEMPLATES.get(route)
+    if source_type is None:
+        return [notice(FALLBACK_GUIDANCE_NO_FORM, "warning")]
+    item_id, token, item = item_store.add(source_type=source_type, fields={})
+    all_fields = [f["name"] for f in schema_fields(source_type)]
+    return [field_question(item_id, token, item, FALLBACK_GUIDANCE, ask=all_fields)]
+
+
+def legacy_blocks(envelope: dict, *, manual_fallback: bool = True, fallback_route: str | None = None) -> list[dict]:
+    """Translate a legacy API envelope into Chatbox blocks.
+
+    manual_fallback=False keeps a dead end as a bare notice: used where the
+    envelope's route does not describe what to offer, e.g. formatting a record
+    the user already selected, where a blank form would throw away fields the
+    database already gave us. fallback_route overrides the envelope's own
+    route when the caller knows better (DOI/ISBN, which /extract/url's
+    envelope reports simply as route "url").
+    """
     status = envelope.get("status")
     data = envelope.get("data") or {}
     if status == "done":
@@ -369,6 +404,8 @@ def legacy_blocks(envelope: dict) -> list[dict]:
         return blocks or [notice("没有生成引文，请换个写法再试。", "warning")]
     if status == "needs_selection" and data.get("candidates"):
         return [candidate_store.add(data["candidates"], presigned=True)]
+    if status == "unsupported" and manual_fallback:
+        return fallback_blocks(fallback_route or envelope.get("route") or "")
     reason = (envelope.get("error") or {}).get("reason") or "本次没有生成引文，请换个写法再试。"
     return [notice(reason, "error" if status == "error" else "warning")]
 
@@ -383,7 +420,8 @@ def legacy_select_blocks(candidate: dict) -> list[dict]:
     from api.main import CitationSelectInput, _candidate_signature_valid, _selection_candidate, citation_select
     if not _candidate_signature_valid(candidate):
         candidate = _selection_candidate(candidate)
-    return legacy_blocks(_run_legacy(citation_select, CitationSelectInput(candidates=[candidate], selected_index=0)))
+    return legacy_blocks(_run_legacy(citation_select, CitationSelectInput(candidates=[candidate], selected_index=0)),
+                         manual_fallback=False)
 
 
 def record_blocks(item: dict) -> list[dict]:
@@ -611,7 +649,10 @@ def identifier_blocks(kind: str, value: str) -> list[dict]:
             if citation:
                 return [citation_block(citation, "book", True)]
     from api.main import UrlInput, extract_url
-    return legacy_blocks(_run_legacy(extract_url, UrlInput(**{kind: value})))
+    # /extract/url's envelope reports route "url" for every input shape, so the
+    # manual-fill fallback needs to be told explicitly which template a failed
+    # DOI or ISBN lookup should open.
+    return legacy_blocks(_run_legacy(extract_url, UrlInput(**{kind: value})), fallback_route=kind)
 
 
 def warm_up() -> dict:
