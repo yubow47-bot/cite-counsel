@@ -100,8 +100,12 @@ def test_shadow_mode_does_not_adopt_jev(monkeypatch, tmp_path):
     monkeypatch.setattr("core.mcgill_engine.format_citation", lambda fields, doc_type=None: calls.append(doc_type) or "")
     blocks = service.extracted_blocks({"raw_text": ARTICLE}, True)
     assert blocks[0]["shadow"] is True
-    # The fallback classifier (book) wins; with no book fields the legacy engine gets the document.
-    assert calls == ["book"] and "citation_result" not in [b["type"] for b in blocks]
+    # The fallback classifier (book) wins. With no book fields the user is asked
+    # for them; the free-form formatter is never reached.
+    assert calls == [] and "citation_result" not in [b["type"] for b in blocks]
+    question = next(b for b in blocks if b["type"] == "field_question")
+    assert question["source_type"] == "book"
+    assert [f["name"] for f in question["fields"]] == ["author", "title", "place", "publisher", "year"]
 
 
 def test_webpage_uses_page_metadata_without_llm(monkeypatch, tmp_path, fake_llm):
@@ -148,16 +152,36 @@ def test_online_news_without_outlet_falls_back_to_web_page(monkeypatch, tmp_path
     assert result["citation"].endswith("(18 September 2026), online: <https://finance.yahoo.com/markets/stocks/article/on-holdings-193202945.html>.")
 
 
-def test_missing_required_fields_reported_without_form(monkeypatch, tmp_path, fake_llm):
+def test_missing_required_fields_become_a_question(monkeypatch, tmp_path, fake_llm):
+    """The gap is asked about, not papered over by the free-form formatter."""
     monkeypatch.setattr(service, "_ROUTE_LOG", tmp_path / "log.jsonl")
     _jev(monkeypatch, "journal_article")
     fake_llm({"title": "The Duty to Consult: New Directions"})
     monkeypatch.setattr("core.mcgill_engine.format_citation",
-                        lambda fields, doc_type=None: f"Legacy {doc_type} citation.")
+                        lambda fields, doc_type=None: pytest.fail("free-form formatter reached"))
     blocks = service.extracted_blocks({"raw_text": ARTICLE}, False)
-    assert "field_question" not in [b["type"] for b in blocks]
-    result = next(b for b in blocks if b["type"] == "citation_result")
-    assert result["citation"] == "Legacy journal_article citation." and result["warnings"] == [service.LEGACY_NOTE]
+    assert "citation_result" not in [b["type"] for b in blocks]
+    question = next(b for b in blocks if b["type"] == "field_question")
+    assert [f["name"] for f in question["fields"]] == ["year", "journal", "first_page"]
+    # What the model did copy out of the source is shown, tagged as extracted.
+    assert question["known"] == [{"name": "title", "label": question["known"][0]["label"], "required": True,
+                                 "value": "The Duty to Consult: New Directions", "origin": "extracted",
+                                 "origin_label": service.ORIGIN_LABELS["extracted"]}]
+
+
+def test_answering_a_question_renders_the_citation_unverified(monkeypatch, tmp_path, fake_llm):
+    monkeypatch.setattr(service, "_ROUTE_LOG", tmp_path / "log.jsonl")
+    _jev(monkeypatch, "journal_article")
+    fake_llm({"title": "The Duty to Consult: New Directions"})
+    question = next(b for b in service.extracted_blocks({"raw_text": ARTICLE}, False)
+                    if b["type"] == "field_question")
+    item = service.item_store.update(question["item_id"], question["access_token"], question["revision"],
+                                     {"year": "2008", "journal": "Osgoode Hall LJ", "first_page": "1"})
+    result = service.item_blocks(question["item_id"], question["access_token"], item)[0]
+    assert result["type"] == "citation_result" and result["verified"] is False
+    assert result["citation"] == ('"The Duty to Consult: New Directions" (2008) '
+                                  '*Osgoode Hall LJ* 1.')
+    assert result["revision"] == 2
 
 
 @pytest.mark.parametrize("meta_title, html, expected", [

@@ -125,7 +125,8 @@ def test_candidate_selection_tamper_and_expiry(monkeypatch):
         assert len(block["items"]) == 2
         body = {"candidate_set_id": block["candidate_set_id"], "access_token": block["access_token"], "candidate_id": block["items"][0]["id"]}
         result = client.post("/api/chatbox/select", json=body).json()["blocks"][0]
-        assert "2020 SCC 1" in result["citation"] and result["verified"] is False
+        # Every rendered field is copied from the chosen record, so this one is verified.
+        assert "2020 SCC 1" in result["citation"] and result["verified"] is True
         assert client.post("/api/chatbox/select", json={**body, "access_token": "wrong-token"}).status_code == 409
         assert client.post("/api/chatbox/select", json={**body, "candidate_id": "unknown"}).status_code == 409
         saved = store._sets[body["candidate_set_id"]]
@@ -152,7 +153,7 @@ def test_jev_failure_degrades_to_original_text_not_invented_fields(monkeypatch):
     monkeypatch.setattr(JevClient, "decide_choice", fail)
     blocks = service.extracted_blocks({"raw_text": "Original source text", "author": "model-invented author"}, True)
     assert "citation_result" not in [block["type"] for block in blocks]
-    assert "Original source text" in blocks[-1]["message"]
+    assert any("Original source text" in block.get("message", "") for block in blocks)
     assert "model-invented author" not in str(blocks)
 
 
@@ -165,3 +166,68 @@ def test_upload_limit_is_configurable():
         assert limited.post("/api/chatbox/files", files={"file": ("big.pdf", big, "application/pdf")}).status_code == 413
         small = b"%PDF-1.7\n" + b"0" * (512 * 1024)
         assert limited.post("/api/chatbox/files", files={"file": ("ok.pdf", small, "application/pdf")}).status_code == 200
+
+
+@pytest.fixture
+def db_result(monkeypatch):
+    """One verified database record, rendered through the strict template."""
+    record = {"style_of_cause": "Alpha v Beta", "neutral_citation": "2020 SCC 1", "verified": True}
+    monkeypatch.setattr("local_tools.citation_search.search_citation", lambda *a, **kw: [copy.deepcopy(record)])
+    monkeypatch.setattr(service, "item_store", service.ItemStore())
+    with TestClient(create_app(settings("fake-key"))) as local_client:
+        block = local_client.post("/api/chatbox/turns", json={"input": "Alpha v Beta"}).json()["blocks"][0]
+        yield local_client, block
+
+
+def edit(client, block, fields, **overrides):
+    body = {"item_id": block["item_id"], "access_token": block["access_token"],
+            "revision": block["revision"], "fields": fields, **overrides}
+    return client.post("/api/chatbox/items/fields", json=body)
+
+
+def test_user_pinpoint_is_rendered_server_side_and_drops_verified(db_result):
+    client, block = db_result
+    assert block["verified"] is True and block["citation"] == "*Alpha v Beta*, 2020 SCC 1."
+    updated = edit(client, block, {"pinpoint": "at para 12"}).json()["blocks"][0]
+    assert updated["citation"] == "*Alpha v Beta*, 2020 SCC 1 at para 12."
+    assert updated["verified"] is False and updated["revision"] == 2
+    origins = {field["name"]: field["origin"] for field in updated["fields"] if field["value"]}
+    assert origins == {"style_of_cause": "database", "neutral_citation": "database", "pinpoint": "user"}
+    # The superseded revision cannot be edited again.
+    assert edit(client, block, {"pinpoint": "at para 99"}).status_code == 409
+
+
+def test_correcting_a_field_keeps_the_others_attributed_to_the_record(db_result):
+    client, block = db_result
+    updated = edit(client, block, {"neutral_citation": "2021 SCC 2"}).json()["blocks"][0]
+    assert updated["citation"] == "*Alpha v Beta*, 2021 SCC 2." and updated["verified"] is False
+    origins = {field["name"]: field["origin"] for field in updated["fields"] if field["value"]}
+    assert origins == {"style_of_cause": "database", "neutral_citation": "user"}
+
+
+def test_clearing_a_required_field_asks_for_it_again(db_result):
+    client, block = db_result
+    question = edit(client, block, {"neutral_citation": ""}).json()["blocks"][0]
+    assert question["type"] == "field_question"
+    assert [field["name"] for field in question["fields"]] == ["neutral_citation", "reporter"]
+
+
+def test_item_edits_reject_wrong_token_unknown_field_and_expiry(db_result):
+    client, block = db_result
+    assert edit(client, block, {"pinpoint": "at para 1"}, access_token="wrong-token").status_code == 409
+    assert edit(client, block, {"pinpoint": "at para 1"}, item_id="unknown").status_code == 409
+    assert edit(client, block, {"made_up": "value"}).status_code == 409
+    assert edit(client, block, {}).status_code == 409
+    service.item_store._items[block["item_id"]]["expires"] = 0
+    assert edit(client, block, {"pinpoint": "at para 1"}).status_code == 409
+
+
+def test_legacy_citation_string_only_accepts_a_pinpoint(monkeypatch):
+    monkeypatch.setattr(service, "item_store", service.ItemStore())
+    block = service.citation_block("*Legacy v Formatter*, 2001 SCC 5.", "jurisprudence", warning=service.LEGACY_NOTE)
+    assert block["verified"] is False
+    assert [field["name"] for field in block["fields"]] == ["pinpoint"]
+    with TestClient(create_app(settings())) as client:
+        assert edit(client, block, {"style_of_cause": "Rewritten"}).status_code == 409
+        updated = edit(client, block, {"pinpoint": "at para 7"}).json()["blocks"][0]
+    assert updated["citation"] == "*Legacy v Formatter*, 2001 SCC 5 at para 7."

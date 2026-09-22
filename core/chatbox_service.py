@@ -1,8 +1,13 @@
-"""Small, stateless Chatbox beta adapter with server-owned candidate sets.
+"""Chatbox beta adapter with server-owned candidate sets and citation items.
 
 The UI is usable before the full conversation/revision project is complete.
 Only explicit fields are rendered; free-form model formatting is never used.
-Until field-level provenance migration is complete, results remain unverified.
+
+A finished citation is a server-owned item, not a string in the browser: the
+client holds an opaque id and posts field values, and the server re-renders
+from mcgill_rules.json and re-derives ``verified`` from per-field provenance.
+A citation is verified only when every rendered field is copied from one
+database record; a user-supplied field, including a pinpoint, makes it false.
 """
 
 from __future__ import annotations
@@ -31,6 +36,43 @@ def notice(message: str, level: str = "info") -> dict:
     return {"type": "notice", "message": message, "level": level}
 
 
+def schema_fields(source_type: str) -> list[dict]:
+    schema = schemas().get(source_type)
+    return list(schema["fields"]) if schema else []
+
+
+def _filled(values: dict) -> set:
+    return {name for name, value in values.items() if isinstance(value, str) and value.strip()}
+
+
+def missing_required(source_type: str, values: dict) -> list[dict]:
+    """Schema fields that still block a deterministic render, in asking order.
+
+    A ``required_any`` group contributes all of its members: the user picks
+    whichever one the source actually shows.
+    """
+    schema = schemas().get(source_type)
+    if schema is None:
+        return []
+    filled = _filled(values)
+    missing = [f for f in schema["fields"] if f.get("required") and f["name"] not in filled]
+    for options in schema.get("required_any", []):
+        if not filled & set(options):
+            missing += [f for f in schema["fields"] if f["name"] in options and f not in missing]
+    return missing
+
+
+def missing_summary(source_type: str, values: dict) -> str:
+    """The same gap, phrased for a person: required fields, then each either/or group."""
+    schema = schemas().get(source_type) or {}
+    filled = _filled(values)
+    labels = {f["name"]: f["label"] for f in schema.get("fields", [])}
+    parts = [f["label"] for f in schema.get("fields", []) if f.get("required") and f["name"] not in filled]
+    parts += ["或".join(labels[key] for key in options if key in labels)
+              for options in schema.get("required_any", []) if not filled & set(options)]
+    return "、".join(parts)
+
+
 def render_fields(source_type: str, fields: dict) -> str:
     """Literal segments + provided field values only. No guessed defaults."""
     schema = schemas().get(source_type)
@@ -44,12 +86,9 @@ def render_fields(source_type: str, fields: dict) -> str:
         if not isinstance(value, str) or len(value) > 2000:
             raise ValueError("字段必须是 2000 字以内的文本。")
         clean[key] = value.strip()
-    missing = [f["label"] for f in schema["fields"] if f.get("required") and not clean.get(f["name"])]
-    if missing:
-        raise ValueError("请补充：" + "、".join(missing))
-    for options in schema.get("required_any", []):
-        if not any(clean.get(key) for key in options):
-            raise ValueError("请提供中立引用号或报告书引用。")
+    gap = missing_summary(source_type, clean)
+    if gap:
+        raise ValueError("请补充：" + gap)
     if source_type == "website":
         parsed = urlsplit(clean["url"])
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -58,11 +97,151 @@ def render_fields(source_type: str, fields: dict) -> str:
     return text if text.endswith(".") else text + "."
 
 
-def citation_block(citation: str, source_type: str, from_database: bool = False, warning: str | None = None) -> dict:
-    return {"type": "citation_result", "citation": citation, "source_type": source_type,
-            "verified": False,
-            "warnings": [warning or ("来自数据库匹配；逐字段来源核验尚未完成，请对照原文。" if from_database
-                                     else "未经数据库核验，请对照原文。")]}
+# ── Editable citation items ───────────────────────────────────────────
+# A rendered citation is never edited in the browser. The client holds an
+# opaque item id plus a token and posts field values; the server re-renders
+# from mcgill_rules.json and re-derives `verified` from field provenance.
+
+ORIGIN_LABELS = {"database": "数据库记录", "user": "由你填写", "extracted": "摘自原文，待你核对"}
+DB_NOTE = "标注“数据库记录”的字段取自数据库记录，引文由程序按 McGill 规则拼接。"
+UNVERIFIED_NOTE = "未经数据库核验，请对照原文。"
+USER_FIELD_NOTE = "其中标记“由你填写”的内容不经数据库核验，整条因此标为未核验。"
+PINPOINT_LABEL = "定位引用（由你填写）"
+
+
+class ItemStore:
+    """Bounded, expiring store of server-owned citation items."""
+
+    def __init__(self, ttl: float = 1800, limit: int = 200):
+        self.ttl, self.limit = ttl, limit
+        self._items: dict = {}
+        self._lock = threading.Lock()
+
+    def add(self, *, source_type: str, fields: dict, from_database: bool = False,
+            base: str | None = None, warnings=()) -> tuple[str, str, dict]:
+        item_id, token = secrets.token_urlsafe(18), secrets.token_urlsafe(32)
+        item = {"source_type": source_type, "fields": copy.deepcopy(fields), "revision": 1,
+                "from_database": bool(from_database), "base": base,
+                "warnings": list(warnings), "user_edited": False}
+        with self._lock:
+            now = time.monotonic()
+            self._items = {k: v for k, v in self._items.items() if v["expires"] > now}
+            if len(self._items) >= self.limit:
+                self._items.pop(next(iter(self._items)))
+            self._items[item_id] = {"expires": now + self.ttl,
+                                    "token_hash": hashlib.sha256(token.encode()).digest(), "item": item}
+        return item_id, token, copy.deepcopy(item)
+
+    def update(self, item_id: str, token: str, revision: int, values: dict) -> dict:
+        """Apply user-supplied field values and bump the revision."""
+        with self._lock:
+            found = self._items.get(item_id)
+            if (not found or found["expires"] <= time.monotonic()
+                    or not hmac.compare_digest(found["token_hash"], hashlib.sha256(token.encode()).digest())):
+                raise ValueError("这条引文已过期或不属于本次会话，请重新查询。")
+            item = found["item"]
+            if revision != item["revision"]:
+                raise ValueError("这条引文已经改过一次，请用最新那条结果继续修改。")
+            # A legacy citation is one opaque string: only the pinpoint is editable.
+            allowed = {"pinpoint"} if item["base"] is not None else {f["name"] for f in schema_fields(item["source_type"])}
+            if not values or set(values) - allowed:
+                raise ValueError("包含此类型不支持的字段。")
+            for key, value in values.items():
+                if not isinstance(value, str) or len(value) > 2000:
+                    raise ValueError("字段必须是 2000 字以内的文本。")
+                value = value.strip()
+                if value:
+                    item["fields"][key] = {"value": value, "origin": "user"}
+                else:
+                    item["fields"].pop(key, None)
+            item["revision"] += 1
+            item["user_edited"] = True
+            found["expires"] = time.monotonic() + self.ttl
+            return copy.deepcopy(item)
+
+
+item_store = ItemStore()
+
+
+def item_values(item: dict) -> dict:
+    return {name: field["value"] for name, field in item["fields"].items()}
+
+
+def render_item(item: dict) -> str:
+    values = {name: value for name, value in item_values(item).items() if value}
+    if item["base"] is None:
+        return render_fields(item["source_type"], values)
+    pinpoint = values.get("pinpoint", "")
+    if not pinpoint:
+        return item["base"]
+    # The composition the original result card did in the browser, now server-side.
+    return re.sub(r"\.\s*$", "", item["base"]) + " " + pinpoint + "."
+
+
+def derive_verified(item: dict) -> bool:
+    """True only when every rendered field is copied from one database record."""
+    if item["base"] is not None or not item["from_database"] or item["user_edited"]:
+        return False
+    return all(field["origin"] == "database" for field in item["fields"].values() if field["value"])
+
+
+def _field_view(field: dict, item: dict) -> dict:
+    stored = item["fields"].get(field["name"]) or {}
+    origin = stored.get("origin", "")
+    return {"name": field["name"], "label": field["label"], "required": bool(field.get("required")),
+            "value": stored.get("value", ""), "origin": origin, "origin_label": ORIGIN_LABELS.get(origin, "")}
+
+
+def _editable_fields(item: dict) -> list[dict]:
+    if item["base"] is not None:
+        return [_field_view({"name": "pinpoint", "label": PINPOINT_LABEL}, item)]
+    return [_field_view(field, item) for field in schema_fields(item["source_type"])]
+
+
+def field_question(item_id: str, token: str, item: dict, message: str | None = None) -> dict:
+    """Ask for the fields that block the render, instead of guessing or reformatting."""
+    values = item_values(item)
+    missing = missing_required(item["source_type"], values)
+    known = [_field_view(field, item) for field in schema_fields(item["source_type"])
+             if values.get(field["name"]) and field not in missing]
+    return {"type": "field_question", "item_id": item_id, "access_token": token,
+            "revision": item["revision"], "source_type": item["source_type"],
+            "message": message or ("还差 " + missing_summary(item["source_type"], values) + " 才能拼出这条引文，请照原文填写。"),
+            "note": "你填写的内容不经数据库核验，结果会标记为未核验。原文里没有的内容请留空。",
+            "fields": [_field_view(field, item) for field in missing], "known": known}
+
+
+def _result_block(item_id: str, token: str, item: dict, citation: str) -> dict:
+    verified = derive_verified(item)
+    warnings = list(item["warnings"]) or [UNVERIFIED_NOTE]
+    if not verified and item["from_database"] and any(f["origin"] == "user" for f in item["fields"].values()):
+        warnings.append(USER_FIELD_NOTE)
+    return {"type": "citation_result", "citation": citation, "source_type": item["source_type"],
+            "verified": verified, "warnings": warnings, "item_id": item_id,
+            "access_token": token, "revision": item["revision"], "fields": _editable_fields(item)}
+
+
+def item_blocks(item_id: str, token: str, item: dict) -> list[dict]:
+    """Render an item, or ask for what is still missing."""
+    try:
+        return [_result_block(item_id, token, item, render_item(item))]
+    except ValueError as exc:
+        return [field_question(item_id, token, item, str(exc).replace("请补充：", "还差 ") + " 才能拼出这条引文。")]
+
+
+def citation_block(citation: str, source_type: str, from_database: bool = False,
+                   warning: str | None = None, *, fields: dict | None = None) -> dict:
+    """Store a finished citation as an editable item and return its result block.
+
+    ``fields`` carries per-field provenance for template-rendered citations.
+    Without it the citation is one opaque string from the original engine, and
+    only a pinpoint can be added.
+    """
+    warnings = [warning or (DB_NOTE if from_database and fields else UNVERIFIED_NOTE)]
+    item_id, token, item = item_store.add(
+        source_type=source_type, fields=fields or {}, from_database=from_database,
+        base=None if fields else citation, warnings=warnings)
+    return _result_block(item_id, token, item, citation)
 
 
 def route_input(text: str) -> tuple[str, str]:
@@ -132,6 +311,7 @@ candidate_store = CandidateStore()
 # formatting, government documents and every other format_citation rule.
 
 LEGACY_NOTE = "由原版流程生成：数据库检索后由模型按 McGill 规则库格式化。请对照原文核对。"
+EXTRACT_NOTE = "字段由模型从原文逐字摘取，引文由程序按 McGill 规则拼接；原文中找不到的内容已自动剔除。请对照原文核对。"
 
 
 def _run_legacy(handler, *args):
@@ -189,24 +369,25 @@ def record_blocks(item: dict) -> list[dict]:
             return [citation_block(citation, "bill", True)]
         return legacy_select_blocks(item)
     if item.get("statute_title"):
-        fields = {"title": item.get("statute_title", ""), "citation": item.get("citation", ""), "pinpoint": item.get("pinpoint") or ""}
-        source_type, pinpoint = "legislation", ""
+        source_type = "legislation"
+        values = {"title": item.get("statute_title", ""), "citation": item.get("citation", "")}
     elif item.get("style_of_cause"):
-        # Like the original API, a case pinpoint is returned separately so the
-        # user can edit it on the result card.
-        fields = {key: item.get(key) or "" for key in ("style_of_cause", "neutral_citation", "reporter")}
-        source_type, pinpoint = "jurisprudence", item.get("pinpoint") or ""
+        source_type = "jurisprudence"
+        values = {key: item.get(key) or "" for key in ("style_of_cause", "neutral_citation", "reporter")}
     else:
         return legacy_select_blocks(item)
+    fields = {key: {"value": value, "origin": "database"} for key, value in values.items() if value}
+    # A pinpoint answers "which part do you want to cite"; the record never
+    # supplies it, so it stays the user's field and keeps the result unverified.
+    if item.get("pinpoint"):
+        fields["pinpoint"] = {"value": item["pinpoint"], "origin": "user"}
     try:
-        block = citation_block(render_fields(source_type, fields), source_type, True)
+        citation = render_fields(source_type, {k: v["value"] for k, v in fields.items()})
     except ValueError:
         # e.g. the Charter: the record has a title but its full citation is a
         # fixed constitutional form that the legacy rules supply.
         return legacy_select_blocks(item)
-    if pinpoint:
-        block["pinpoint"] = pinpoint
-    return [block]
+    return [citation_block(citation, source_type, True, fields=fields)]
 
 
 def classify_query(text: str) -> dict:
@@ -499,27 +680,32 @@ def extracted_blocks(fields: dict, shadow: bool, *, webpage: bool = False) -> li
         hints = {"url": url, "title": fields.get("page_title") or "", "author": fields.get("author") or "",
                  "date": fields.get("date") or "", "newspaper": fields.get("site_name") or "",
                  "site": host[4:] if host.startswith("www.") else host}
-    citation, problem = _render_extracted(kind, raw_text, hints)
-    if citation is None and webpage and kind != "website":
+    values = _extracted_values(kind, raw_text, hints)
+    if webpage and kind != "website" and missing_required(kind, values):
         # An online source missing e.g. an outlet name is still a citable web page.
-        kind = "website"
-        citation, _ = _render_extracted(kind, raw_text, hints)
+        website_values = _extracted_values("website", raw_text, hints)
+        if not missing_required("website", website_values):
+            kind, values = "website", website_values
+    item_fields = {key: {"value": value, "origin": "extracted"} for key, value in values.items() if value}
+    try:
+        citation = render_fields(kind, values)
+    except ValueError:
+        citation = None
     if citation:
-        blocks.append(citation_block(citation, kind, warning=(
-            "字段由模型从原文逐字摘取，引文由程序按 McGill 规则拼接；原文中找不到的内容已自动剔除。请对照原文核对。")))
-    else:
-        # The strict template could not be filled; fall back to the original
-        # engine, which formats from the whole extracted record.
-        blocks.extend(legacy_format_blocks(fields, doc_type))
+        blocks.append(citation_block(citation, kind, fields=item_fields, warning=EXTRACT_NOTE))
     # The excerpt stays visible so every extracted value can be checked.
     blocks.append(notice("提取文本（请与原文核对）：\n" + excerpt))
+    if citation:
+        return blocks
+    # The strict template is short of a required field. Ask for it rather
+    # than hand the whole record to the free-form formatter: the model may
+    # not invent the value, but the user can read it off the source.
+    item_id, token, stored = item_store.add(source_type=kind, fields=item_fields)
+    blocks.append(field_question(item_id, token, stored))
     return blocks
 
 
-def _render_extracted(kind: str, raw_text: str, hints: dict) -> tuple[str | None, str]:
-    fields = extract_fields(kind, raw_text, hints)
+def _extracted_values(kind: str, raw_text: str, hints: dict) -> dict:
+    """Field values copied out of the source, restricted to this template."""
     allowed = {f["name"] for f in schemas()[kind]["fields"]}
-    try:
-        return render_fields(kind, {k: v for k, v in fields.items() if k in allowed}), ""
-    except ValueError as exc:
-        return None, str(exc).removeprefix("请补充：")
+    return {k: v for k, v in extract_fields(kind, raw_text, hints).items() if k in allowed}

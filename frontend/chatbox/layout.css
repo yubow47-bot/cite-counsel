@@ -12,9 +12,22 @@ body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
 .key-form button { border: 0; border-radius: 5px; background: var(--red); color: white; padding: 8px 10px; font: inherit; cursor: pointer; }
 .key-form small { color: var(--muted); line-height: 1.45; }
 .key-form textarea { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: white; font: 12px "Segoe UI", sans-serif; resize: vertical; }
-.pinpoint { margin-top: 12px; }
-.pinpoint input { width: 100%; max-width: 360px; padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: white; font: inherit; font-size: 14px; }
-.pinpoint input:focus { outline: 2px solid var(--red); outline-offset: 1px; }
+.question-message { margin: 0 0 10px; }
+.field-form { display: grid; gap: 11px; margin-top: 12px; }
+.field-row { display: grid; gap: 4px; }
+.field-label { color: var(--muted); font-size: 12px; }
+.field-origin { margin-left: 6px; padding: 1px 5px; border: 1px solid var(--line); border-radius: 4px; font-size: 11px; font-style: normal; }
+.field-hint { color: var(--muted); font-size: 12px; }
+.field-row input { width: 100%; max-width: 420px; padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: white; font: inherit; font-size: 14px; }
+.field-row input:focus { outline: 2px solid var(--red); outline-offset: 1px; }
+.field-submit { justify-self: start; border: 0; border-radius: 5px; background: var(--red); color: white; padding: 8px 14px; font: inherit; cursor: pointer; }
+.field-submit:hover:enabled { background: var(--red-dark); }
+.field-sources { margin-top: 12px; font-size: 13px; }
+.field-sources summary { color: var(--muted); cursor: pointer; }
+.source-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 4px 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.source-row b { grid-column: 1; font-weight: normal; }
+.source-row .field-label { grid-column: 1; }
+.source-row .field-origin { grid-column: 2; grid-row: 1 / span 2; }
 .link-button { border: 0; padding: 0; background: transparent; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; }
 .link-button:hover { color: var(--red); text-decoration: underline; }
 .rating { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
