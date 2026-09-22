@@ -68,26 +68,63 @@
     if (['website', 'webpage', 'newspaper', 'news_online', 'report', 'government_document', 'government_docs'].includes(st) || st.startsWith('gov.')) return '如 at para 6 或小标题（非官方）';
     return '如 at para / s / art / at 页码';
   }
-  function pinpointEditor(blockData, base, onChange) {
-    const row = el('div', 'pinpoint');
-    const field = el('input');
-    field.maxLength = 200;
-    field.placeholder = pinpointPlaceholder(blockData.source_type);
-    field.setAttribute('aria-label', '定位引用');
-    field.value = blockData.pinpoint || '';
-    field.oninput = () => onChange(field.value.trim());
-    if (field.value) row.append(field);
-    else {
-      const open = el('button', 'link-button', '＋ 添加定位引用（可选）');
-      open.type = 'button';
-      open.onclick = () => { open.replaceWith(field); field.focus(); };
-      row.append(open);
+  // Fields are edited on the server: the browser posts values and the server
+  // re-renders from mcgill_rules.json. Nothing is assembled here.
+  function fieldRow(field, blockData) {
+    const original = field.value || '';
+    const row = el('label', 'field-row');
+    const label = el('span', 'field-label', field.label + (field.required ? ' ·必填' : ''));
+    if (field.origin_label) label.append(el('em', 'field-origin', field.origin_label));
+    const input = el('input');
+    input.maxLength = 2000;
+    input.value = original;
+    if (field.name === 'pinpoint') input.placeholder = pinpointPlaceholder(blockData.source_type);
+    row.append(label, input);
+    if (field.name === 'pinpoint' && !original && PINPOINT_PATTERNS.some(re => re.test(blockData.citation || ''))) {
+      row.append(el('small', 'field-hint', '这条引文可能已包含定位引用，填写前请先核对。'));
     }
-    if (!blockData.pinpoint && PINPOINT_PATTERNS.some(re => re.test(base))) {
-      row.append(el('p', 'result-note', '这条引文可能已包含定位引用，添加前请先核对。'));
+    return {row, input, name: field.name, original};
+  }
+  function fieldForm(blockData, fields, submitLabel) {
+    const form = el('form', 'field-form');
+    const rows = fields.filter(field => field && field.name).map(field => fieldRow(field, blockData));
+    rows.forEach(({row}) => form.append(row));
+    const submit = el('button', 'field-submit', submitLabel);
+    submit.type = 'submit';
+    form.append(submit);
+    form.onsubmit = async event => {
+      event.preventDefault();
+      if (busy) return;
+      // Only changed fields are sent, so editing a pinpoint cannot relabel a
+      // database field as user-provided.
+      const values = {};
+      for (const {input, name, original} of rows) {
+        const value = input.value.trim();
+        if (value !== original) values[name] = value;
+      }
+      if (!Object.keys(values).length) return toast('还没有任何改动。');
+      const ok = await run('/api/chatbox/items/fields', json({
+        item_id: blockData.item_id, access_token: blockData.access_token,
+        revision: blockData.revision, fields: values,
+      }));
+      // The item now has a new revision, so this form is spent: point at the
+      // fresh result instead of leaving a dead button behind.
+      if (ok) form.replaceWith(el('p', 'result-note', '已生成新版本，请在下方最新结果上继续修改。'));
+    };
+    return form;
+  }
+  function sourceList(summary, fields) {
+    const shown = (fields || []).filter(field => field && field.value && field.origin_label);
+    if (!shown.length) return null;
+    const details = el('details', 'field-sources');
+    details.append(el('summary', '', summary));
+    for (const field of shown) {
+      const row = el('div', 'source-row');
+      row.append(el('span', 'field-label', field.label), el('b', '', field.value),
+                 el('em', 'field-origin', field.origin_label));
+      details.append(row);
     }
-    row.append(el('p', 'result-note', '定位引用由你填写，未经数据库核验。'));
-    return row;
+    return details;
   }
   async function sendFeedback(body) {
     try {
@@ -126,29 +163,40 @@
         const card = block(el('section'), 'citation');
         const header = el('header');
         const verified = blockData.verified === true;
-        header.append(el('span', verified ? 'verified' : 'unverified', verified ? '已核验' : '未核验 · 请核对原文'));
+        header.append(el('span', verified ? 'verified' : 'unverified',
+                         verified ? '已核验 · 字段取自数据库记录' : '未核验 · 请核对原文'));
         const copy = el('button', 'copy', '复制引文');
         copy.type = 'button';
         header.append(copy);
-        const base = blockData.citation || '';
+        const citation = blockData.citation || '';
         const sourceInput = lastInput;
-        let pinpoint = (blockData.pinpoint || '').trim();
-        // Same composition as the original result card: strip the final
-        // period, append the pinpoint, re-add the period.
-        const fullCitation = () => pinpoint ? base.replace(/\.\s*$/, '') + ' ' + pinpoint + '.' : base;
         const content = el('div', 'citation-text');
-        const paint = () => {
-          content.replaceChildren();
-          // Only paired italic markers are recognized; data is never HTML.
-          for (const part of fullCitation().split(/(\*[^*]+\*)/g)) content.append(part.startsWith('*') && part.endsWith('*') && part.length > 2
-            ? el('em', '', part.slice(1, -1)) : document.createTextNode(part));
-        };
-        paint();
-        copy.onclick = () => copyCitation(fullCitation());
+        // Only paired italic markers are recognized; data is never HTML.
+        for (const part of citation.split(/(\*[^*]+\*)/g)) content.append(part.startsWith('*') && part.endsWith('*') && part.length > 2
+          ? el('em', '', part.slice(1, -1)) : document.createTextNode(part));
+        copy.onclick = () => copyCitation(citation);
         card.append(header, content);
         if (Array.isArray(blockData.warnings)) blockData.warnings.forEach(warning => card.append(el('p', 'result-note', warning)));
-        card.append(pinpointEditor(blockData, base, value => { pinpoint = value; paint(); }));
-        card.append(ratingRow(sourceInput, fullCitation, blockData.source_type));
+        const sources = sourceList('字段来源', blockData.fields);
+        if (sources) card.append(sources);
+        const editable = (blockData.fields || []).filter(field => field && field.name);
+        if (blockData.item_id && editable.length) {
+          const open = el('button', 'link-button', '✎ 修改字段 / 添加定位引用');
+          open.type = 'button';
+          open.onclick = () => open.replaceWith(fieldForm(blockData, editable, '重新生成引文'));
+          card.append(open);
+          card.append(el('p', 'result-note', '改动后由服务端重新按 McGill 规则拼接；你填写的内容不经核验。'));
+        }
+        card.append(ratingRow(sourceInput, () => citation, blockData.source_type));
+        break;
+      }
+      case 'field_question': {
+        const card = block(el('section'), 'field-question');
+        card.append(el('p', 'question-message', blockData.message));
+        const known = sourceList('已从原文取到的字段', blockData.known);
+        if (known) card.append(known);
+        card.append(fieldForm(blockData, blockData.fields, '生成引文'));
+        if (blockData.note) card.append(el('p', 'result-note', blockData.note));
         break;
       }
       case 'candidate_list': {

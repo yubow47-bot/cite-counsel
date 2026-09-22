@@ -37,6 +37,14 @@ class Selection(BaseModel):
     candidate_id: str = Field(min_length=1, max_length=64)
 
 
+class FieldUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    item_id: str = Field(min_length=1, max_length=64)
+    access_token: str = Field(min_length=1, max_length=128)
+    revision: int = Field(ge=1, le=500)
+    fields: dict[str, str]
+
+
 class Feedback(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: str = Field(default="rating", max_length=20)
@@ -175,6 +183,21 @@ def create_app(settings: dict | None = None) -> FastAPI:
         except Exception as exc:
             logger.warning("Candidate selection failed: %s", type(exc).__name__)
             return failure("候选处理未完成，请重新查询。", 502)
+
+    @app.post("/api/chatbox/items/fields")
+    def item_fields(body: FieldUpdate):
+        """Apply user-supplied field values to a stored item and re-render it.
+
+        Deterministic and free: the citation is assembled from
+        mcgill_rules.json, so no provider is called and no budget is spent.
+        """
+        if len(body.fields) > 20 or any(len(name) > 64 for name in body.fields):
+            return failure("提交的字段过多。")
+        try:
+            item = service.item_store.update(body.item_id, body.access_token, body.revision, body.fields)
+        except ValueError as exc:
+            return failure(str(exc), 409)
+        return success(service.item_blocks(body.item_id, body.access_token, item))
 
     @app.post("/api/chatbox/feedback")
     def feedback(body: Feedback):

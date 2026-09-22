@@ -77,10 +77,21 @@ def test_record_the_template_cannot_render_goes_to_original_formatter(monkeypatc
     assert legacy._candidate_signature_valid(seen[0])
 
 
-def test_case_record_keeps_pinpoint_editable():
+def test_case_record_renders_pinpoint_as_a_user_field():
+    """A pinpoint comes from the request, never the record, so it keeps the result unverified."""
     block = service.record_blocks({"style_of_cause": "R v Gladue", "reporter": "[1999] 1 SCR 688",
                                    "pinpoint": "at para 93", "verified": True})[0]
-    assert block["citation"] == "*R v Gladue*, [1999] 1 SCR 688." and block["pinpoint"] == "at para 93"
+    assert block["citation"] == "*R v Gladue*, [1999] 1 SCR 688 at para 93."
+    assert block["verified"] is False
+    origins = {field["name"]: field["origin"] for field in block["fields"] if field["value"]}
+    assert origins == {"style_of_cause": "database", "reporter": "database", "pinpoint": "user"}
+
+
+def test_case_record_without_a_pinpoint_is_verified_field_by_field():
+    block = service.record_blocks({"style_of_cause": "R v Gladue", "reporter": "[1999] 1 SCR 688",
+                                   "verified": True})[0]
+    assert block["citation"] == "*R v Gladue*, [1999] 1 SCR 688." and block["verified"] is True
+    assert all(field["origin"] == "database" for field in block["fields"] if field["value"])
 
 
 def test_unsupported_document_type_uses_original_engine(monkeypatch, tmp_path):
