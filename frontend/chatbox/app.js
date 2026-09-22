@@ -8,7 +8,7 @@
   let config = null, selectedFile = null, controller = null, generation = 0, busy = false;
   // What the user is looking at, sent with each turn so "the second one" or
   // "the year is wrong" has something on the server to refer to.
-  let activeItem = null, activeCandidates = null;
+  let activeItem = null, activeCandidates = null, session = null;
 
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -177,6 +177,27 @@
         if (blockData.note) card.append(el('p', 'result-note', blockData.note));
         break;
       }
+      case 'type_question': {
+        const card = block(el('section'), 'type-question');
+        card.append(el('p', 'question-message', blockData.message));
+        const row = el('div', 'type-options');
+        for (const option of blockData.options || []) {
+          const button = el('button', 'type-option', option.label);
+          button.type = 'button';
+          button.onclick = async () => {
+            if (busy) return;
+            const ok = await run('/api/chatbox/types', json({
+              session_id: blockData.session_id, session_token: blockData.session_token,
+              source_type: option.source_type,
+            }));
+            if (ok) { button.dataset.selected = 'true'; button.disabled = true; }
+          };
+          row.append(button);
+        }
+        card.append(row);
+        card.append(el('p', 'result-note', '也可以直接把链接、DOI、ISBN 发给我，或上传文件、截图。'));
+        break;
+      }
       case 'candidate_list': {
         candidateSets.set(blockData.candidate_set_id, blockData.access_token);
         activeCandidates = {candidate_set_id: blockData.candidate_set_id, candidate_token: blockData.access_token};
@@ -224,6 +245,7 @@
       try { data = await response.json(); } catch { throw new Error('服务暂时没有返回有效结果，请检查是否仍在运行。'); }
       if (ownGeneration !== generation) return false;
       if (!response.ok || data.ok === false) throw new Error(data.message || data.blocks?.[0]?.message || '请求未完成，请检查输入后重试。');
+      if (data.session) session = {session_id: data.session.id, session_token: data.session.token};
       typing.remove(); (data.blocks || []).forEach(render);
       transcript.lastElementChild?.scrollIntoView({block: 'end', behavior: 'smooth'});
       return true;
@@ -251,7 +273,7 @@
     if (file) {
       const body = new FormData(); body.append('file', file); body.append('input', text);
       run('/api/chatbox/files', {method: 'POST', body}, () => submit(text, file));
-    } else run('/api/chatbox/turns', json({input: text, ...activeItem, ...activeCandidates}), () => submit(text));
+    } else run('/api/chatbox/turns', json({input: text, ...activeItem, ...activeCandidates, ...session}), () => submit(text));
   }
   function send() {
     const text = input.value.trim();
@@ -261,7 +283,7 @@
   }
   function clearChat() {
     generation++; controller?.abort(); controller = null;
-    candidateSets.clear(); activeItem = null; activeCandidates = null;
+    candidateSets.clear(); activeItem = null; activeCandidates = null; session = null;
     transcript.replaceChildren(); $('empty-state').hidden = false;
     removeFile(); input.value = ''; autoGrow(); setBusy(false); input.focus();
   }

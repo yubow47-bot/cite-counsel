@@ -13,6 +13,10 @@ body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
 .key-form small { color: var(--muted); line-height: 1.45; }
 .key-form textarea { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: white; font: 12px "Segoe UI", sans-serif; resize: vertical; }
 .question-message { margin: 0 0 10px; }
+.type-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.type-option { border: 1px solid var(--line); border-radius: 6px; background: white; padding: 7px 14px; font: inherit; font-size: 14px; cursor: pointer; }
+.type-option:hover:enabled { border-color: var(--red); color: var(--red); }
+.type-option[data-selected="true"] { border-color: var(--red); background: var(--rose); }
 .field-form { display: grid; gap: 11px; margin-top: 12px; }
 .field-row { display: grid; gap: 4px; }
 .field-label { color: var(--muted); font-size: 12px; }

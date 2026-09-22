@@ -249,3 +249,130 @@ def test_the_prompt_never_carries_the_rule_templates(monkeypatch):
     assert prompts and "segments" not in prompts[0]
     for segment in service.schemas()["book"]["segments"]:
         assert json.dumps(segment) not in prompts[0]
+
+
+# ── A failed lookup is a conversation, not a form ─────────────────────
+
+
+def dead_end_context(monkeypatch, query="The Early Upanisads Olivelle"):
+    """A session whose lookup just came back empty."""
+    monkeypatch.setattr(conversation, "conversation_store", conversation.ConversationStore())
+    context = service.turn_context()
+    service.ensure_session(context)
+    service.remember(context, "user", query)
+    return context
+
+
+def use_resolve_jev(monkeypatch, action, confidence=0.9):
+    probabilities = {key: 0.0 for key in conversation.RESOLVE_ACTIONS}
+    probabilities[action] = 1.0
+
+    class Stub:
+        def __init__(self, *a, **k):
+            pass
+
+        def decide_choice(self, state, question):
+            assert question.question_id == "resolve_action.v1"
+            return DecisionResult(question.question_id, action, probabilities, confidence, "jev-latest", 90.0)
+
+        def close(self):
+            pass
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    monkeypatch.setattr(jev_client, "JevClient", Stub)
+
+
+def test_a_dead_end_asks_before_assuming_a_type(monkeypatch):
+    use_resolve_jev(monkeypatch, "ask_source_type")
+    use_model(monkeypatch, {"options": ["book", "journal_article"],
+                            "message": "没查到这条。它是一本书，还是期刊上的一篇文章？"})
+    context = dead_end_context(monkeypatch)
+    blocks = service.fallback_blocks("case_name", "The Early Upanisads Olivelle", context)
+    assert [b["type"] for b in blocks] == ["type_question"]
+    assert blocks[0]["message"] == "没查到这条。它是一本书，还是期刊上的一篇文章？"
+    assert [o["source_type"] for o in blocks[0]["options"]] == ["book", "journal_article"]
+    assert [o["label"] for o in blocks[0]["options"]] == ["书籍", "期刊论文"]
+    # Crucially: no form was pushed at the user.
+    assert "field_question" not in [b["type"] for b in blocks]
+
+
+def test_the_agent_may_commit_to_a_type_when_the_query_shows_it(monkeypatch):
+    use_resolve_jev(monkeypatch, "set_source_type")
+    use_model(monkeypatch, {"source_type": "book", "message": "没查到这条，我先按一本书来处理；不对的话告诉我。"})
+    context = dead_end_context(monkeypatch)
+    blocks = service.fallback_blocks("case_name", "The Early Upanisads Olivelle", context)
+    question = next(b for b in blocks if b["type"] == "field_question")
+    assert question["source_type"] == "book"
+    assert question["message"] == "没查到这条，我先按一本书来处理；不对的话告诉我。"
+
+
+def test_a_type_the_renderer_does_not_have_falls_back_to_asking(monkeypatch):
+    use_resolve_jev(monkeypatch, "set_source_type")
+    use_model(monkeypatch, {"source_type": "manuscript", "message": "按手稿处理。"})
+    context = dead_end_context(monkeypatch)
+    context.unresolved = {"query": "a manuscript", "route": "case_name"}
+    plan = conversation.plan_resolution("a manuscript", context)
+    assert plan.action == "ask_source_type" and plan.source_type is None and plan.options
+
+
+def test_the_agent_can_ask_for_a_link_or_a_photo_instead(monkeypatch):
+    use_resolve_jev(monkeypatch, "request_evidence")
+    use_model(monkeypatch, {"message": "没查到。有判决书链接，或者能拍一张首页吗？"})
+    context = dead_end_context(monkeypatch)
+    blocks = service.fallback_blocks("case_name", "Made Up v Nonexistent", context)
+    assert blocks[0]["type"] == "notice"
+    assert blocks[0]["message"] == "没查到。有判决书链接，或者能拍一张首页吗？"
+
+
+def test_the_users_answer_settles_the_type_and_opens_that_form(monkeypatch):
+    """Turn two: the user replies in their own words, not by clicking."""
+    use_resolve_jev(monkeypatch, "set_source_type")
+    use_model(monkeypatch, {"source_type": "book", "message": "好，按书来处理。"})
+    context = dead_end_context(monkeypatch)
+    conversation.conversation_store.set_unresolved(
+        context.session_id, context.session_token, {"query": "The Early Upanisads", "route": "case_name"})
+    context.unresolved = {"query": "The Early Upanisads", "route": "case_name"}
+
+    blocks = service.planned_blocks("是本书", context)
+    question = next(b for b in blocks if b["type"] == "field_question")
+    assert question["source_type"] == "book"
+    # Settled: the conversation is no longer waiting on a type.
+    assert conversation.conversation_store.get(context.session_id, context.session_token)["unresolved"] is None
+
+
+def test_clicking_a_proposed_type_needs_no_model_call(monkeypatch):
+    monkeypatch.setattr(conversation, "conversation_store", conversation.ConversationStore())
+    monkeypatch.setattr(service, "item_store", service.ItemStore())
+    import llm_api.deepseek_api as deepseek
+    monkeypatch.setattr(deepseek, "ask_deepseek", lambda *a, **kw: pytest.fail("a click must not call a model"))
+    context = service.turn_context()
+    service.ensure_session(context)
+    question = service.open_source_type(context, "journal_article")[0]
+    assert question["type"] == "field_question" and question["source_type"] == "journal_article"
+
+
+def test_without_an_agent_the_dead_end_degrades_instead_of_hanging(monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    context = dead_end_context(monkeypatch)
+    blocks = service.fallback_blocks("case_name", "Made Up v Nonexistent", context)
+    assert blocks[0]["type"] == "field_question" and blocks[0]["message"] == service.OFFLINE_FALLBACK
+
+
+def test_the_agent_remembers_what_was_already_said(monkeypatch):
+    use_resolve_jev(monkeypatch, "ask_source_type")
+    prompts = use_model(monkeypatch, {"options": ["book"], "message": "是书吗？"})
+    context = dead_end_context(monkeypatch)
+    service.remember(context, "assistant", "没查到这条，它是哪一类资料？")
+    service.remember(context, "user", "是 1998 年出版的")
+    context.history = conversation.conversation_store.get(context.session_id, context.session_token)["history"]
+    service.fallback_blocks("case_name", "The Early Upanisads", context)
+    assert prompts and "是 1998 年出版的" in prompts[0] and "没查到这条，它是哪一类资料？" in prompts[0]
+
+
+def test_the_resolution_prompt_carries_no_rule_templates(monkeypatch):
+    use_resolve_jev(monkeypatch, "ask_source_type")
+    prompts = use_model(monkeypatch, {"options": ["book"], "message": "是书吗？"})
+    context = dead_end_context(monkeypatch)
+    service.fallback_blocks("case_name", "The Early Upanisads", context)
+    for segment in service.schemas()["book"]["segments"]:
+        assert json.dumps(segment) not in prompts[0]

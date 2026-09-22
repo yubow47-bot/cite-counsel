@@ -354,34 +354,56 @@ def _run_legacy(handler, *args):
     return result
 
 
-# ── Manual fallback when nothing can be verified ───────────────────────
-# A dead end here means "not in a database we check automatically", not "does
-# not exist". Route (from classify_query/classify_and_normalize) or kind
-# (doi/isbn, which the legacy /extract/url envelope's own route does not
-# distinguish) tells us which template the user was plausibly trying to cite,
-# so the fallback opens exactly that blank form instead of a bare failure
-# message. A route with no template of its own (concept, bill) still gets the
-# link/file suggestions, just without a form to fill.
+# ── A lookup that found nothing hands the turn to the agent ────────────
+# "Not in a database we check automatically" is not "does not exist", and it is
+# not something the server can resolve by itself: which kind of source this is
+# is a question for the person who has it. So the dead end does not guess a
+# template and push a form across -- it records what failed and lets the agent
+# take the conversation from there.
+#
+# ROUTE_TEMPLATES is only the degraded path, used when the agent cannot run at
+# all (no JEV/model configured, or both calls failed). Handing over a blank
+# form uninvited is worse than a dead end, but better than nothing.
 ROUTE_TEMPLATES = {"case_name": "jurisprudence", "citation_number": "jurisprudence",
                    "legislation": "legislation", "doi": "journal_article", "isbn": "book"}
 
-FALLBACK_GUIDANCE = ("没能在数据库里核实这条。你可以把判决全文链接、DOI 或 ISBN 发给我，"
-                    "上传文件或该资料的截图，或者直接在下面手动填写。")
-FALLBACK_GUIDANCE_NO_FORM = ("没能在数据库里核实这条。你可以把判决全文链接、DOI 或 ISBN 发给我，"
-                            "或者上传文件、该资料的截图。")
+OFFLINE_FALLBACK = ("没能在数据库里核实这条。你可以把判决全文链接、DOI 或 ISBN 发给我，"
+                   "上传文件或该资料的截图，或者直接在下面手动填写。")
+OFFLINE_FALLBACK_NO_FORM = ("没能在数据库里核实这条。你可以把判决全文链接、DOI 或 ISBN 发给我，"
+                           "或者上传文件、该资料的截图。")
 
 
-def fallback_blocks(route: str) -> list[dict]:
-    """A dead-end search becomes concrete next steps instead of a bare failure."""
+def offline_fallback_blocks(route: str) -> list[dict]:
+    """Deterministic last resort for when the agent is unavailable."""
     source_type = ROUTE_TEMPLATES.get(route)
     if source_type is None:
-        return [notice(FALLBACK_GUIDANCE_NO_FORM, "warning")]
+        return [notice(OFFLINE_FALLBACK_NO_FORM, "warning")]
     item_id, token, item = item_store.add(source_type=source_type, fields={})
     all_fields = [f["name"] for f in schema_fields(source_type)]
-    return [field_question(item_id, token, item, FALLBACK_GUIDANCE, ask=all_fields)]
+    return [field_question(item_id, token, item, OFFLINE_FALLBACK, ask=all_fields)]
 
 
-def legacy_blocks(envelope: dict, *, manual_fallback: bool = True, fallback_route: str | None = None) -> list[dict]:
+def fallback_blocks(route: str, query: str = "", context=None) -> list[dict]:
+    """Hand a dead-end lookup to the agent, which opens the conversation."""
+    from core.conversation import conversation_store, plan_resolution
+    if context is None or not context.session_id:
+        return offline_fallback_blocks(route)
+    unresolved = {"query": query or "", "route": route}
+    conversation_store.set_unresolved(context.session_id, context.session_token, unresolved)
+    context.unresolved = unresolved
+    try:
+        plan = plan_resolution(query, context)
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("Resolution planner failed: %s", type(exc).__name__)
+        plan = None
+    if plan is None:
+        return offline_fallback_blocks(route)
+    return plan_blocks(plan, context) or offline_fallback_blocks(route)
+
+
+def legacy_blocks(envelope: dict, *, manual_fallback: bool = True, fallback_route: str | None = None,
+                  query: str = "", context=None) -> list[dict]:
     """Translate a legacy API envelope into Chatbox blocks.
 
     manual_fallback=False keeps a dead end as a bare notice: used where the
@@ -405,14 +427,15 @@ def legacy_blocks(envelope: dict, *, manual_fallback: bool = True, fallback_rout
     if status == "needs_selection" and data.get("candidates"):
         return [candidate_store.add(data["candidates"], presigned=True)]
     if status == "unsupported" and manual_fallback:
-        return fallback_blocks(fallback_route or envelope.get("route") or "")
+        return fallback_blocks(fallback_route or envelope.get("route") or "", query, context)
     reason = (envelope.get("error") or {}).get("reason") or "本次没有生成引文，请换个写法再试。"
     return [notice(reason, "error" if status == "error" else "warning")]
 
 
-def legacy_query_blocks(text: str) -> list[dict]:
+def legacy_query_blocks(text: str, context=None) -> list[dict]:
     from api.main import CitationInput, citation_query
-    return legacy_blocks(_run_legacy(citation_query, CitationInput(input=text), None))
+    return legacy_blocks(_run_legacy(citation_query, CitationInput(input=text), None),
+                         query=text, context=context)
 
 
 def legacy_select_blocks(candidate: dict) -> list[dict]:
@@ -459,14 +482,17 @@ def record_blocks(item: dict) -> list[dict]:
 # ── LLM-planned conversation turns ────────────────────────────────────
 
 
-def turn_context(item_id=None, item_token=None, candidate_set_id=None, candidate_token=None):
-    """Load the server-owned objects a conversational turn may refer to.
+def turn_context(item_id=None, item_token=None, candidate_set_id=None, candidate_token=None,
+                 session_id=None, session_token=None):
+    """Load the server-owned state a conversational turn may refer to.
 
     Ids and tokens come from the client, so anything that does not check out is
-    simply absent from the context: the planner then has nothing to act on and
-    the turn falls back to the ordinary query pipeline.
+    simply absent from the context. For an item or a candidate set that means
+    the planner has nothing to act on and the turn falls back to the ordinary
+    query pipeline; for a session it means the turn proceeds without memory,
+    the way a fresh conversation would.
     """
-    from core.conversation import TurnContext
+    from core.conversation import TurnContext, conversation_store
     context = TurnContext()
     if item_id and item_token:
         try:
@@ -479,6 +505,11 @@ def turn_context(item_id=None, item_token=None, candidate_set_id=None, candidate
         if listed:
             context.candidate_set_id, context.candidate_token = candidate_set_id, candidate_token
             context.candidates = listed
+    session = conversation_store.get(session_id, session_token)
+    if session is not None:
+        context.session_id, context.session_token = session_id, session_token
+        context.history = session.get("history") or []
+        context.unresolved = session.get("unresolved")
     return context
 
 
@@ -494,9 +525,63 @@ def retype_item(item: dict, source_type: str):
                           from_database=item["from_database"], warnings=item["warnings"])
 
 
+def ensure_session(context) -> None:
+    """Give this turn a conversation to belong to, if it doesn't have one yet."""
+    from core.conversation import conversation_store
+    if context.session_id:
+        return
+    session_id, token, _ = conversation_store.start()
+    context.session_id, context.session_token = session_id, token
+
+
+def remember(context, role: str, text: str) -> None:
+    from core.conversation import conversation_store
+    conversation_store.append(context.session_id, context.session_token, role, text)
+
+
+def open_source_type(context, source_type: str, message: str | None = None) -> list[dict]:
+    """Start collecting the fields for an agreed source type.
+
+    The type is settled by now -- either the agent read it off the conversation
+    or the user picked it -- so this is the deterministic half: create the item
+    and ask for that template's fields.
+    """
+    from core.conversation import conversation_store
+    if source_type not in schemas():
+        return [notice("这个类型还不支持确定性组装，换一种方式试试。", "warning")]
+    item_id, token, item = item_store.add(source_type=source_type, fields={})
+    conversation_store.set_unresolved(context.session_id, context.session_token, None)
+    conversation_store.append(context.session_id, context.session_token, "assistant", message or "")
+    all_fields = [f["name"] for f in schema_fields(source_type)]
+    return [field_question(item_id, token, item, message or None, ask=all_fields)]
+
+
+def type_question(context, options: list[str], message: str) -> dict:
+    """Offer the kinds of source the agent thinks this could be, as one click each."""
+    from core.conversation import SOURCE_TYPES
+    return {"type": "type_question", "message": message,
+            "session_id": context.session_id, "session_token": context.session_token,
+            "options": [{"source_type": name, "label": SOURCE_TYPES[name][0]}
+                        for name in options if name in SOURCE_TYPES]}
+
+
 def plan_blocks(plan, context) -> list[dict] | None:
     """Carry out a validated plan. None means "fall back to the query pipeline"."""
+    from core.conversation import conversation_store
     note = [notice(plan.message)] if plan.message else []
+
+    # ── Moves available while a failed lookup is still unresolved ──
+    if plan.action == "set_source_type":
+        return open_source_type(context, plan.source_type, plan.message)
+    if plan.action == "ask_source_type":
+        message = plan.message or "没能查到这条。先确认一下它是哪一类资料？"
+        conversation_store.append(context.session_id, context.session_token, "assistant", message)
+        return [type_question(context, plan.options, message)]
+    if plan.action == "request_evidence":
+        message = plan.message or "没能查到这条。有链接、DOI、ISBN，或者能拍一张原文的照片吗？"
+        conversation_store.append(context.session_id, context.session_token, "assistant", message)
+        return [notice(message, "warning")]
+
     if plan.action == "provide_fields":
         try:
             item = item_store.update(context.item_id, context.item_token,
@@ -615,7 +700,7 @@ def jev_route(text: str) -> str | None:
     return decision.selected_id if adopted else None
 
 
-def query_blocks(text: str) -> list[dict]:
+def query_blocks(text: str, context=None) -> list[dict]:
     import logging
     from local_tools.citation_search import search_citation
     try:
@@ -623,19 +708,19 @@ def query_blocks(text: str) -> list[dict]:
         records = search_citation(text, classification=classification)
     except Exception as exc:
         logging.getLogger(__name__).warning("Chatbox fast path failed, using legacy: %s", type(exc).__name__)
-        return legacy_query_blocks(text)
+        return legacy_query_blocks(text, context)
     verified = [record for record in records if record.get("verified") is True]
     if not verified:
         # The fast path searches the literal input. The original pipeline also
         # lets the model normalize it (abbreviations, "Regina", nicknames) and
         # its results are still database-verified, so run it before giving up.
-        return legacy_query_blocks(text)
+        return legacy_query_blocks(text, context)
     if len(verified) > 1:
         return [candidate_store.add(verified)]
     return record_blocks(verified[0])
 
 
-def identifier_blocks(kind: str, value: str) -> list[dict]:
+def identifier_blocks(kind: str, value: str, context=None) -> list[dict]:
     if kind == "doi":
         from local_tools.crossref_api import fetch_crossref, build_journal_citation
         record = fetch_crossref(value)
@@ -652,7 +737,8 @@ def identifier_blocks(kind: str, value: str) -> list[dict]:
     # /extract/url's envelope reports route "url" for every input shape, so the
     # manual-fill fallback needs to be told explicitly which template a failed
     # DOI or ISBN lookup should open.
-    return legacy_blocks(_run_legacy(extract_url, UrlInput(**{kind: value})), fallback_route=kind)
+    return legacy_blocks(_run_legacy(extract_url, UrlInput(**{kind: value})), fallback_route=kind,
+                         query=value, context=context)
 
 
 def warm_up() -> dict:
