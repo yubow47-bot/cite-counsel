@@ -59,10 +59,12 @@ def _get_api_key() -> str:
     """Resolve the API key for the configured completions endpoint.
 
     DeepSeek direct -> DEEPSEEK_API_KEY.  Any custom endpoint (OpenRouter,
-    etc.) -> OPENROUTER_API_KEY, falling back to LLM_API_KEY.
+    etc.) -> a per-request key set via request_credentials.use_credentials
+    for the duration of this call, falling back to OPENROUTER_API_KEY / LLM_API_KEY.
     """
     if COMPLETIONS_URL != DEEPSEEK_API_URL:
-        key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("LLM_API_KEY") or ""
+        from llm_api.request_credentials import openrouter_key
+        key = openrouter_key()
         if not key:
             raise ValueError(
                 "LLM_COMPLETIONS_URL is set but no key found. "

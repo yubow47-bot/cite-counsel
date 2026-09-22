@@ -542,8 +542,8 @@ def jev_choose(question_id: str, instructions: str, criteria: dict, state: dict)
     Every answer is appended to the local calibration log so the provisional
     threshold can later be tuned from real inputs.
     """
-    import os
-    if not os.getenv("TYPESAFE_API_KEY", "").strip():
+    from llm_api.request_credentials import typesafe_key
+    if not typesafe_key():
         return None, False
     from core.decisions.client import DecisionError
     from core.decisions.jev_client import JevClient
@@ -728,7 +728,8 @@ def extract_fields(kind: str, raw_text: str, hints: dict | None = None) -> dict:
     required = {f["name"] for f in schemas().get(kind, {}).get("fields", []) if f.get("required")}
     if required and required <= set(found):
         missing = []  # Page metadata already covers the citation; skip the model call.
-    if missing and (os.getenv("OPENROUTER_API_KEY") or os.getenv("LLM_API_KEY")):
+    from llm_api.request_credentials import openrouter_key
+    if missing and openrouter_key():
         prompt = ("Copy citation fields out of the document text below. Return ONLY a JSON object with exactly these keys:\n"
                   + "\n".join(f'- "{name}": {meanings[name]}' for name in missing)
                   + "\nCopy each value exactly as written in the text. Use \"\" when the text does not contain it. "
@@ -751,7 +752,7 @@ def extract_fields(kind: str, raw_text: str, hints: dict | None = None) -> dict:
 
 
 def extracted_blocks(fields: dict, shadow: bool, *, webpage: bool = False) -> list[dict]:
-    import os
+    from llm_api.request_credentials import typesafe_key
     raw_text = fields.get("raw_text") or ""
     if "error" in fields or not raw_text.strip():
         return [notice("未能提取可用正文。请尝试更清晰的文件，或换一个可以直接打开的链接。", "warning")]
@@ -773,7 +774,7 @@ def extracted_blocks(fields: dict, shadow: bool, *, webpage: bool = False) -> li
                        "latency_ms": round(decision.latency_ms), "shadow": shadow or not adopted})
         if adopted and not shadow:
             doc_type = decision.selected_id
-    elif os.getenv("TYPESAFE_API_KEY", "").strip():
+    elif typesafe_key():
         blocks.append(notice("JEV 本次评估未完成，已改用备用分类。", "warning"))
     if doc_type is None:
         from local_tools.file_extractor import classify_document_type
