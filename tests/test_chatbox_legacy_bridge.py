@@ -121,18 +121,9 @@ def test_short_webpage_body_is_refused_like_original():
     assert len(blocks) == 1 and "截图" in blocks[0]["message"]
 
 
-def test_feedback_is_saved_locally_without_remote_delivery(monkeypatch, tmp_path):
-    target = tmp_path / "feedback.jsonl"
-    monkeypatch.setattr(legacy, "FEEDBACK_FILE", target)
-    monkeypatch.setattr(legacy, "_deliver_feedback", lambda record: pytest.fail("remote delivery must not run"))
+def test_feedback_endpoint_is_removed():
     with TestClient(create_app(settings())) as client:
-        ok = client.post("/api/chatbox/feedback", json={"kind": "rating", "verdict": "up", "input": "R v Gladue",
-                                                        "output": "*R v Gladue*, [1999] 1 SCR 688."})
-        assert ok.status_code == 200
-        assert client.post("/api/chatbox/feedback", json={"kind": "rating", "verdict": "maybe"}).status_code == 400
-        assert client.post("/api/chatbox/feedback", json={"kind": "message", "note": "Missing IRPA"}).status_code == 200
-    records = [json.loads(line) for line in target.read_text(encoding="utf-8").splitlines()]
-    assert [r["kind"] for r in records] == ["rating", "message"] and records[0]["verdict"] == "up"
+        assert client.post("/api/chatbox/feedback", json={"kind": "message", "note": "x"}).status_code in (404, 405)
 
 
 def test_warmup_is_cached(monkeypatch):

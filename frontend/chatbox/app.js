@@ -5,7 +5,7 @@
   const input = $('input');
   const candidateSets = new Map();
   const extensions = new Set(['pdf', 'docx', 'pptx', 'xlsx', 'jpg', 'jpeg', 'png', 'webp']);
-  let config = null, selectedFile = null, controller = null, generation = 0, busy = false, lastInput = '';
+  let config = null, selectedFile = null, controller = null, generation = 0, busy = false;
   // What the user is looking at, sent with each turn so "the second one" or
   // "the year is wrong" has something on the server to refer to.
   let activeItem = null, activeCandidates = null;
@@ -129,31 +129,6 @@
     }
     return details;
   }
-  async function sendFeedback(body) {
-    try {
-      const response = await fetch('/api/chatbox/feedback', json(body));
-      const data = await response.json();
-      toast(data.message || (response.ok ? '已记录，谢谢反馈。' : '反馈未能保存。'));
-      return response.ok;
-    } catch { toast('反馈未能保存，请检查服务是否仍在运行。'); return false; }
-  }
-  function ratingRow(sourceInput, fullCitation, sourceType) {
-    const row = el('div', 'rating');
-    row.append(el('span', '', '这条引文准确吗？'));
-    const buttons = [['up', '👍', '准确'], ['down', '👎', '不准确']].map(([verdict, icon, label]) => {
-      const button = el('button', 'rate', icon);
-      button.type = 'button';
-      button.setAttribute('aria-label', label);
-      button.onclick = async () => {
-        buttons.forEach(b => { b.disabled = true; b.dataset.selected = 'true'; });
-        button.classList.add('chosen');
-        await sendFeedback({kind: 'rating', verdict, input: sourceInput, output: fullCitation(), route: sourceType || ''});
-      };
-      return button;
-    });
-    row.append(...buttons);
-    return row;
-  }
   function render(blockData) {
     if (!blockData || typeof blockData !== 'object') return;
     switch (blockData.type) {
@@ -172,7 +147,6 @@
         copy.type = 'button';
         header.append(copy);
         const citation = blockData.citation || '';
-        const sourceInput = lastInput;
         if (blockData.item_id) activeItem = {item_id: blockData.item_id, item_token: blockData.access_token};
         const content = el('div', 'citation-text');
         // Only paired italic markers are recognized; data is never HTML.
@@ -191,7 +165,6 @@
           card.append(open);
           card.append(el('p', 'result-note', '改动后由服务端重新按 McGill 规则拼接；你填写的内容不经核验。'));
         }
-        card.append(ratingRow(sourceInput, () => citation, blockData.source_type));
         break;
       }
       case 'field_question': {
@@ -274,7 +247,6 @@
   }
   function submit(text, file) {
     if (busy) return;
-    lastInput = text || file?.name || '';
     userTurn(text, file?.name);
     if (file) {
       const body = new FormData(); body.append('file', file); body.append('input', text);
@@ -346,14 +318,6 @@
   ['dragleave', 'drop'].forEach(name => document.addEventListener(name, event => { event.preventDefault(); document.body.classList.remove('dragging'); }));
   document.addEventListener('drop', event => { if (event.dataTransfer.files.length > 1) return toast('每次请只上传一个文件。'); chooseFile(event.dataTransfer.files[0]); });
   input.addEventListener('paste', event => { const file = event.clipboardData?.files[0]; if (file) { event.preventDefault(); chooseFile(file); } });
-  $('feedback-form').onsubmit = async event => {
-    event.preventDefault();
-    const note = $('feedback-note').value.trim();
-    if (!note) return toast('请先写下反馈内容。');
-    $('feedback-send').disabled = true;
-    if (await sendFeedback({kind: 'message', note})) $('feedback-note').value = '';
-    $('feedback-send').disabled = false;
-  };
   loadConfig();
   // Original cold-start mitigation: warm lookup connections on page load.
   fetch('/api/chatbox/warmup').catch(() => {});

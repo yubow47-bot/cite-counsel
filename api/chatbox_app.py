@@ -59,16 +59,6 @@ class FieldUpdate(BaseModel):
     fields: dict[str, str]
 
 
-class Feedback(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    kind: str = Field(default="rating", max_length=20)
-    verdict: str | None = Field(default=None, max_length=10)
-    input: str | None = Field(default=None, max_length=2000)
-    output: str | None = Field(default=None, max_length=4000)
-    route: str | None = Field(default=None, max_length=100)
-    note: str | None = Field(default=None, max_length=4000)
-
-
 class ApiKeys(BaseModel):
     model_config = ConfigDict(extra="forbid")
     openrouter_api_key: SecretStr | None = Field(default=None)
@@ -242,20 +232,6 @@ def create_app(settings: dict | None = None) -> FastAPI:
         except ValueError as exc:
             return failure(str(exc), 409)
         return success(service.item_blocks(body.item_id, body.access_token, item))
-
-    @app.post("/api/chatbox/feedback")
-    def feedback(body: Feedback):
-        """Original 👍/👎 and message feedback, written to data/feedback.jsonl only.
-
-        The legacy handler also queues HF Dataset / Discord delivery as
-        background tasks; those tasks are deliberately never run here.
-        """
-        from fastapi import BackgroundTasks
-        from api.main import FeedbackInput, feedback as legacy_feedback
-        envelope = legacy_feedback(FeedbackInput(**body.model_dump()), BackgroundTasks())
-        if envelope.get("status") == "done":
-            return {"ok": True, "message": "已记录，谢谢反馈。"}
-        return failure((envelope.get("error") or {}).get("reason") or "反馈未能保存。")
 
     warm_state = {"at": 0.0}
 
