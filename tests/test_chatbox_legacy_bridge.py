@@ -21,8 +21,30 @@ def test_legacy_envelopes_become_blocks():
     block = service.legacy_blocks(_done("*Criminal Code*, RSC 1985, c C-46.", pinpoint="s 718"))[0]
     assert block["type"] == "citation_result" and block["pinpoint"] == "s 718"
     assert block["verified"] is False and block["warnings"] == [service.LEGACY_NOTE]
-    notice = service.legacy_blocks({"status": "unsupported", "data": {}, "error": {"reason": "Not verifiable."}})[0]
-    assert (notice["type"], notice["message"], notice["level"]) == ("notice", "Not verifiable.", "warning")
+
+
+def test_a_dead_end_with_no_matching_template_offers_link_and_file_only():
+    # No "route" in the envelope, and "" is not a key in ROUTE_TEMPLATES.
+    block = service.legacy_blocks({"status": "unsupported", "data": {}, "error": {"reason": "Not verifiable."}})[0]
+    assert block["type"] == "notice" and block["level"] == "warning"
+    assert block["message"] == service.FALLBACK_GUIDANCE_NO_FORM
+
+
+def test_a_dead_end_with_a_matching_route_opens_that_template_blank():
+    block = service.legacy_blocks({"status": "unsupported", "route": "case_name", "data": {},
+                                   "error": {"reason": "Not verifiable."}})[0]
+    assert block["type"] == "field_question" and block["source_type"] == "jurisprudence"
+    assert block["message"] == service.FALLBACK_GUIDANCE
+    assert {f["name"] for f in block["fields"]} == {"style_of_cause", "neutral_citation", "reporter",
+                                                     "court", "pinpoint"}
+    assert all(f["value"] == "" for f in block["fields"])
+
+
+def test_manual_fallback_is_suppressed_for_an_already_selected_candidate():
+    """legacy_select_blocks: a blank form would throw away the record's own fields."""
+    blocks = service.legacy_blocks({"status": "unsupported", "route": "case_name", "data": {},
+                                    "error": {"reason": "Not verifiable."}}, manual_fallback=False)
+    assert blocks[0]["type"] == "notice" and blocks[0]["message"] == "Not verifiable."
 
 
 def test_legacy_candidates_keep_their_signature_and_select_through_legacy(monkeypatch):
@@ -112,8 +134,23 @@ def test_identifier_miss_uses_original_url_route(monkeypatch):
         seen.append(body.doi)
         return {"status": "unsupported", "data": {}, "error": {"reason": "We couldn't process this DOI."}}
     monkeypatch.setattr(legacy, "extract_url", original)
-    assert service.identifier_blocks("doi", "10.1/x")[0]["message"] == "We couldn't process this DOI."
+    monkeypatch.setattr(service, "item_store", service.ItemStore())
+    # /extract/url reports route "url" for every input shape; a failed DOI
+    # lookup must still open the journal_article form, not a routeless notice.
+    block = service.identifier_blocks("doi", "10.1/x")[0]
+    assert block["type"] == "field_question" and block["source_type"] == "journal_article"
     assert seen == ["10.1/x"]
+
+
+def test_isbn_miss_opens_the_book_form(monkeypatch):
+    monkeypatch.setattr("local_tools.openlibrary_api.fetch_openlibrary", lambda isbn: None)
+
+    async def original(body):
+        return {"status": "unsupported", "data": {}, "error": {"reason": "We couldn't find this ISBN."}}
+    monkeypatch.setattr(legacy, "extract_url", original)
+    monkeypatch.setattr(service, "item_store", service.ItemStore())
+    block = service.identifier_blocks("isbn", "9780306406157")[0]
+    assert block["type"] == "field_question" and block["source_type"] == "book"
 
 
 def test_short_webpage_body_is_refused_like_original():
@@ -133,3 +170,26 @@ def test_warmup_is_cached(monkeypatch):
         assert client.get("/api/chatbox/warmup").json()["warmed"] == ["a2aj"]
         assert client.get("/api/chatbox/warmup").json()["cached"] is True
     assert calls == [1]
+
+
+def test_query_dead_end_opens_the_matching_form_end_to_end(monkeypatch):
+    """The whole path a real 'case not in the database' query takes."""
+    monkeypatch.setattr(service, "classify_query", lambda text: {"type": "case_name", "normalized": text, "original": text})
+    monkeypatch.setattr("local_tools.citation_search.search_citation", lambda *a, **k: [])
+    monkeypatch.setattr(service, "item_store", service.ItemStore())
+
+    async def original(body, request):
+        return {"ok": True, "route": "case_name", "status": "unsupported", "data": {},
+               "error": {"reason": "We couldn't verify this against our legal databases."}}
+    monkeypatch.setattr(legacy, "citation_query", original)
+
+    blocks = service.query_blocks("Made Up v Nonexistent")
+    question = blocks[0]
+    assert question["type"] == "field_question" and question["source_type"] == "jurisprudence"
+    assert question["message"] == service.FALLBACK_GUIDANCE
+
+    # The user can now fill it in by hand; the result is unverified.
+    item = service.item_store.update(question["item_id"], question["access_token"], question["revision"],
+                                     {"style_of_cause": "Made Up v Nonexistent", "reporter": "2024 ONSC 1"})
+    result = service.item_blocks(question["item_id"], question["access_token"], item)[0]
+    assert result["citation"] == "*Made Up v Nonexistent*, 2024 ONSC 1." and result["verified"] is False
