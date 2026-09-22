@@ -6,6 +6,9 @@
   const candidateSets = new Map();
   const extensions = new Set(['pdf', 'docx', 'pptx', 'xlsx', 'jpg', 'jpeg', 'png', 'webp']);
   let config = null, selectedFile = null, controller = null, generation = 0, busy = false, lastInput = '';
+  // What the user is looking at, sent with each turn so "the second one" or
+  // "the year is wrong" has something on the server to refer to.
+  let activeItem = null, activeCandidates = null;
 
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -170,6 +173,7 @@
         header.append(copy);
         const citation = blockData.citation || '';
         const sourceInput = lastInput;
+        if (blockData.item_id) activeItem = {item_id: blockData.item_id, item_token: blockData.access_token};
         const content = el('div', 'citation-text');
         // Only paired italic markers are recognized; data is never HTML.
         for (const part of citation.split(/(\*[^*]+\*)/g)) content.append(part.startsWith('*') && part.endsWith('*') && part.length > 2
@@ -191,6 +195,7 @@
         break;
       }
       case 'field_question': {
+        if (blockData.item_id) activeItem = {item_id: blockData.item_id, item_token: blockData.access_token};
         const card = block(el('section'), 'field-question');
         card.append(el('p', 'question-message', blockData.message));
         const known = sourceList('已从原文取到的字段', blockData.known);
@@ -201,6 +206,7 @@
       }
       case 'candidate_list': {
         candidateSets.set(blockData.candidate_set_id, blockData.access_token);
+        activeCandidates = {candidate_set_id: blockData.candidate_set_id, candidate_token: blockData.access_token};
         const card = block(el('section'), 'candidate-list');
         card.append(el('p', '', blockData.message));
         for (const [index, item] of (blockData.items || []).entries()) {
@@ -273,7 +279,7 @@
     if (file) {
       const body = new FormData(); body.append('file', file); body.append('input', text);
       run('/api/chatbox/files', {method: 'POST', body}, () => submit(text, file));
-    } else run('/api/chatbox/turns', json({input: text}), () => submit(text));
+    } else run('/api/chatbox/turns', json({input: text, ...activeItem, ...activeCandidates}), () => submit(text));
   }
   function send() {
     const text = input.value.trim();
@@ -283,7 +289,8 @@
   }
   function clearChat() {
     generation++; controller?.abort(); controller = null;
-    candidateSets.clear(); transcript.replaceChildren(); $('empty-state').hidden = false;
+    candidateSets.clear(); activeItem = null; activeCandidates = null;
+    transcript.replaceChildren(); $('empty-state').hidden = false;
     removeFile(); input.value = ''; autoGrow(); setBusy(false); input.focus();
   }
   async function loadConfig() {
