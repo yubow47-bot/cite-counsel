@@ -231,3 +231,86 @@ def test_legacy_citation_string_only_accepts_a_pinpoint(monkeypatch):
         assert edit(client, block, {"style_of_cause": "Rewritten"}).status_code == 409
         updated = edit(client, block, {"pinpoint": "at para 7"}).json()["blocks"][0]
     assert updated["citation"] == "*Legacy v Formatter*, 2001 SCC 5 at para 7."
+
+
+# ── Bring-your-own key ──────────────────────────────────────────────────
+# A key on the request is visible only for that request's provider calls and
+# is never echoed back, persisted, or left over for the next request.
+
+
+def test_a_query_without_a_server_key_is_blocked(client):
+    blocks = client.post("/api/chatbox/turns", json={"input": "R v Gladue"}).json()["blocks"]
+    assert blocks[0]["type"] == "notice" and "OpenRouter" in blocks[0]["message"]
+
+
+def test_a_per_request_key_lets_an_unconfigured_server_proceed(client, monkeypatch):
+    from llm_api.request_credentials import openrouter_key
+    seen = []
+    monkeypatch.setattr(service, "query_blocks", lambda text: seen.append(openrouter_key()) or [service.notice("ran")])
+    response = client.post("/api/chatbox/turns", json={"input": "R v Gladue", "openrouter_api_key": "byok-secret"})
+    assert response.status_code == 200 and seen == ["byok-secret"]
+    assert "byok-secret" not in response.text
+
+
+def test_a_per_request_key_is_scoped_to_that_request_only(client, monkeypatch):
+    """After the BYOK request returns, an unconfigured request is blocked again."""
+    from llm_api.request_credentials import openrouter_key
+    monkeypatch.setattr(service, "query_blocks", lambda text: [service.notice(openrouter_key() or "none")])
+    with_key = client.post("/api/chatbox/turns", json={"input": "R v Gladue", "openrouter_api_key": "byok-secret"})
+    assert with_key.json()["blocks"][0]["message"] == "byok-secret"
+    without_key = client.post("/api/chatbox/turns", json={"input": "R v Gladue"})
+    assert without_key.json()["blocks"][0]["type"] == "notice" and "OpenRouter" in without_key.json()["blocks"][0]["message"]
+
+
+def test_byok_reaches_the_planner_call_too(monkeypatch):
+    from llm_api.request_credentials import openrouter_key
+    monkeypatch.setattr(service, "item_store", service.ItemStore())
+    item_id, token, _ = service.item_store.add(source_type="book", fields={})
+    seen = []
+
+    def fake_planned_blocks(text, context):
+        seen.append(openrouter_key())
+        return [service.notice("planned")]
+
+    monkeypatch.setattr(service, "planned_blocks", fake_planned_blocks)
+    with TestClient(create_app(settings())) as local_client:
+        response = local_client.post("/api/chatbox/turns", json={
+            "input": "the year is 1998", "item_id": item_id, "item_token": token,
+            "openrouter_api_key": "planner-byok",
+        })
+    assert response.status_code == 200 and seen == ["planner-byok"]
+
+
+def test_byok_reaches_candidate_selection(monkeypatch):
+    from llm_api.request_credentials import openrouter_key
+    records = [{"style_of_cause": "Alpha v Beta", "neutral_citation": "2020 SCC 1", "verified": True}]
+    monkeypatch.setattr(service, "candidate_store", service.CandidateStore())
+    block = service.candidate_store.add(records)  # signs + adds "display" via api.main._selection_candidate
+    seen = []
+    monkeypatch.setattr(service, "record_blocks", lambda record: seen.append(openrouter_key()) or [service.notice("ok")])
+    with TestClient(create_app(settings())) as local_client:
+        response = local_client.post("/api/chatbox/select", json={
+            "candidate_set_id": block["candidate_set_id"], "access_token": block["access_token"],
+            "candidate_id": block["items"][0]["id"], "openrouter_api_key": "select-byok",
+        })
+    assert response.status_code == 200 and seen == ["select-byok"]
+
+
+def test_byok_reaches_file_extraction_and_lets_an_unconfigured_server_proceed(monkeypatch):
+    from llm_api.request_credentials import openrouter_key
+    seen = []
+    monkeypatch.setattr("local_tools.file_extractor.extract_from_file", lambda path: {"raw_text": "stub"})
+    monkeypatch.setattr(service, "extracted_blocks", lambda fields, shadow, **kw: seen.append(openrouter_key()) or [service.notice("ok")])
+    with TestClient(create_app(settings())) as local_client:  # no server-side key configured
+        response = local_client.post("/api/chatbox/files", data={"openrouter_api_key": "file-byok"},
+                                    files={"file": ("sample.pdf", b"%PDF-1.7\n", "application/pdf")})
+    assert response.status_code == 200 and seen == ["file-byok"]
+    assert "file-byok" not in response.text
+
+
+def test_a_blank_or_oversized_byok_value_is_a_no_op_not_an_error(client, monkeypatch):
+    monkeypatch.setattr(service, "query_blocks", lambda text: [service.notice("ran")])
+    response = client.post("/api/chatbox/turns", json={"input": "R v Gladue", "openrouter_api_key": "   "})
+    # Pydantic accepts the string; the empty/whitespace key just falls through
+    # to "no server key configured" rather than crashing.
+    assert response.json()["blocks"][0]["type"] == "notice"

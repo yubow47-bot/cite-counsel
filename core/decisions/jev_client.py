@@ -43,6 +43,7 @@ class JevConfig:
 
     @classmethod
     def from_environment(cls) -> "JevConfig":
+        from llm_api.request_credentials import openrouter_key, typesafe_key
         provider = os.getenv("JEV_PROVIDER", "openrouter").strip().lower()
         timeout_seconds = float(os.getenv("JEV_TIMEOUT_SECONDS", "8"))
         if provider == "typesafe":
@@ -50,7 +51,9 @@ class JevConfig:
                 provider=provider,
                 endpoint=os.getenv("JEV_API_URL", TYPESAFE_SYSTEMONE_URL),
                 model=os.getenv("JEV_MODEL", "jev-latest"),
-                api_key=os.getenv("TYPESAFE_API_KEY", ""),
+                # A per-request key (request_credentials.use_credentials) wins
+                # over the process-level TYPESAFE_API_KEY; see that module.
+                api_key=typesafe_key(),
                 timeout_seconds=timeout_seconds,
             )
         if provider == "openrouter":
@@ -58,7 +61,7 @@ class JevConfig:
                 provider=provider,
                 endpoint=os.getenv("JEV_API_URL", OPENROUTER_DECISIONS_URL),
                 model=os.getenv("JEV_MODEL", "~typesafe/jev-latest"),
-                api_key=os.getenv("OPENROUTER_API_KEY", ""),
+                api_key=openrouter_key(),
                 timeout_seconds=timeout_seconds,
             )
         raise DecisionError("JEV_PROVIDER must be 'openrouter' or 'typesafe'")

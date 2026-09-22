@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from core import chatbox_service as service
+from llm_api.request_credentials import RequestCredentials, use_credentials
 
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent.parent
@@ -35,6 +36,10 @@ class Turn(BaseModel):
     item_token: str | None = Field(default=None, max_length=128)
     candidate_set_id: str | None = Field(default=None, max_length=64)
     candidate_token: str | None = Field(default=None, max_length=128)
+    # Bring-your-own key: used only for the provider calls this turn makes,
+    # never persisted, never echoed back. See llm_api.request_credentials.
+    openrouter_api_key: SecretStr | None = Field(default=None)
+    typesafe_api_key: SecretStr | None = Field(default=None)
 
 
 class Selection(BaseModel):
@@ -42,6 +47,8 @@ class Selection(BaseModel):
     candidate_set_id: str = Field(min_length=1, max_length=64)
     access_token: str = Field(min_length=1, max_length=128)
     candidate_id: str = Field(min_length=1, max_length=64)
+    openrouter_api_key: SecretStr | None = Field(default=None)
+    typesafe_api_key: SecretStr | None = Field(default=None)
 
 
 class FieldUpdate(BaseModel):
@@ -75,6 +82,18 @@ def success(blocks):
 def failure(message, status=400):
     return JSONResponse(status_code=status, content={"ok": False, "message": message,
                                                     "blocks": [service.notice(message, "error")]})
+
+
+def _credentials(openrouter_api_key: SecretStr | None, typesafe_api_key: SecretStr | None) -> RequestCredentials | None:
+    """Build per-request credentials from optional secret fields, or None to defer to the server's own configuration."""
+    openrouter = (openrouter_api_key.get_secret_value().strip() if openrouter_api_key else "")
+    typesafe = (typesafe_api_key.get_secret_value().strip() if typesafe_api_key else "")
+    if not openrouter and not typesafe:
+        return None
+    try:
+        return RequestCredentials(openrouter_api_key=openrouter or None, typesafe_api_key=typesafe or None)
+    except ValueError:
+        return None
 
 
 def create_app(settings: dict | None = None) -> FastAPI:
@@ -162,6 +181,9 @@ def create_app(settings: dict | None = None) -> FastAPI:
         kind, value = service.route_input(text)
         if kind == "invalid_url":
             return failure("请只粘贴一个完整的 HTTP(S) URL。")
+        # A key on this request is visible only for the provider calls this
+        # turn makes below; use_credentials resets it before the handler returns.
+        credentials = _credentials(body.openrouter_api_key, body.typesafe_api_key)
         # A pasted DOI/ISBN/URL is always a new source. Anything else, with a
         # result or a candidate list on screen, may be about that instead, so the
         # planner gets first refusal.
@@ -169,22 +191,24 @@ def create_app(settings: dict | None = None) -> FastAPI:
             context = service.turn_context(body.item_id, body.item_token,
                                            body.candidate_set_id, body.candidate_token)
             if context.active:
-                async with slots:
-                    planned = await run_in_threadpool(service.planned_blocks, text, context)
+                with use_credentials(credentials):
+                    async with slots:
+                        planned = await run_in_threadpool(service.planned_blocks, text, context)
                 if planned is not None:
                     return success(planned)
-        if kind in {"query", "url"} and not settings["openrouter_api_key"]:
-            return success([service.notice("请先在左侧“API Key 设置”填入 OpenRouter API Key。", "warning")])
+        if kind in {"query", "url"} and not settings["openrouter_api_key"] and not credentials:
+            return success([service.notice("请先在左侧“API Key 设置”填入 OpenRouter API Key，或在本次消息中附带你自己的 Key。", "warning")])
         try:
-            async with slots:
-                if kind in {"doi", "isbn"}:
-                    blocks = await run_in_threadpool(service.identifier_blocks, kind, value)
-                elif kind == "url":
-                    from llm_api.deepseek_api import extract_from_url
-                    fields = await run_in_threadpool(extract_from_url, value)
-                    blocks = await run_in_threadpool(service.extracted_blocks, fields, settings["jev_shadow"], webpage=True)
-                else:
-                    blocks = await run_in_threadpool(service.query_blocks, value)
+            with use_credentials(credentials):
+                async with slots:
+                    if kind in {"doi", "isbn"}:
+                        blocks = await run_in_threadpool(service.identifier_blocks, kind, value)
+                    elif kind == "url":
+                        from llm_api.deepseek_api import extract_from_url
+                        fields = await run_in_threadpool(extract_from_url, value)
+                        blocks = await run_in_threadpool(service.extracted_blocks, fields, settings["jev_shadow"], webpage=True)
+                    else:
+                        blocks = await run_in_threadpool(service.query_blocks, value)
             return success(blocks)
         except Exception as exc:
             logger.warning("Chatbox turn failed: %s", type(exc).__name__)
@@ -194,8 +218,10 @@ def create_app(settings: dict | None = None) -> FastAPI:
     async def select(body: Selection):
         try:
             record = service.candidate_store.get(body.candidate_set_id, body.access_token, body.candidate_id)
-            async with slots:
-                return success(await run_in_threadpool(service.record_blocks, record))
+            credentials = _credentials(body.openrouter_api_key, body.typesafe_api_key)
+            with use_credentials(credentials):
+                async with slots:
+                    return success(await run_in_threadpool(service.record_blocks, record))
         except ValueError as exc:
             return failure(str(exc), 409)
         except Exception as exc:
@@ -243,7 +269,9 @@ def create_app(settings: dict | None = None) -> FastAPI:
         return {"ok": True, **await run_in_threadpool(service.warm_up)}
 
     @app.post("/api/chatbox/files")
-    async def files(file: UploadFile = File(...), input: str = Form(default="", max_length=2000)):
+    async def files(file: UploadFile = File(...), input: str = Form(default="", max_length=2000),
+                    openrouter_api_key: str = Form(default="", max_length=400),
+                    typesafe_api_key: str = Form(default="", max_length=400)):
         path = None
         try:
             from api.main import _magic_byte_ok, _UPLOAD_SUFFIXES
@@ -255,15 +283,22 @@ def create_app(settings: dict | None = None) -> FastAPI:
                 return failure(f"文件上限为 {settings['max_upload_mb']} MB。", 413)
             if not _magic_byte_ok(contents[:16], suffix):
                 return failure("文件内容与扩展名不匹配，请检查文件。")
-            if not settings["openrouter_api_key"]:
-                return success([service.notice("文件识别需要 OpenRouter API Key。请填写本机配置并重启服务。", "warning")])
+            try:
+                credentials = (RequestCredentials(openrouter_api_key=openrouter_api_key.strip() or None,
+                                                  typesafe_api_key=typesafe_api_key.strip() or None)
+                              if (openrouter_api_key.strip() or typesafe_api_key.strip()) else None)
+            except ValueError:
+                return failure("API Key 格式不正确。")
+            if not settings["openrouter_api_key"] and not credentials:
+                return success([service.notice("文件识别需要 OpenRouter API Key。请填写本机配置，或在上传时附带你自己的 Key。", "warning")])
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 path = tmp.name
                 tmp.write(contents)
             from local_tools.file_extractor import extract_from_file
-            async with slots:
-                fields = await run_in_threadpool(extract_from_file, path)
-                blocks = await run_in_threadpool(service.extracted_blocks, fields, settings["jev_shadow"])
+            with use_credentials(credentials):
+                async with slots:
+                    fields = await run_in_threadpool(extract_from_file, path)
+                    blocks = await run_in_threadpool(service.extracted_blocks, fields, settings["jev_shadow"])
             if input.strip():
                 blocks.insert(0, service.notice("已保留附件说明：" + input.strip() + "\n本次按附件内容处理；若说明包含另一条引用，请另行发送。"))
             return success(blocks)
