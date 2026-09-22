@@ -28,6 +28,13 @@ ROOT = Path(__file__).resolve().parent.parent
 class Turn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     input: str = Field(min_length=1, max_length=2000)
+    # What the user currently has on screen, so a message like "the second one"
+    # or "the year is wrong" has something to refer to. Unknown or expired ids
+    # are ignored rather than rejected: the turn is then a fresh search.
+    item_id: str | None = Field(default=None, max_length=64)
+    item_token: str | None = Field(default=None, max_length=128)
+    candidate_set_id: str | None = Field(default=None, max_length=64)
+    candidate_token: str | None = Field(default=None, max_length=128)
 
 
 class Selection(BaseModel):
@@ -155,6 +162,17 @@ def create_app(settings: dict | None = None) -> FastAPI:
         kind, value = service.route_input(text)
         if kind == "invalid_url":
             return failure("请只粘贴一个完整的 HTTP(S) URL。")
+        # A pasted DOI/ISBN/URL is always a new source. Anything else, with a
+        # result or a candidate list on screen, may be about that instead, so the
+        # planner gets first refusal.
+        if kind == "query":
+            context = service.turn_context(body.item_id, body.item_token,
+                                           body.candidate_set_id, body.candidate_token)
+            if context.active:
+                async with slots:
+                    planned = await run_in_threadpool(service.planned_blocks, text, context)
+                if planned is not None:
+                    return success(planned)
         if kind in {"query", "url"} and not settings["openrouter_api_key"]:
             return success([service.notice("请先在左侧“API Key 设置”填入 OpenRouter API Key。", "warning")])
         try:

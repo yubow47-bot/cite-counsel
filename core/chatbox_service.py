@@ -132,14 +132,22 @@ class ItemStore:
                                     "token_hash": hashlib.sha256(token.encode()).digest(), "item": item}
         return item_id, token, copy.deepcopy(item)
 
+    def _find(self, item_id: str, token: str) -> dict:
+        found = self._items.get(item_id)
+        if (not found or found["expires"] <= time.monotonic()
+                or not hmac.compare_digest(found["token_hash"], hashlib.sha256(token.encode()).digest())):
+            raise ValueError("这条引文已过期或不属于本次会话，请重新查询。")
+        return found
+
+    def get(self, item_id: str, token: str) -> dict:
+        with self._lock:
+            return copy.deepcopy(self._find(item_id, token)["item"])
+
     def update(self, item_id: str, token: str, revision: int, values: dict) -> dict:
         """Apply user-supplied field values and bump the revision."""
         with self._lock:
-            found = self._items.get(item_id)
-            if (not found or found["expires"] <= time.monotonic()
-                    or not hmac.compare_digest(found["token_hash"], hashlib.sha256(token.encode()).digest())):
-                raise ValueError("这条引文已过期或不属于本次会话，请重新查询。")
-            item = found["item"]
+            item = self._find(item_id, token)["item"]
+            found = self._items[item_id]
             if revision != item["revision"]:
                 raise ValueError("这条引文已经改过一次，请用最新那条结果继续修改。")
             # A legacy citation is one opaque string: only the pinpoint is editable.
@@ -198,15 +206,25 @@ def _editable_fields(item: dict) -> list[dict]:
     return [_field_view(field, item) for field in schema_fields(item["source_type"])]
 
 
-def field_question(item_id: str, token: str, item: dict, message: str | None = None) -> dict:
-    """Ask for the fields that block the render, instead of guessing or reformatting."""
+def field_question(item_id: str, token: str, item: dict, message: str | None = None,
+                   *, ask: list[str] | None = None) -> dict:
+    """Ask for the fields that block the render, instead of guessing or reformatting.
+
+    ``ask`` overrides the selection when the planner decided which fields this
+    turn is about, e.g. the user said only the author is wrong.
+    """
     values = item_values(item)
-    missing = missing_required(item["source_type"], values)
+    if ask is None:
+        missing = missing_required(item["source_type"], values)
+    else:
+        wanted = [name for name in ask if name]
+        missing = [field for field in schema_fields(item["source_type"]) if field["name"] in wanted]
     known = [_field_view(field, item) for field in schema_fields(item["source_type"])
              if values.get(field["name"]) and field not in missing]
     return {"type": "field_question", "item_id": item_id, "access_token": token,
             "revision": item["revision"], "source_type": item["source_type"],
-            "message": message or ("还差 " + missing_summary(item["source_type"], values) + " 才能拼出这条引文，请照原文填写。"),
+            "message": message or (("请填写：" + "、".join(field["label"] for field in missing)) if ask is not None
+                                   else "还差 " + missing_summary(item["source_type"], values) + " 才能拼出这条引文，请照原文填写。"),
             "note": "你填写的内容不经数据库核验，结果会标记为未核验。原文里没有的内容请留空。",
             "fields": [_field_view(field, item) for field in missing], "known": known}
 
@@ -287,6 +305,16 @@ class CandidateStore:
         return {"type": "candidate_list", "candidate_set_id": set_id, "access_token": token,
                 "message": "找到多个匹配，请选择你要引用的记录。",
                 "items": [{"id": key, "display": item["display"].replace("✅ ", "")} for key, item in signed.items()]}
+
+    def listing(self, set_id: str, token: str) -> list[dict]:
+        """The candidate lines as the user saw them, for resolving "the second one"."""
+        with self._lock:
+            found = self._sets.get(set_id)
+            if not found or found["expires"] <= time.monotonic() or not hmac.compare_digest(
+                    found["token_hash"], hashlib.sha256(token.encode()).digest()):
+                return []
+            return [{"id": key, "display": item["display"].replace("✅ ", "")}
+                    for key, item in found["items"].items()]
 
     def get(self, set_id: str, token: str, candidate_id: str) -> dict:
         from api.main import _candidate_signature_valid
@@ -388,6 +416,90 @@ def record_blocks(item: dict) -> list[dict]:
         # fixed constitutional form that the legacy rules supply.
         return legacy_select_blocks(item)
     return [citation_block(citation, source_type, True, fields=fields)]
+
+
+# ── LLM-planned conversation turns ────────────────────────────────────
+
+
+def turn_context(item_id=None, item_token=None, candidate_set_id=None, candidate_token=None):
+    """Load the server-owned objects a conversational turn may refer to.
+
+    Ids and tokens come from the client, so anything that does not check out is
+    simply absent from the context: the planner then has nothing to act on and
+    the turn falls back to the ordinary query pipeline.
+    """
+    from core.conversation import TurnContext
+    context = TurnContext()
+    if item_id and item_token:
+        try:
+            context.item = item_store.get(item_id, item_token)
+            context.item_id, context.item_token = item_id, item_token
+        except ValueError:
+            pass
+    if candidate_set_id and candidate_token:
+        listed = candidate_store.listing(candidate_set_id, candidate_token)
+        if listed:
+            context.candidate_set_id, context.candidate_token = candidate_set_id, candidate_token
+            context.candidates = listed
+    return context
+
+
+def retype_item(item: dict, source_type: str):
+    """Carry an item's fields over to another template, keeping each origin.
+
+    Only fields the new template actually has survive; nothing is renamed or
+    invented, so a value the database supplied stays attributed to it.
+    """
+    allowed = {f["name"] for f in schema_fields(source_type)}
+    fields = {name: dict(field) for name, field in item["fields"].items() if name in allowed}
+    return item_store.add(source_type=source_type, fields=fields,
+                          from_database=item["from_database"], warnings=item["warnings"])
+
+
+def plan_blocks(plan, context) -> list[dict] | None:
+    """Carry out a validated plan. None means "fall back to the query pipeline"."""
+    note = [notice(plan.message)] if plan.message else []
+    if plan.action == "provide_fields":
+        try:
+            item = item_store.update(context.item_id, context.item_token,
+                                     context.item["revision"], plan.values)
+        except ValueError as exc:
+            return [notice(str(exc), "warning")]
+        return note + item_blocks(context.item_id, context.item_token, item)
+    if plan.action == "correct_fields":
+        # The question block carries the message itself, so it is not repeated
+        # as a separate notice above it.
+        return [field_question(context.item_id, context.item_token, context.item,
+                               plan.message or None, ask=plan.fields)]
+    if plan.action == "select_candidate":
+        try:
+            record = candidate_store.get(context.candidate_set_id, context.candidate_token,
+                                         plan.candidate_id)
+        except ValueError as exc:
+            return [notice(str(exc), "warning")]
+        return note + record_blocks(record)
+    if plan.action == "change_type":
+        if context.item is None:
+            return None
+        item_id, token, item = retype_item(context.item, plan.source_type)
+        return note + item_blocks(item_id, token, item)
+    if plan.action == "unsupported":
+        return [notice(plan.message or "我没把握这句话要改哪一项，请直接在结果卡上修改字段。", "warning")]
+    return None  # new_search
+
+
+def planned_blocks(text: str, context) -> list[dict] | None:
+    """Let the planner take the turn, or return None to use the ordinary pipeline."""
+    import logging
+    from core.conversation import plan_turn
+    if not context.active:
+        return None
+    try:
+        plan = plan_turn(text, context)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Turn planner failed: %s", type(exc).__name__)
+        return None
+    return plan_blocks(plan, context) if plan is not None else None
 
 
 def classify_query(text: str) -> dict:
