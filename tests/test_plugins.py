@@ -1,4 +1,6 @@
 """The built-in plugins behind the harness, and the default reply check they share."""
+import json
+
 import pytest
 
 from core.grounding import grounded_reply_guard
@@ -31,10 +33,12 @@ def test_reply_guard_accepts_facts_from_tool_results(h):
 
 
 def test_deadline_card_lists_every_input(h):
-    from plugins import deadlines
     session, _ = h.sessions.start()
-    result = deadlines.compute(h.context(session, "deadlines"), deadlines.DeadlineParams(
-        start="2026-09-25", days=10, mode="court_days", rule="r 3.02", holidays=["2026-10-12"]))
+    h.set_enabled("deadlines", True)
+    session.loaded.append("deadlines")
+    call = {"id": "c1", "type": "function", "function": {"name": "deadlines__compute", "arguments": json.dumps({
+        "start": "2026-09-25", "days": 10, "mode": "court_days", "rule": "r 3.02", "holidays": ["2026-10-12"]})}}
+    result = h._execute(session, call)[1]
     rows = dict(result.blocks[0]["rows"])
     assert rows["结果日期"] > "2026-10-08"
     assert rows["节假日"] == "2026-10-12" and result.final is True

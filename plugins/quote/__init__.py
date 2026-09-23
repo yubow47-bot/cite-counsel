@@ -11,27 +11,27 @@ from pydantic import BaseModel, Field as PField
 
 from core.grounding import grounded_reply_guard
 from core.tool_contracts import Artifact, Derivation
-from harness.plugin import Plugin, Result, Tool
+from harness.plugin import Plugin, Result, Tool, UserText
 
 VERDICT_ZH = {"exact": "逐字一致", "case_differs": "词句一致但大小写不同", "not_found": "原文中未找到"}
 
 
 class CheckParams(BaseModel):
     ref: str = PField(min_length=4, max_length=20, description="The case record to check against, e.g. rec_2")
-    quote: str = PField(min_length=12, max_length=2000,
-                        description="The quotation, copied word for word from the user's messages")
+    quote: UserText = PField(min_length=12, max_length=2000,
+                             description="The quotation, copied word for word from the user's messages")
 
 
 def check(ctx, p: CheckParams) -> Result:
     from core import quote_check
     record = ctx.records.get(p.ref)
-    said = ctx.user_said(p.quote)
-    if not said:
-        raise ValueError("引语必须出自用户自己的话；请用户把要核对的句子直接粘贴到输入框。")
+    full = record.fields.get("full_text")
+    if full is None or full.origin != "database":
+        raise ValueError("先取回判决全文（a2aj 的 full_text），再核对引语；核对对象必须是数据库原文。")
     item = {"source_type": record.source_type, "base": None,
             "fields": {name: {"value": field.value, "origin": field.origin, "source_id": field.source_id}
                        for name, field in record.fields.items()}}
-    result = quote_check.check(item, said)
+    result = quote_check.check(item, p.quote, text=full.value, source_id=full.source_id)
     finding_ref = ctx.save(result["finding"])
     pinpoint_ref = ""
     if result["pinpoint"]:

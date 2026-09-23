@@ -14,15 +14,16 @@ from pydantic import BaseModel, Field as PField
 
 from core.grounding import grounded_reply_guard
 from core.tool_contracts import Artifact, Derivation, Field, is_grounded
-from harness.plugin import Plugin, Result, Tool
+from harness.plugin import Plugin, Result, Tool, UserText
 
 RENDER_RULE = "cite.render.v1"
 
 
 class CiteParams(BaseModel):
     ref: str = PField(min_length=4, max_length=20, description="The record to cite, e.g. rec_3")
-    pinpoint: str = PField(default="", max_length=100,
-                           description="A pinpoint the user themselves typed, e.g. at para 64; copied verbatim")
+    pinpoint: UserText = PField(default="", max_length=100,
+                                description="A pinpoint the user themselves typed, e.g. at para 64; copied "
+                                            "verbatim from the user's messages")
     pinpoint_from: str = PField(default="", max_length=20,
                                 description="A pinpoint artifact (art_N) located by the quote plugin")
 
@@ -44,11 +45,10 @@ def cite(ctx, p: CiteParams) -> Result:
         derivation_inputs.append(artifact.derivation)
         derivation_names.append("pinpoint")
     elif p.pinpoint:
-        said = ctx.user_said(p.pinpoint)
-        if not said:
-            raise ValueError("定位引用必须出自用户原话；请让用户直接写出，或先用引语核对取得段落号。")
-        values["pinpoint"] = said
-        derivation_inputs.append(Field(said, "user"))
+        # The harness verified this against the user's messages and substituted
+        # the exact slice; the provenance audit accepts precisely this value.
+        values["pinpoint"] = p.pinpoint
+        derivation_inputs.append(Field(p.pinpoint, "user"))
         derivation_names.append("pinpoint")
     content = mcgill_format.render_fields(record.source_type, values)
     artifact = Artifact("citation_text", content,

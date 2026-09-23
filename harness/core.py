@@ -28,7 +28,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from harness import grounding, llm
-from harness.plugin import Plugin, Result, discover
+from harness.plugin import Plugin, Result, UserText, discover
 from harness.records import ContractError
 from harness.session import HISTORY_LIMIT, Context, Session, SessionStore
 from core.tool_contracts import Artifact, Finding, Record
@@ -85,8 +85,8 @@ class _Builtin:
 class AddUserField(BaseModel):
     ref: str = Field(description="The record to extend, e.g. rec_3")
     field: str = Field(min_length=1, max_length=40, description="The field name, e.g. place or pinpoint")
-    text: str = Field(min_length=1, max_length=500,
-                      description="What the user said, copied from their messages; they must have written it")
+    text: UserText = Field(min_length=1, max_length=500,
+                           description="What the user said, copied from their messages; they must have written it")
 
 
 class NewRecord(BaseModel):
@@ -96,15 +96,13 @@ class NewRecord(BaseModel):
 
 def _add_user_field(ctx, p: AddUserField) -> Result:
     record = ctx.records.get(p.ref, Record)
-    said = ctx.user_said(p.text)
-    updated = ctx.records.add_user_field(record, p.field, p.text, said)
-    ref = ctx.records.put(updated)
+    updated = ctx.records.add_user_field(record, p.field, p.text)
+    ref = ctx.save(updated)
     return Result(
-        {"ref": ref, "field": p.field, "value": said, "origin": "user",
+        {"ref": ref, "field": p.field, "value": p.text, "origin": "user",
          "note": "from the user's own words; the record is not verified while it has user fields"},
-        [{"type": "card", "title": f"已补充 {p.field}", "rows": [[p.field, said],
-         ["来源", "你的原话"], ["核验状态", "未核验（含用户补充字段）"]],
-         "note": "用户补充的字段不经过数据库，含补充字段的记录不再标记为已核验。"}])
+        [{"type": "card", "title": f"已补充 {p.field}", "rows": [[p.field, p.text],
+         ["来源", "你的原话"], ["核验状态", "未核验（含用户补充字段）"]]}])
 
 
 def _new_record(ctx, p: NewRecord) -> Result:
@@ -363,14 +361,17 @@ class Harness:
             if builtin is not None:
                 return self._run_builtin(session, builtin, arguments, name)
             return name, Result({"error": "unknown or unloaded tool"})
+        ctx = self.context(session, plugin_name)
         try:
-            params = tool.params.model_validate(arguments)
+            params = self._prepare_params(ctx, tool.params.model_validate(arguments))
         except ValidationError as exc:
             problems = [{"field": ".".join(map(str, e["loc"])), "problem": e["msg"]} for e in exc.errors()]
             return name, Result({"error": "invalid arguments", "details": problems[:5]})
+        except ValueError as exc:
+            return name, Result({"error": str(exc)})
         try:
             # The plugin stores evidence itself (ctx.save) and answers with refs.
-            result = tool.handler(self.context(session, plugin_name), params)
+            result = tool.handler(ctx, params)
         except ContractError as exc:
             return name, Result({"error": "contract violation", "details": str(exc)})
         except ValueError as exc:
@@ -381,9 +382,10 @@ class Harness:
         return name, result
 
     def _run_builtin(self, session: Session, builtin: _Builtin, arguments: Any, name: str) -> tuple[str, Result]:
+        ctx = Context(session, "harness", self)
         try:
-            params = builtin.params.model_validate(arguments)
-            result = builtin.handler(Context(session, "harness", self), params)
+            params = self._prepare_params(ctx, builtin.params.model_validate(arguments))
+            result = builtin.handler(ctx, params)
         except ValidationError as exc:
             problems = [{"field": ".".join(map(str, e["loc"])), "problem": e["msg"]} for e in exc.errors()]
             return name, Result({"error": "invalid arguments", "details": problems[:5]})
@@ -393,6 +395,41 @@ class Harness:
             logger.warning("Tool %s failed: %s", name, type(exc).__name__, exc_info=True)
             return name, Result({"error": "the tool failed; try again later"})
         return name, result
+
+    def _prepare_params(self, ctx: Context, params: Any) -> Any:
+        """Verify the call before the plugin sees it (§3.4).
+
+        ``UserText`` parameters must be copied from the user's own words: the
+        harness finds the value in the session's user messages and substitutes
+        the exact slice, and both the slice and every plain parameter value
+        become the call's claimable user values for the provenance audit.
+        """
+        verified, plain = set(), set()
+
+        def collect(value: Any) -> None:
+            if isinstance(value, UserText):
+                return
+            if isinstance(value, (str, int, float, bool)):
+                plain.add(str(value))
+            elif isinstance(value, list):
+                for item in value:
+                    collect(item)
+            elif isinstance(value, dict):
+                for key, item in value.items():
+                    plain.add(str(key))
+                    collect(item)
+
+        for name, value in params:
+            collect(value)
+            if isinstance(value, UserText):
+                said = ctx.user_said(str(value))
+                if not said:
+                    raise ValueError(f"参数 {name} 必须出自用户原话；请让用户直接在输入框里写。")
+                setattr(params, name, said)
+                verified.add(said)
+                plain.add(said)
+        ctx.user_values, ctx.param_values = frozenset(verified), frozenset(plain)
+        return params
 
     def _caption(self, session: Session, text: str) -> str:
         # Harness-level grounding first: hide every paragraph with an

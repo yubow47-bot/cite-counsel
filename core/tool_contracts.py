@@ -120,6 +120,33 @@ class GroundingIssue:
     reason: str
 
 
+def derivation_leaves(derivation: Derivation):
+    """Every Field leaf of a derivation tree, iteratively and cycle-safe.
+
+    Yields leaves in depth-first order; a cycle yields the node once per
+    path taken (callers detect repetition by identity if they need to) and
+    the walk stops after 20000 nodes, like ``grounding_issues``.
+    """
+    active: set[int] = set()
+    stack = [derivation]
+    visited = 0
+    while stack:
+        node = stack.pop()
+        visited += 1
+        if visited > 20000:
+            raise ValueError("evidence_graph_too_large")
+        if isinstance(node, Derivation):
+            if id(node) in active:
+                continue
+            active.add(id(node))
+            for index in reversed(range(len(node.inputs))):
+                stack.append(node.inputs[index])
+        elif isinstance(node, Field):
+            yield node
+            if node.origin == "computed" and node.derivation is not None:
+                stack.append(node.derivation)
+
+
 def grounding_issues(derivation: Derivation) -> tuple[GroundingIssue, ...]:
     """Explain every unsupported dependency; empty/cyclic proofs fail closed.
 
