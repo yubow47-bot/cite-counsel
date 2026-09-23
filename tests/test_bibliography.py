@@ -1,4 +1,4 @@
-"""The citation list becomes a McGill bibliography, rebuilt from signed snapshots."""
+"""The citation list becomes a McGill bibliography, rebuilt from store snapshots."""
 import pytest
 
 from core import bibliography
@@ -9,10 +9,8 @@ def db(value, source="a2aj:x"):
 
 
 def entry(source_type, fields, *, base=None):
-    """An item-shaped dict, matching what a future record store will hand to bibliography.py."""
-    item = {"source_type": source_type, "base": base, "fields": fields}
-    verified = base is None and bool(fields) and all(f["origin"] == "database" for f in fields.values())
-    return bibliography.sign_entry(item, verified)
+    """An entry as the harness record store hands it over (ctx.records.meta(ref))."""
+    return {"source_type": source_type, "base": base, "fields": fields}
 
 
 def sample_entries():
@@ -47,7 +45,6 @@ def test_sections_order_sorting_inversion_and_no_pinpoint():
 def test_the_pinpoint_does_not_cost_the_entry_its_verification():
     """The footnote is unverified because the user typed a pinpoint; the bibliography omits it."""
     entries = sample_entries()
-    assert entries[0]["verified"] is False  # the footnote, with the user's "at 12"
     result = bibliography.build(entries)
     assert result["count"] == 5
     book = result["sections"][2]["entries"][1]
@@ -87,23 +84,19 @@ def test_only_the_first_author_is_inverted(author, expected):
     assert bibliography.invert_first_author(author) == expected
 
 
-def test_forged_or_promoted_entries_are_refused():
-    good = sample_entries()[1]
-    promoted = dict(good, verified=not good["verified"])
-    with pytest.raises(ValueError):
-        bibliography.build([promoted])
-    edited = dict(good, fields={**good["fields"], "reporter": db("[2000] 1 SCR 1")})
-    with pytest.raises(ValueError):
-        bibliography.build([edited])
-    with pytest.raises(ValueError):
-        bibliography.build([{"kind": "bib_entry.v1"}])
+def test_build_returns_the_bibliography_artifact():
+    result = bibliography.build(sample_entries())
+    assert result["artifact"].kind == "bibliography"
+    assert result["artifact"].content == result["text"]
 
 
-def test_candidate_signatures_cannot_pass_as_entries():
-    from api.main import _selection_candidate
-    candidate = _selection_candidate({"style_of_cause": "R v X", "verified": True})
+def test_bad_entries_are_refused_at_the_boundary():
+    """No signature exists any more: the store owns entries. Malformed input
+    still fails closed at the build itself."""
     with pytest.raises(ValueError):
-        bibliography.build([candidate])
+        bibliography.build([])
+    with pytest.raises(ValueError):
+        bibliography.build([{"source_type": "book", "base": None, "fields": "not a mapping"}])
 
 
 def test_legacy_strings_are_listed_as_issued():

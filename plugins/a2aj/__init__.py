@@ -49,8 +49,36 @@ def find_legislation(ctx, p: LegislationParams) -> Result:
                   blocks, final=bool(records))
 
 
+class FullTextParams(BaseModel):
+    ref: str = Field(min_length=4, max_length=20, description="The case record, e.g. rec_2")
+
+
+def full_text(ctx, p: FullTextParams) -> Result:
+    """Fetch the judgment's (unofficial) full text and attach it as a database field."""
+    from core import quote_check
+    from core.tool_contracts import Field, Record
+    record = ctx.records.get(p.ref)
+    citation = (record.fields.get("neutral_citation") or record.fields.get("reporter"))
+    if citation is None or citation.origin != "database" or not citation.value:
+        raise ValueError("只有数据库返回的判例记录能取全文；引用号必须来自数据库字段。")
+    found = quote_check.judgment(citation.value)
+    if found is None:
+        raise ValueError("数据库没有这份判决的全文，无法取回。")
+    version = Record(record.source_type,
+                     {**record.fields, "full_text": Field(found["text"], "database",
+                                                          source_id=found["url"] or f"a2aj:{citation.value}")},
+                     record.provider, record.record_id)
+    ref = _ref(ctx, version)
+    return Result({"ref": ref, "replaces": p.ref, "chars": len(found["text"]),
+                   "note": "the full text is a database field on the new record version"},
+                  [{"type": "card", "title": "判决全文已取回",
+                    "rows": [["记录", ref], ["字符数", str(len(found["text"]))],
+                             ["来源", found["url"] or f"a2aj:{citation.value}"]],
+                    "note": "全文来自 A2AJ 的非官方文本；引语核对会使用它。"}])
+
+
 def _ref(ctx, record) -> str:
-    return ctx.records.put(record)
+    return ctx.save(record)
 
 
 PLUGIN = Plugin(
@@ -62,7 +90,9 @@ PLUGIN = Plugin(
                  "When nothing matches, say what was searched -- not that the source does not exist.",
     tools=[Tool("find_case", "Find Canadian cases by name or citation.", CaseParams, find_case),
            Tool("find_legislation", "Find Canadian legislation by name or citation.", LegislationParams,
-                find_legislation)],
+                find_legislation),
+           Tool("full_text", "Fetch the full text of a stored case, from the database.", FullTextParams,
+                full_text)],
     category="source",
     fact_patterns=CASE_FACTS,
     default_enabled=True,

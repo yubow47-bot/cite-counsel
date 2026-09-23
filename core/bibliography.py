@@ -1,13 +1,15 @@
 """A McGill bibliography assembled from citations the server itself produced.
 
-Each entry is a signed snapshot of a citation's fields (with their origins, or
-an opaque legacy string). A bibliography is rebuilt from those snapshots after
-the signature checks out, so a client can neither invent an entry nor promote
-one to "verified".
+Each entry is a plain snapshot of a citation's fields with their origins,
+handed over by the harness record store (``ctx.records.meta(ref)``): the
+store is server-owned and session-scoped, and references are the only
+handle the model ever gets, so there is nothing for a client to forge and
+nothing to sign. A bibliography is rebuilt from those snapshots, so an
+entry's verification status is always re-derived from the field origins.
 
-The structure (sections, sort keys, first-author inversion, no pinpoints) is
-read from ``mcgill_rules.json`` like every other rule; the entries are rendered
-by the same templates as the footnote citations.
+The structure (sections, sort keys, first-author inversion, no pinpoints)
+is read from ``mcgill_rules.json`` like every other rule; the entries are
+rendered by the same templates as the footnote citations.
 """
 
 from __future__ import annotations
@@ -36,25 +38,11 @@ def rules() -> dict:
         return json.load(source)["_chatbox_bibliography_v1"]
 
 
-# ── Signed entries ────────────────────────────────────────────────────
+# ── Entries ───────────────────────────────────────────────────────────
 
-
-def sign_entry(item: dict, verified: bool) -> dict:
-    """Snapshot a stored item as a client-held, integrity-protected entry."""
-    from api.main import _sign_candidate
-    fields = {name: {key: stored[key] for key in ("value", "origin", "source_id") if stored.get(key)}
-              for name, stored in item["fields"].items() if stored.get("value")}
-    return _sign_candidate({"kind": ENTRY_KIND, "source_type": item["source_type"] or "",
-                            "fields": fields, "base": item["base"], "verified": bool(verified)})
-
-
-def open_entry(entry) -> dict:
-    """The server's own snapshot back, or ValueError if it was not issued here."""
-    from api.main import _candidate_signature_valid
-    if not isinstance(entry, dict) or entry.get("kind") != ENTRY_KIND or not _candidate_signature_valid(entry):
-        raise ValueError("引文清单中有条目校验失败，请把它从清单移除后重新加入。")
-    return entry
-
+# An entry handed to ``build`` is a plain snapshot:
+# {"source_type": str, "fields": {name: {"value", "origin", "source_id"?}}, "base": str | None}
+# The harness store owns these; nothing arrives from the client.
 
 # ── Rendering ─────────────────────────────────────────────────────────
 
@@ -134,7 +122,9 @@ def build(entries: list) -> dict:
     grouped: dict[str, dict[str, dict]] = {section_id: {} for section_id in order}
     derivations = []
     for raw in entries:
-        entry = open_entry(raw)
+        entry = raw
+        if not isinstance(entry, dict) or not isinstance(entry.get("fields"), dict):
+            raise ValueError("引文条目格式不正确，请重新生成引文后加入。")
         text, key, section_id = render_entry(entry)
         section_id = section_id or config["residual_section"]["id"]
         verified = entry_verified(entry)
@@ -160,4 +150,4 @@ def build(entries: list) -> dict:
     total = sum(len(s["entries"]) for s in sections)
     unverified = sum(1 for s in sections for e in s["entries"] if not e["verified"])
     return {"sections": sections, "text": plain, "count": total, "unverified": unverified,
-            "grounded": is_grounded(artifact.derivation)}
+            "grounded": is_grounded(artifact.derivation), "artifact": artifact}

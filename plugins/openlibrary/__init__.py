@@ -37,7 +37,7 @@ def find_book(ctx, p: BookParams) -> Result:
 
 
 def _result(ctx, records):
-    blocks = [{"type": "record_card", "ref": ctx.records.put(r), "source_type": r.source_type,
+    blocks = [{"type": "record_card", "ref": ctx.save(r), "source_type": r.source_type,
                "fields": {k: f.value for k, f in r.fields.items()}, "verified": True}
               for r in records]
     return Result({"found": len(records), "records": [{"ref": b["ref"]} for b in blocks],

@@ -32,6 +32,7 @@ def compute(ctx, p: DeadlineParams) -> Result:
     artifact = limit_compute(Field(p.start, "user"), Field(str(p.days), "user"), Field(p.rule or "unspecified", "user"),
                              p.roll_forward, tuple(Field(h, "user") for h in p.holidays),
                              mode=p.mode, weekend_days=tuple(p.weekend_days))
+    ref = ctx.save(artifact)
     names = "一二三四五六日"
     rows = [["结果日期", artifact.content], ["起算日（不计入）", p.start], ["天数", str(p.days)],
             ["计算方式", "日历日" if p.mode == "calendar_days" else "工作日"],
@@ -41,7 +42,7 @@ def compute(ctx, p: DeadlineParams) -> Result:
         rows.insert(4, ["遇休息日顺延", "是" if p.roll_forward else "否"])
     block = {"type": "card", "title": "期限计算", "rows": rows,
              "note": "只按上面列出的输入做日期运算，不判断规则是否适用，也不包含未列出的法院休息日。请逐项核对。"}
-    return Result({"date": artifact.content}, [block], final=True)
+    return Result({"ref": ref, "date": artifact.content}, [block], final=True)
 
 
 PLUGIN = Plugin(

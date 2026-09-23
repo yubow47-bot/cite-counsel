@@ -52,12 +52,6 @@ def _strip_private(message: dict) -> dict:
     return {k: v for k, v in message.items() if not k.startswith("_")}
 
 
-def _contains_object(content: Any) -> bool:
-    if isinstance(content, (Record, Artifact, Finding)):
-        return True
-    return isinstance(content, list) and any(isinstance(o, (Record, Artifact, Finding)) for o in content)
-
-
 # Fixed-format inputs the harness may point out (§5.2). Only a hint: which
 # plugin to use stays the model's decision.
 _INPUT_HINTS = (
@@ -375,8 +369,8 @@ class Harness:
             problems = [{"field": ".".join(map(str, e["loc"])), "problem": e["msg"]} for e in exc.errors()]
             return name, Result({"error": "invalid arguments", "details": problems[:5]})
         try:
+            # The plugin stores evidence itself (ctx.save) and answers with refs.
             result = tool.handler(self.context(session, plugin_name), params)
-            stored = self._store_objects(session, result.content, plugin.category)
         except ContractError as exc:
             return name, Result({"error": "contract violation", "details": str(exc)})
         except ValueError as exc:
@@ -384,11 +378,6 @@ class Harness:
         except Exception as exc:  # A plugin failure must not take the turn down.
             logger.warning("Tool %s failed: %s", name, type(exc).__name__, exc_info=True)
             return name, Result({"error": "the tool failed; try again later"})
-        if stored:
-            # The model gets references plus a summary; the object itself stays here.
-            result = Result({**(result.content if isinstance(result.content, dict) else
-                               {"result": result.content}), "objects": stored},
-                            result.blocks, result.final)
         return name, result
 
     def _run_builtin(self, session: Session, builtin: _Builtin, arguments: Any, name: str) -> tuple[str, Result]:
@@ -405,17 +394,6 @@ class Harness:
             return name, Result({"error": "the tool failed; try again later"})
         return name, result
 
-    def _store_objects(self, session: Session, content: Any, category: str) -> list[dict]:
-        """Store contract-clean evidence objects, return their model-facing refs."""
-        checked = session.records.check_output(category, content)
-        if not _contains_object(content):
-            return []
-        summaries = []
-        for obj in checked if isinstance(checked, list) else [checked]:
-            if isinstance(obj, (Record, Artifact, Finding)):
-                ref = session.records.put(obj)
-                summaries.append(session.records.summary(ref))
-        return summaries
     def _caption(self, session: Session, text: str) -> str:
         # Harness-level grounding first: hide every paragraph with an
         # unsourced fact, whatever plugins are loaded. A loaded plugin's own
@@ -493,7 +471,6 @@ class Harness:
         if handler is None or plugin_name not in self.config["enabled"]:
             raise ValueError("这个操作不可用。")
         result = handler(self.context(session, plugin_name), payload if isinstance(payload, dict) else {})
-        self._store_objects(session, result.content, plugin.category)
         if result.content is not None:
             # The user acted through this plugin, so it is in play for the model
             # too. A pure view refresh (content None) loads nothing.
