@@ -50,16 +50,25 @@ class Store:
         self._objects: dict[str, Any] = {}
         self._meta: dict[str, dict] = {}
         self._evidence: set[tuple[str, str, str | None]] = set()
+        self._superseded_by: dict[str, str] = {}
         self._lock = threading.Lock()
 
     # ── Storage ───────────────────────────────────────────────────────
 
-    def put(self, obj: Any, meta: dict | None = None) -> str:
+    def put(self, obj: Any, meta: dict | None = None, *, supersedes: str | None = None) -> str:
         with self._lock:
             ref = f"{PREFIX[type(obj)]}_{len(self._objects) + 1}"
             self._objects[ref] = obj
             if meta:
                 self._meta[ref] = meta
+            if supersedes:
+                # A model that still cites the ref it started from (a batch of
+                # calls issued before any of them had a result to chain from,
+                # or just a stale reference in a later turn) reaches this
+                # record's latest version instead of a dead end.
+                old = str(supersedes).strip()
+                if old and old != ref:
+                    self._superseded_by[old] = ref
             self._register(obj)
             return ref
 
@@ -75,8 +84,16 @@ class Store:
     def next_ref(self, obj: Any) -> str:
         return f"{PREFIX[type(obj)]}_{len(self._objects) + 1}"
 
+    def _current_ref(self, ref: str) -> str:
+        seen = set()
+        while ref in self._superseded_by and ref not in seen:
+            seen.add(ref)
+            ref = self._superseded_by[ref]
+        return ref
+
     def get(self, ref: str, kind: type | tuple[type, ...] | None = None) -> Any:
-        obj = self._objects.get(str(ref or "").strip())
+        key = self._current_ref(str(ref or "").strip())
+        obj = self._objects.get(key)
         if obj is None:
             raise ValueError("没有这个编号，或它不属于本次对话。")
         if kind is not None and not isinstance(obj, kind):
