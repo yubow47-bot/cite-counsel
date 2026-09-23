@@ -258,6 +258,17 @@ def test_gemini_25_flash_rate_cheaper_than_fallback():
 # 7.  Logging categories in call_gemini_text()
 # ═════════════════════════════════════════════════════════════════════════════
 
+@pytest.fixture(autouse=True)
+def _gemini_key_for_logging_tests(request, monkeypatch):
+    """These tests exercise the HTTP error paths, which run only once a key is set.
+
+    They used to pass only on machines that happened to have GEMINI_API_KEY in
+    the environment; supply a dummy one so the result does not depend on that.
+    """
+    if "logs" in request.node.name:
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+
 def _make_http_resp(status_code: int = 200, json_data: dict | None = None) -> MagicMock:
     """Build a minimal mock requests.Response."""
     resp = MagicMock(spec=requests.Response)

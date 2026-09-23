@@ -1,0 +1,6 @@
+.web-card { padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); font-size: 13px; white-space: normal; }
+.web-card summary { cursor: pointer; color: var(--muted); }
+.web-row { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.web-row small { display: block; color: var(--muted); overflow-wrap: anywhere; }
+.web-row p { margin: 4px 0 0; }
+.web-link { color: var(--red); }

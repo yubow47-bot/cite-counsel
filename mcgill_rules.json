@@ -1,8 +1,42 @@
 {
+  "_chatbox_bibliography_v1": {
+    "_source": "general_rules / Structuring a Bibliography",
+    "sections": [
+      {"id": "legislation", "title": "Legislation", "source_types": ["legislation", "bill"], "sort_field": "title"},
+      {"id": "jurisprudence", "title": "Jurisprudence", "source_types": ["jurisprudence"], "sort_field": "style_of_cause"},
+      {"id": "secondary", "title": "Secondary Materials", "source_types": ["book", "journal_article", "newspaper", "website"], "sort_field": "author", "invert_first_author": true}
+    ],
+    "residual_section": {"id": "other", "title": "Other Materials"},
+    "omit_fields": ["pinpoint"]
+  },
+  "_chatbox_court_abbreviations_v1": {
+    "_rule": "Court names in parentheses use the McGill abbreviation. Applied only to an exact (case-insensitive) court name; anything else is kept as written.",
+    "judicial committee of the privy council": "PC",
+    "privy council": "PC",
+    "house of lords": "HL",
+    "supreme court of canada": "SCC",
+    "federal court of appeal": "FCA",
+    "federal court": "FC",
+    "tax court of canada": "TCC",
+    "court of appeal for ontario": "Ont CA",
+    "ontario court of appeal": "Ont CA",
+    "british columbia court of appeal": "BCCA",
+    "court of appeal for british columbia": "BCCA",
+    "alberta court of appeal": "Alta CA",
+    "court of appeal of alberta": "Alta CA",
+    "quebec court of appeal": "Qc CA",
+    "court of appeal of quebec": "Qc CA",
+    "manitoba court of appeal": "Man CA",
+    "saskatchewan court of appeal": "Sask CA",
+    "nova scotia court of appeal": "NSCA",
+    "new brunswick court of appeal": "NBCA"
+  },
   "_chatbox_templates_v1": {
     "jurisprudence": {
       "label": "判例",
       "required_any": [["neutral_citation", "reporter"]],
+      "pinpoint_after": ["neutral_citation", "reporter"],
+      "_pinpoint_after_rule": "A pinpoint follows the first citation it refers to, before any parallel citation: R v Sharma, 2022 SCC 39 at para 1, [2022] 3 SCR 147.",
       "fields": [
         {"name": "style_of_cause", "label": "案名（保留原文）", "required": true},
         {"name": "neutral_citation", "label": "中立引用号（如原文存在）"},
