@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +45,49 @@ def chat(model: str, messages: list[dict], tools: list[dict], *, timeout: float 
         raise LLMError("模型服务暂时不可用。") from exc
     track_usage(model, data)
     try:
-        return data["choices"][0]["message"]
+        message = data["choices"][0]["message"]
     except (KeyError, IndexError, TypeError) as exc:
         raise LLMError("模型返回格式不正确。") from exc
+    if tools:
+        return _recover_leaked_calls(message)
+    # No tools were offered, so nothing to run -- just keep the markup off screen.
+    if isinstance(message.get("content"), str) and "<tool_call>" in message["content"]:
+        return {**message, "content": _LEAKED_CALL.sub("", message["content"]).strip()}
+    return message
+
+
+# GLM sometimes writes a tool call in its own text format instead of the
+# structured field, and the provider passes it through as prose:
+#   <tool_call>load_plugin<arg_key>name</arg_key><arg_value>web</arg_value></tool_call>
+# Shown as-is, the user sees markup and the call never runs.
+_LEAKED_CALL = re.compile(r"<tool_call>\s*([\w.-]+)\s*(.*?)</tool_call>", re.S)
+_LEAKED_ARG = re.compile(r"<arg_key>\s*(.*?)\s*</arg_key>\s*<arg_value>(.*?)</arg_value>", re.S)
+
+
+def _leaked_value(text: str):
+    # Only structured values are JSON; "2016" must stay the string it was.
+    text = text.strip()
+    if text[:1] in "{[":
+        try:
+            return json.loads(text)
+        except ValueError:
+            pass
+    return text
+
+
+def _recover_leaked_calls(message: dict) -> dict:
+    content = message.get("content")
+    if message.get("tool_calls") or not isinstance(content, str) or "<tool_call>" not in content:
+        return message
+    calls = []
+    for n, match in enumerate(_LEAKED_CALL.finditer(content)):
+        arguments = {key: _leaked_value(value) for key, value in _LEAKED_ARG.findall(match.group(2))}
+        calls.append({"id": f"leaked_{n}", "type": "function",
+                      "function": {"name": match.group(1), "arguments": json.dumps(arguments, ensure_ascii=False)}})
+    if not calls:
+        return message
+    logger.info("Recovered %d tool call(s) the model wrote as text", len(calls))
+    return {**message, "content": _LEAKED_CALL.sub("", content).strip(), "tool_calls": calls}
 
 
 def configured() -> bool:

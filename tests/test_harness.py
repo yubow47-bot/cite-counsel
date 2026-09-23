@@ -446,3 +446,25 @@ def test_input_hints_flag_fixed_format_inputs():
     assert _input_hints("gladue") == ""
     assert "ISBN" in _input_hints("这本书是 978-0-306-40615-7")
     assert "bill" in _input_hints("C-22 那个议案进展如何")
+
+
+def test_a_tool_call_written_as_text_is_recovered():
+    leaked = {"role": "assistant", "content":
+              "<tool_call>a2aj__find_case<arg_key>query</arg_key><arg_value>2016</arg_value></tool_call>"}
+    message = llm._recover_leaked_calls(leaked)
+    assert message["content"] == ""
+    call = message["tool_calls"][0]["function"]
+    assert call["name"] == "a2aj__find_case"
+    assert json.loads(call["arguments"]) == {"query": "2016"}      # a scalar stays a string
+    plain = {"role": "assistant", "content": "no markup here"}
+    assert llm._recover_leaked_calls(plain) is plain
+
+
+def test_a_leaked_call_runs_instead_of_being_shown(monkeypatch, harness):
+    leaked = {"role": "assistant", "content":
+              "<tool_call>load_plugin<arg_key>name</arg_key><arg_value>alpha</arg_value></tool_call>"}
+    Script(monkeypatch, [llm._recover_leaked_calls(leaked), say("done")])
+    session, _ = harness.sessions.start()
+    blocks = harness.run_turn(session, "x")
+    assert "alpha" in session.loaded
+    assert not any("<tool_call>" in str(b) for b in blocks)
