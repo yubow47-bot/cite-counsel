@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from harness import core as harness_core, llm
 from harness.app import create_app
-from harness.core import Harness
+from harness.core import MAX_STEPS, Harness
 from harness.plugin import Plugin, Result, Setting, Tool
 
 
@@ -140,11 +140,31 @@ def test_repeated_failures_stop_early(monkeypatch, harness):
     assert blocks[-1]["type"] == "notice" and len(script.calls) == 3
 
 
+def working_round():
+    """One round that neither finishes nor fails: a good call beside a bad one."""
+    ok, bad = call("alpha__echo", text="x")["tool_calls"][0], call("alpha__missing")["tool_calls"][0]
+    return {"role": "assistant", "content": None, "tool_calls": [ok, {**bad, "id": "c2"}]}
+
+
 def test_step_limit(monkeypatch, harness):
-    Script(monkeypatch, [call("load_plugin", name="alpha")] * 10)
+    script = Script(monkeypatch, [call("load_plugin", name="alpha")] + [working_round()] * (MAX_STEPS + 5))
     session, _ = harness.sessions.start()
     blocks = harness.run_turn(session, "x")
     assert blocks[-1]["type"] == "notice"
+    assert len(script.calls) == MAX_STEPS + 1                     # the load round was free
+
+
+def test_loading_plugins_is_bounded(monkeypatch, harness):
+    Script(monkeypatch, [call("load_plugin", name="alpha")] * (MAX_STEPS + 10))
+    session, _ = harness.sessions.start()
+    blocks = harness.run_turn(session, "x")
+    assert blocks[-1]["type"] == "notice"
+
+
+def test_prompt_says_to_retry_before_asking(harness):
+    session, _ = harness.sessions.start()
+    prompt = harness._system_prompt(session)
+    assert "search again in another form" in prompt and "record__new" in prompt
 
 
 def test_action_notes_are_not_the_users_words(harness):
