@@ -131,7 +131,7 @@ class Harness:
                  config_path: Path = CONFIG_PATH):
         self.plugins = plugins if plugins is not None else discover()
         self.config_path = config_path
-        self.sessions = SessionStore()
+        self.sessions = SessionStore(store_dir=config_path.parent / "sessions")
         self._config_lock = threading.Lock()
         self.config = self._load_config(model)
 
@@ -457,6 +457,12 @@ class Harness:
         hints = _input_hints(text)
         session.messages.append({"role": "user", "content": "\n".join([text, *notes]).strip()
                                  + (("\n\n" + hints) if hints else "")})
+        try:
+            return self._turn(session)
+        finally:
+            self.sessions.save(session)
+
+    def _turn(self, session: Session) -> list[dict]:
         blocks: list[dict] = []
         failures = 0
         for _ in range(MAX_STEPS):
@@ -507,7 +513,10 @@ class Harness:
         handler = plugin.actions.get(action) if plugin else None
         if handler is None or plugin_name not in self.config["enabled"]:
             raise ValueError("这个操作不可用。")
-        result = handler(self.context(session, plugin_name), payload if isinstance(payload, dict) else {})
+        try:
+            result = handler(self.context(session, plugin_name), payload if isinstance(payload, dict) else {})
+        finally:
+            self.sessions.save(session)
         if result.content is not None:
             # The user acted through this plugin, so it is in play for the model
             # too. A pure view refresh (content None) loads nothing.

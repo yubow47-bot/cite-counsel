@@ -7,7 +7,6 @@ import logging
 import os
 import re
 import secrets
-import tempfile
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
@@ -73,7 +72,6 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
     from api.rate_limiter import RateLimiter
     limiter = RateLimiter()
     slots = asyncio.Semaphore(2)
-    upload_dir = Path(tempfile.mkdtemp(prefix="citecounsel-"))
 
     @app.middleware("http")
     async def local_boundary(request: Request, call_next):
@@ -211,9 +209,12 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
             return fail("文件内容与扩展名不匹配。")
         session, token = session_for(SessionRef(session_id=session_id or None, session_token=session_token or None))
         attachment_id = "att_" + secrets.token_hex(4)
-        path = upload_dir / (attachment_id + suffix)
+        # The file lives inside the session's own directory, so it survives
+        # a restart together with the record that points at it.
+        path = harness.sessions.attachment_dir(session) / (attachment_id + suffix)
         path.write_bytes(contents)
         session.attachments[attachment_id] = {"path": str(path), "name": Path(file.filename or "file").name[:120]}
+        harness.sessions.save(session)
         return {**envelope(session, token, []), "attachment": {"id": attachment_id,
                                                                "name": session.attachments[attachment_id]["name"]}}
 

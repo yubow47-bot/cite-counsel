@@ -197,3 +197,63 @@ def grounding_issues(derivation: Derivation) -> tuple[GroundingIssue, ...]:
 
 def is_grounded(derivation: Derivation) -> bool:
     return not grounding_issues(derivation)
+
+
+# ── Serialization (for the session store on disk) ─────────────────────
+
+
+def encode(obj: Field | Derivation | Record | Artifact | Finding) -> dict:
+    """A JSON-safe snapshot of a contract object. Bytes content is base64
+    under a marker key; everything else round-trips through ``decode``."""
+    if isinstance(obj, Derivation):
+        return {"kind": "Derivation", "inputs": [encode(i) for i in obj.inputs],
+                "rule_id": obj.rule_id, "input_names": list(obj.input_names)}
+    if isinstance(obj, Field):
+        data = {"kind": "Field", "value": obj.value, "origin": obj.origin,
+                "source_id": obj.source_id, "rule_id": obj.rule_id}
+        if obj.span is not None:
+            data["span"] = list(obj.span)
+        if obj.derivation is not None:
+            data["derivation"] = encode(obj.derivation)
+        return data
+    if isinstance(obj, Record):
+        return {"kind": "Record", "source_type": obj.source_type,
+                "fields": {name: encode(field) for name, field in obj.fields.items()},
+                "provider": obj.provider, "record_id": obj.record_id}
+    if isinstance(obj, Artifact):
+        content = obj.content
+        if isinstance(content, bytes):
+            import base64
+            content = {"__bytes__": base64.b64encode(content).decode("ascii")}
+        return {"kind": "Artifact", "artifact_kind": obj.kind, "content": content,
+                "derivation": encode(obj.derivation)}
+    if isinstance(obj, Finding):
+        return {"kind": "Finding", "verdict": obj.verdict, "detail": obj.detail,
+                "coverage": obj.coverage, "derivation": encode(obj.derivation)}
+    raise TypeError(f"cannot encode {type(obj).__name__}")
+
+
+def decode(data: dict) -> Field | Derivation | Record | Artifact | Finding:
+    if not isinstance(data, dict) or "kind" not in data:
+        raise TypeError("not an encoded contract object")
+    kind = data["kind"]
+    if kind == "Derivation":
+        return Derivation(tuple(decode(i) for i in data["inputs"]), data["rule_id"],
+                          tuple(data.get("input_names") or ()))
+    if kind == "Field":
+        return Field(data["value"], data["origin"], source_id=data["source_id"],
+                     rule_id=data["rule_id"],
+                     span=tuple(data["span"]) if data.get("span") is not None else None,
+                     derivation=decode(data["derivation"]) if data.get("derivation") else None)
+    if kind == "Record":
+        return Record(data["source_type"], {name: decode(f) for name, f in data["fields"].items()},
+                      data["provider"], data["record_id"])
+    if kind == "Artifact":
+        content = data["content"]
+        if isinstance(content, dict) and "__bytes__" in content:
+            import base64
+            content = base64.b64decode(content["__bytes__"])
+        return Artifact(data["artifact_kind"], content, decode(data["derivation"]))
+    if kind == "Finding":
+        return Finding(data["verdict"], data["detail"], data["coverage"], decode(data["derivation"]))
+    raise TypeError(f"unknown kind {kind!r}")

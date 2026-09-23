@@ -24,11 +24,12 @@ class CaseParams(BaseModel):
 
 def find_case(ctx, p: CaseParams) -> Result:
     records = source_cases(p.query)
-    blocks = [{"type": "record_card", "ref": _ref(ctx, r), "source_type": r.source_type,
+    refs = [_ref(ctx, r) for r in records]
+    blocks = [{"type": "record_card", "ref": ref, "source_type": r.source_type,
                "fields": {k: f.value for k, f in r.fields.items()},
-               "verified": True} for r in records]
+               "verified": True} for ref, r in zip(refs, records)]
     note = "" if records else "。A2AJ 里没有匹配的判例：查询的是按名称与引用号的加拿大判例库，不含美国或英国判例。"
-    return Result({"found": len(records), "records": [{"ref": _ref(ctx, r)} for r in records],
+    return Result({"found": len(records), "records": [{"ref": ref} for ref in refs],
                    "note": ("records are stored; refer to them by ref" if records else
                             "no match in the Canadian databases searched; this does not mean it does not exist")},
                   blocks + ([{"type": "notice", "level": "info", "text": "没有找到匹配的判例。" + note[1:]}]
@@ -41,10 +42,11 @@ class LegislationParams(BaseModel):
 
 def find_legislation(ctx, p: LegislationParams) -> Result:
     records = source_legislation(p.query)
-    blocks = [{"type": "record_card", "ref": _ref(ctx, r), "source_type": r.source_type,
+    refs = [_ref(ctx, r) for r in records]
+    blocks = [{"type": "record_card", "ref": ref, "source_type": r.source_type,
                "fields": {k: f.value for k, f in r.fields.items()},
-               "verified": True} for r in records]
-    return Result({"found": len(records), "records": [{"ref": _ref(ctx, r)} for r in records],
+               "verified": True} for ref, r in zip(refs, records)]
+    return Result({"found": len(records), "records": [{"ref": ref} for ref in refs],
                    "note": "records are stored; refer to them by ref" if records else "no match"},
                   blocks, final=bool(records))
 
