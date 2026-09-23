@@ -27,12 +27,14 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from core import mcgill_format
 from harness import grounding, llm
 from harness.plugin import Plugin, Result, UserText, discover
 from harness.records import ContractError
 from harness.session import HISTORY_LIMIT, Context, Session, SessionStore
 from core.tool_contracts import Artifact, Finding, Record
 from pydantic import BaseModel, Field
+from typing import Literal
 
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent.parent
@@ -93,18 +95,23 @@ class AddUserField(BaseModel):
                            description="What the user said, copied from their messages; they must have written it")
 
 
+_RECORD_TYPES = tuple(sorted(mcgill_format.schemas().keys()))
+
+
 class NewRecord(BaseModel):
-    record_type: str = Field(min_length=1, max_length=40,
-                             description="e.g. case, legislation, book, article, webpage")
+    record_type: Literal[_RECORD_TYPES] = Field(
+        description="The kind of source, matching what the citation plugin renders it as "
+                    "(jurisprudence for a case, journal_article for an article, website for a webpage)")
 
 
 def _add_user_field(ctx, p: AddUserField) -> Result:
     record = ctx.records.get(p.ref, Record)
     updated = ctx.records.add_user_field(record, p.field, p.text)
-    ref = ctx.save(updated)
+    ref = ctx.save(updated, supersedes=p.ref)
     return Result(
         {"ref": ref, "field": p.field, "value": p.text, "origin": "user",
-         "note": "from the user's own words; the record is not verified while it has user fields"},
+         "note": "from the user's own words; the record is not verified while it has user fields. "
+                "To add another field to this same record, use this ref -- not the one you just passed in."},
         [{"type": "card", "title": f"已补充 {p.field}", "rows": [[p.field, p.text],
          ["来源", "你的原话"], ["核验状态", "未核验（含用户补充字段）"]]}])
 
@@ -112,17 +119,24 @@ def _add_user_field(ctx, p: AddUserField) -> Result:
 def _new_record(ctx, p: NewRecord) -> Result:
     record = ctx.records.new_record(p.record_type)
     ref = ctx.records.put(record)
+    field_names = [f["name"] for f in mcgill_format.schema_fields(p.record_type)]
     return Result(
         {"ref": ref, "record_type": record.source_type, "fields": {},
-         "note": "an empty record from the user; its fields are supplied by the user one by one"},
+         "fields_this_type_takes": field_names,
+         "note": "an empty record from the user; call record__add_user_field once per field above, "
+                "using these exact field names -- a name outside this list will not render"},
         [{"type": "card", "title": f"新建空白记录 · {p.record_type}", "rows": [["编号", ref]],
-         "note": "数据库里没有找到。请告诉我要写入的字段（如案名、引用号、年份），我会逐项记录为你的补充。"}])
+         "note": "数据库里没有找到。请告诉我要写入的字段（" + "、".join(field_names) +
+                 "），我会逐项记录为你的补充。"}])
 
 
 BUILTIN_TOOLS = (
     _Builtin("record__add_user_field",
              "Write a field the user themselves supplied into a stored record. The text must be copied "
-             "from the user's messages; it is refused otherwise.",
+             "from the user's messages; it is refused otherwise. Each call returns a NEW ref for the "
+             "updated record -- to add a second field, call this again with THAT ref, not the one you "
+             "started with. Do not call this twice in the same turn against the same record: the second "
+             "call would not see the first one's field.",
              AddUserField, _add_user_field),
     _Builtin("record__new",
              "Create an empty record for a source the databases do not have, for the user to fill in.",

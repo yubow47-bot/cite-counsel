@@ -353,10 +353,46 @@ def test_record_new_and_add_user_field_require_the_users_words(harness):
                                {"ref": ref, "field": "court", "text": "Supreme Court of Canada"},
                                "record__add_user_field")[1]
     assert "error" in bad.content
-    # The user field forms a new version; the blank record stays as it was.
+    # The user field forms a new version; the object stored under the
+    # original ref is untouched (still blank) --
+    assert session.records._objects[ref].fields == {}
+    # -- but a caller that still cites that old ref reaches the latest
+    # version instead of a dead end (a model citing a stale ref after the
+    # record moved on, or two add_user_field calls batched in one round).
     record = session.records.get(ok.content["ref"], Record)
     assert record.fields["neutral_citation"].origin == "user"
-    assert session.records.get(ref, Record).fields == {}
+    assert session.records.get(ref, Record) is record
+
+
+def test_two_add_user_field_calls_batched_in_one_round_both_land(harness):
+    """A model that issues both field-writing calls before either result
+    comes back can only pass the SAME starting ref to both -- the harness
+    still merges them, because the second call resolves that stale ref to
+    the version the first call just produced (calls in a round run in
+    sequence, not concurrently)."""
+    from core.tool_contracts import Record
+
+    session, _ = harness.sessions.start()
+    session.messages.append({"role": "user", "content": "Zzyx v Qwerty, 2099 FAKE 999"})
+    add_field, new_record = harness_core.BUILTIN_TOOLS
+    blank_ref = harness._run_builtin(session, new_record, {"record_type": "jurisprudence"},
+                                     "record__new")[1].content["ref"]
+
+    first = harness._run_builtin(session, add_field,
+                                 {"ref": blank_ref, "field": "style_of_cause", "text": "Zzyx v Qwerty"},
+                                 "record__add_user_field")[1]
+    # Issued against the SAME blank_ref as `first` -- as a model would when
+    # both calls are queued in one assistant turn, before either result exists.
+    second = harness._run_builtin(session, add_field,
+                                  {"ref": blank_ref, "field": "neutral_citation", "text": "2099 FAKE 999"},
+                                  "record__add_user_field")[1]
+
+    merged = session.records.get(second.content["ref"], Record)
+    assert merged.fields["style_of_cause"].value == "Zzyx v Qwerty"
+    assert merged.fields["neutral_citation"].value == "2099 FAKE 999"
+    # The stale starting ref both calls were given now reaches the merged
+    # version -- the second call's forwarding overtakes the first's.
+    assert session.records.get(blank_ref, Record) is merged
 
 
 def test_new_plugins_get_their_default_after_settings_were_saved(tmp_path):
