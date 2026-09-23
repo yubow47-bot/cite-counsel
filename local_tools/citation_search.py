@@ -1411,7 +1411,17 @@ def search_citation(query: str, classification: dict | None = None) -> list:
         if not results:
             return []
 
-        # 去重 → 优先 keyword 命中的结果 → 最多 5 条
+        # 去重 → 优先 keyword 命中 → 按法院层级 → 最多 8 条
+        # The leading authority is usually the highest court's decision: without
+        # ranking, "gladue" listed five trial decisions and cut R v Gladue (SCC).
+        def _court_rank(r):
+            court = (r.get("dataset") or "").upper()
+            if court in {"SCC", "UKPC", "PC"}:
+                return 0
+            if court.endswith("CA") or court in {"FCA", "QCCA"}:
+                return 1
+            return 2
+        results = sorted(results, key=_court_rank)
         seen = set()
         final = []
         for r in results:
@@ -1421,14 +1431,14 @@ def search_citation(query: str, classification: dict | None = None) -> list:
                 if key and key not in seen:
                     seen.add(key)
                     final.append(r)
-                if len(final) >= 5:
+                if len(final) >= 8:
                     break
         for r in results:
             key = r.get("citation_en") or r.get("name_en")
             if key and key not in seen:
                 seen.add(key)
                 final.append(r)
-            if len(final) >= 5:
+            if len(final) >= 8:
                 break
 
         results = [dict(_map_fields(r), verified=True) for r in final]

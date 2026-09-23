@@ -83,17 +83,76 @@ def fetch_openlibrary(isbn: str) -> dict | None:
 
     GET https://openlibrary.org/api/books?bibkeys=ISBN:…&format=json&jscmd=data
     Returns the per-book dict, or None on any failure.
+
+    The Books API has started answering 404 for every key (2026-09); the
+    plain edition endpoint still works, so a miss falls through to it and is
+    converted to the same ``jscmd=data`` shape callers already read.
     """
     url = f"https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&format=json&jscmd=data"
     try:
         with prof.measure("http.openlibrary", endpoint="openlibrary.org"):
             resp = request_with_retry(openlibrary_session, "GET", url, read_timeout=15)
         resp.raise_for_status()
-        data = resp.json()
-        key = f"ISBN:{isbn}"
-        return data.get(key)
+        found = resp.json().get(f"ISBN:{isbn}")
+        if found:
+            return found
+    except Exception:
+        pass
+    return fetch_edition_data(f"isbn/{isbn}")
+
+
+def fetch_edition_data(path: str) -> dict | None:
+    """``isbn/<isbn>`` or ``books/<OLID>`` as a ``jscmd=data``-shaped dict, or None."""
+    if not re.fullmatch(r"isbn/[0-9Xx]{10,13}|books/OL\d+M", path):
+        return None
+    try:
+        with prof.measure("http.openlibrary", endpoint="openlibrary.org"):
+            resp = request_with_retry(openlibrary_session, "GET", f"https://openlibrary.org/{path}.json",
+                                      read_timeout=15)
+        resp.raise_for_status()
+        edition = resp.json()
+        if not isinstance(edition, dict) or not edition.get("title"):
+            return None
+        return edition_to_data(edition, _author_names(edition))
     except Exception:
         return None
+
+
+def _author_names(edition: dict) -> list[str]:
+    """Edition records point at author records; resolve at most four names."""
+    names = []
+    for ref in (edition.get("authors") or [])[:4]:
+        key = ref.get("key") if isinstance(ref, dict) else None
+        if not isinstance(key, str) or not re.fullmatch(r"/authors/OL\d+A", key):
+            continue
+        try:
+            resp = request_with_retry(openlibrary_session, "GET", f"https://openlibrary.org{key}.json",
+                                      read_timeout=10)
+            resp.raise_for_status()
+            name = resp.json().get("name")
+        except Exception:
+            name = None
+        if isinstance(name, str) and name.strip():
+            names.append(name.strip())
+    return names
+
+
+def edition_to_data(edition: dict, author_names: list[str]) -> dict:
+    """Map a raw edition record onto the ``jscmd=data`` keys (values unchanged)."""
+    def named(values):
+        return [{"name": value} for value in values or [] if isinstance(value, str) and value.strip()]
+    data = {"title": edition.get("title") or "", "subtitle": edition.get("subtitle") or "",
+            "authors": [{"name": name} for name in author_names],
+            "publishers": named(edition.get("publishers")),
+            "publish_places": named(edition.get("publish_places")),
+            "publish_date": edition.get("publish_date") or ""}
+    if edition.get("edition_name"):
+        data["edition_name"] = edition["edition_name"]
+    languages = [ref.get("key", "").rsplit("/", 1)[-1] for ref in edition.get("languages") or []
+                 if isinstance(ref, dict)]
+    if languages:
+        data["languages"] = languages
+    return data
 
 
 def build_book_citation(ol_data: dict) -> str | None:

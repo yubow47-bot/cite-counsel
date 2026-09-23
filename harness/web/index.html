@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Cite Counsel</title>
+    <link rel="stylesheet" href="/assets/harness.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="settings" id="settings" aria-label="设置">
+        <div class="brand"><span class="mark">C</span><b>Cite Counsel</b></div>
+        <button id="new-chat" class="primary" type="button">＋ 新建对话</button>
+
+        <section class="group">
+          <h2>模型</h2>
+          <p class="status"><span id="llm-dot" class="dot"></span><span id="llm-status">读取中…</span></p>
+          <form id="model-form" class="row-form">
+            <input id="model" maxlength="200" placeholder="模型 ID，如 qwen/qwen3.7-flash" aria-label="模型 ID" />
+            <button type="submit">保存</button>
+          </form>
+          <form id="key-form" class="row-form">
+            <input id="api-key" type="password" autocomplete="new-password" maxlength="400" placeholder="OpenRouter API Key（不回显）" aria-label="API Key" />
+            <button type="submit">保存</button>
+          </form>
+        </section>
+
+        <section class="group">
+          <h2>插件</h2>
+          <p class="hint">启用的插件不会自动运行；模型按你的输入决定加载哪个、调用哪个工具。</p>
+          <div id="plugins" class="plugins"></div>
+        </section>
+      </aside>
+
+      <main class="chat">
+        <div id="empty" class="empty">
+          <h1>有什么要查、要引、要核对的？</h1>
+          <p>直接说。模型会根据你的话选择要用的插件。</p>
+        </div>
+        <section id="transcript" class="transcript" aria-live="polite"></section>
+        <div class="composer-wrap">
+          <div id="chips" class="chips"></div>
+          <form id="composer" class="composer">
+            <input id="file" type="file" hidden accept=".pdf,.docx,.pptx,.xlsx,.jpg,.jpeg,.png,.webp" />
+            <button id="attach" type="button" class="icon" aria-label="添加附件" title="添加附件">＋</button>
+            <textarea id="input" rows="1" maxlength="4000" placeholder="输入消息，Enter 发送，Shift+Enter 换行" aria-label="消息"></textarea>
+            <button id="send" type="submit" class="send" aria-label="发送">↑</button>
+          </form>
+        </div>
+      </main>
+
+      <aside id="panels" class="panels" hidden aria-label="插件面板"></aside>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/assets/harness.js"></script>
+  </body>
+</html>
