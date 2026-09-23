@@ -80,10 +80,14 @@ class Plugin:
     default_enabled: bool = False
     api: Any = None
     reply_guard: Callable[[str, Any], str] | None = None
+    category: str = "function"     # "source" | "extract" | "function": what origins it may produce
+    fact_patterns: tuple = ()      # regexes for fact-shaped strings this domain uses (grounding)
 
     def validate(self) -> None:
         if not NAME_RE.match(self.name):
             raise ValueError(f"invalid plugin name {self.name!r}")
+        if self.category not in {"source", "extract", "function"}:
+            raise ValueError(f"plugin {self.name}: unknown category {self.category!r}")
         if not self.description.strip() or len(self.description) > 300:
             raise ValueError(f"plugin {self.name}: description must be one short line")
         seen = set()

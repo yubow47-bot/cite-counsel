@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from harness.records import Store
+
 HISTORY_LIMIT = 40          # model-visible messages kept per session
 IDLE_TTL = 4 * 3600
 
@@ -30,6 +32,7 @@ class Session:
     loaded: list[str] = field(default_factory=list)       # plugins loaded by the model
     state: dict[str, dict] = field(default_factory=dict)  # plugin name -> its state
     attachments: dict[str, dict] = field(default_factory=dict)
+    records: Store = field(default_factory=Store)         # numbered evidence objects
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def user_texts(self) -> list[str]:
@@ -74,6 +77,11 @@ class Context:
     def __init__(self, session: Session, plugin: str, harness, settings: dict | None = None):
         self.session, self.plugin, self._harness = session, plugin, harness
         self.settings = settings or {}
+
+    @property
+    def records(self) -> Store:
+        """The session's numbered evidence store."""
+        return self.session.records
 
     @property
     def state(self) -> dict:
