@@ -163,8 +163,15 @@ def case_citation(item: dict) -> str:
     return ""
 
 
-def check(item: dict, quote: str) -> dict:
+def check(item: dict, quote: str, *, text: str | None = None,
+          source_id: str | None = None) -> dict:
     """Locate ``quote`` in the judgment behind ``item``.
+
+    By default the judgment text is fetched from the database by the
+    citation ``item`` carries. Callers that already hold the full text --
+    the harness ``quote`` plugin reads the stored ``full_text`` field -- pass
+    ``text`` (and its ``source_id``) instead: the source Field then names
+    exactly the stored evidence, so the provenance audit can match it.
 
     Returns {"verdict", "pinpoint", "excerpt", "match": [start, end] within
     the excerpt, "url", "finding"}. ValueError explains why no check ran.
@@ -175,27 +182,30 @@ def check(item: dict, quote: str) -> dict:
     citation = case_citation(item)
     if not citation:
         raise ValueError("只有从判例数据库取回的判决可以对照原文核对引语。")
-    found = judgment(citation)
-    if found is None:
-        raise ValueError("数据库没有这份判决的全文，无法核对。")
-    located = locate(found["text"], quote)
-    source = Field(found["text"], "database", source_id=found["url"] or f"a2aj:{citation}")
+    if text is None:
+        found = judgment(citation)
+        if found is None:
+            raise ValueError("数据库没有这份判决的全文，无法核对。")
+        text, url = found["text"], found["url"]
+        source_id = source_id or url or f"a2aj:{citation}"
+    located = locate(text, quote)
+    source = Field(text, "database", source_id=source_id or f"a2aj:{citation}")
     quoted = Field(quote, "user")
     if located.verdict == "not_found":
         finding = Finding("contradicted", "The quotation does not appear in the unofficial full text.",
                           "complete", Derivation((quoted, source), RULE_ID, ("quote", "source")))
         return {"verdict": "not_found", "pinpoint": "", "excerpt": "", "match": None,
-                "url": found["url"], "finding": finding}
-    lo, hi = max(0, located.start - 220), min(len(found["text"]), located.end + 220)
+                "url": source_id, "finding": finding}
+    lo, hi = max(0, located.start - 220), min(len(text), located.end + 220)
     # Start and end the excerpt on word boundaries.
-    while 0 < lo < located.start and not found["text"][lo - 1].isspace():
+    while 0 < lo < located.start and not text[lo - 1].isspace():
         lo += 1
-    while located.end < hi < len(found["text"]) and not found["text"][hi].isspace():
+    while located.end < hi < len(text) and not text[hi].isspace():
         hi -= 1
-    excerpt = found["text"][lo:hi]
+    excerpt = text[lo:hi]
     verdict = "confirmed" if located.verdict == "exact" else "inconclusive"
     detail = ("The quotation appears verbatim in the unofficial full text." if verdict == "confirmed" else
               "The words appear, but capitalization differs from the text.")
     finding = Finding(verdict, detail, "complete", Derivation((quoted, source), RULE_ID, ("quote", "source")))
     return {"verdict": located.verdict, "pinpoint": pinpoint_for(located.paragraphs), "excerpt": excerpt,
-            "match": [located.start - lo, located.end - lo], "url": found["url"], "finding": finding}
+            "match": [located.start - lo, located.end - lo], "url": source_id, "finding": finding}

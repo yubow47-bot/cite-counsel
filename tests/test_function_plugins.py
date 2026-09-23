@@ -1,9 +1,14 @@
-"""The function plugins: mcgill citations, quote checking, bibliography."""
+"""The function plugins: mcgill citations, quote checking, bibliography.
+
+Flows that involve user-quoted parameters or provenance auditing run through
+the harness itself (``_execute``), because that is where the checks live.
+"""
+import json
 from unittest.mock import patch
 
 import pytest
 
-from core.tool_contracts import Artifact, Field, Finding, Record
+from core.tool_contracts import Artifact, Derivation, Field, Finding, Record, is_grounded
 from harness.core import Harness
 from harness.plugin import discover
 from harness.session import Context
@@ -11,6 +16,7 @@ from harness.session import Context
 TEXT = ("R. v. Sharma\n[1] Conditional sentences are a form of punishment.\n"
         "[2] Parliament created the conditional sentencing regime in 1996.\n")
 URL = "https://decisions.scc-csc.ca/x"
+QUOTE = "Parliament created the conditional sentencing regime in 1996."
 
 
 def make():
@@ -30,14 +36,21 @@ def gladue_record():
     }, "a2aj", "c1")
 
 
-def store_record(session, record):
-    return session.records.put(record)
+def run_tool(h, session, tool, **arguments):
+    """A tool call through the harness: params verified, audit on save."""
+    plugin_name = tool.partition("__")[0]
+    h.set_enabled(plugin_name, True)
+    if plugin_name not in session.loaded:
+        session.loaded.append(plugin_name)
+    call = {"id": "c1", "type": "function",
+            "function": {"name": tool, "arguments": json.dumps(arguments)}}
+    return h._execute(session, call)[1]
 
 
 def test_mcgill_cite_renders_and_verifies_from_the_chain():
     h, session = make()
     from plugins import mcgill
-    ref = store_record = session.records.put(gladue_record())
+    ref = session.records.put(gladue_record())
     result = mcgill.cite(ctx_for(h, session, "mcgill"), mcgill.CiteParams(ref=ref))
     artifact = session.records.get(result.content["ref"], Artifact)
     assert artifact.kind == "citation_text"
@@ -50,7 +63,6 @@ def test_mcgill_cite_renders_and_verifies_from_the_chain():
 def test_mcgill_cite_lists_what_is_missing():
     h, session = make()
     from plugins import mcgill
-    from core import mcgill_format
     ref = session.records.put(Record("book", {"author": Field("H. L. A. Hart", "database", source_id="ol:1"),
                                               "title": Field("The Concept of Law", "database", source_id="ol:1")},
                                      "openlibrary", "OL1"))
@@ -61,70 +73,65 @@ def test_mcgill_cite_lists_what_is_missing():
 
 def test_user_pinpoint_makes_the_citation_honest_about_being_unverified():
     h, session = make()
-    from plugins import mcgill
-    session.messages.append({"role": "user", "content": "帮我引用，定位到 at para 64"})
     ref = session.records.put(gladue_record())
-    result = mcgill.cite(ctx_for(h, session, "mcgill"), mcgill.CiteParams(ref=ref, pinpoint="at para 64"))
+    session.messages.append({"role": "user", "content": "帮我引用，定位到 at para 64"})
+    result = run_tool(h, session, "mcgill__cite", ref=ref, pinpoint="at para 64")
     assert result.content["verified"] is False
     assert "at para 64" in result.content["citation"]
 
 
-def test_pinpoint_from_the_quote_check_stays_verified():
+def test_a_pinpoint_the_user_never_wrote_is_refused():
     h, session = make()
-    from plugins import mcgill, quote
     ref = session.records.put(gladue_record())
-    with patch("core.quote_check.judgment", return_value={"text": quote_text(), "url": URL,
-                                                          "citations": ["[1999] 1 SCR 688"]}):
-        session.messages.append({"role": "user", "content": "核对：Parliament created the conditional sentencing regime in 1996."})
-        checked = _plugin_quote(h, session).check(ctx_for(h, session, "quote"), _plugin_quote_params(
-            ref=ref, quote="Parliament created the conditional sentencing regime in 1996."))
+    session.messages.append({"role": "user", "content": "引用它"})
+    result = run_tool(h, session, "mcgill__cite", ref=ref, pinpoint="at para 999")
+    assert "用户原话" in result.content["error"]
+
+
+def test_full_text_then_quote_then_cite_stays_verified():
+    h, session = make()
+    ref = session.records.put(gladue_record())
+    session.messages.append({"role": "user", "content": f"核对：{QUOTE}"})
+    with patch("core.quote_check.judgment",
+               return_value={"text": TEXT, "url": URL, "citations": ["[1999] 1 SCR 688"]}):
+        version = run_tool(h, session, "a2aj__full_text", ref=ref)
+        checked = run_tool(h, session, "quote__check", ref=version.content["ref"], quote=QUOTE)
     assert checked.content["verdict"] == "exact"
-    pinpoint_ref = checked.content["pinpoint_ref"]
-    assert pinpoint_ref
-    cited = mcgill.cite(ctx_for(h, session, "mcgill"), mcgill.CiteParams(ref=ref, pinpoint_from=pinpoint_ref))
+    cited = run_tool(h, session, "mcgill__cite", ref=ref, pinpoint_from=checked.content["pinpoint_ref"])
     assert cited.content["verified"] is True
     assert "at para 2" in cited.content["citation"]
 
 
-def _plugin_quote(h, session):
-    from plugins import quote
-    return quote
-
-
-def _plugin_quote_params(**kwargs):
-    from plugins import quote
-    return quote.CheckParams(**kwargs)
-
-
-def test_quote_check_rejects_a_model_invented_quote():
+def test_quote_needs_the_stored_full_text():
     h, session = make()
     from plugins import quote
-    ref = session.records.put(gladue_record())
-    with pytest.raises(ValueError):
-        quote.check(ctx_for(h, session, "quote"),
-                    quote.CheckParams(ref=ref, quote="The Charter guarantees a right to a jury trial."))
+    ref = session.records.put(gladue_record())          # no full_text field
+    session.messages.append({"role": "user", "content": f"核对：{QUOTE}"})
+    with pytest.raises(ValueError) as exc:
+        quote.check(ctx_for(h, session, "quote"), quote.CheckParams(ref=ref, quote=QUOTE))
+    assert "全文" in str(exc.value)
 
 
 def test_quote_pinpoint_artifact_is_database_grounded():
     h, session = make()
-    from plugins import quote
     ref = session.records.put(Record("jurisprudence", {
         "style_of_cause": Field("R v Sharma", "database", source_id=URL),
         "neutral_citation": Field("2022 SCC 39", "database", source_id=URL),
     }, "a2aj", "c9"))
-    session.messages.append({"role": "user", "content": "核对这句：Parliament created the conditional sentencing regime in 1996."})
-    with patch("core.quote_check.judgment", return_value={"text": TEXT, "url": URL, "citations": ["2022 SCC 39"]}):
-        result = quote.check(ctx_for(h, session, "quote"), quote.CheckParams(
-            ref=ref, quote="Parliament created the conditional sentencing regime in 1996."))
+    session.messages.append({"role": "user", "content": f"核对这句：{QUOTE}"})
+    with patch("core.quote_check.judgment",
+               return_value={"text": TEXT, "url": URL, "citations": ["2022 SCC 39"]}):
+        version = run_tool(h, session, "a2aj__full_text", ref=ref)
+        result = run_tool(h, session, "quote__check", ref=version.content["ref"], quote=QUOTE)
     pinpoint = session.records.get(result.content["pinpoint_ref"], Artifact)
-    from core.tool_contracts import is_grounded
     assert pinpoint.kind == "pinpoint" and is_grounded(pinpoint.derivation)
     finding = session.records.get(result.content["finding"], Finding)
     assert finding.verdict == "confirmed"
-
-
-def quote_text():
-    return TEXT
+    # The Finding's source leaf names exactly the stored full text.
+    source = finding.derivation.inputs[1]
+    version_record = session.records.get(version.content["ref"], Record)
+    assert source.value == version_record.fields["full_text"].value
+    assert source.source_id == version_record.fields["full_text"].source_id
 
 
 def test_bibliography_omits_pinpoints_and_keeps_verification():
@@ -143,44 +150,31 @@ def test_bibliography_omits_pinpoints_and_keeps_verification():
     result = bibliography.build(ctx_for(h, session, "bibliography"),
                                 bibliography.BuildParams(refs=[citation.content["ref"]]))
     assert result.content["unverified"] == 0          # the bibliography drops the pinpoint
-    assert "at 12" not in result.content["note"]
     artifact = session.records.get(result.content["ref"], Artifact)
     assert artifact.kind == "bibliography"
-    assert "*The Early Upanisads*" in result.content["note"] or "The Early Upanisads" in result.blocks[0]["body"]
+    assert "The Early Upanisads" in result.blocks[0]["body"]
 
 
 def test_deadline_artifact_is_stored_with_its_inputs():
     h, session = make()
-    from plugins import deadlines
-    result = deadlines_compute(h, session)
+    result = run_tool(h, session, "deadlines__compute", start="2026-09-25", days=10,
+                      mode="court_days", rule="r 3.02", holidays=["2026-10-12"])
     artifact = session.records.get(result.content["ref"], Artifact)
     assert artifact.kind == "deadline_date"
     leaves = artifact.derivation.inputs
     assert all(isinstance(node, Field) and node.origin == "user" for node in leaves[:3])
 
 
-def deadlines_compute(h, session):
-    from plugins import deadlines
-    return deadlines.compute(ctx_for(h, session, "deadlines"), deadlines.DeadlineParams(
-        start="2026-09-25", days=10, mode="court_days", rule="r 3.02", holidays=["2026-10-12"]))
-
-
 def test_a2aj_full_text_attaches_a_database_field():
     h, session = make()
-    from plugins import a2aj
     ref = session.records.put(gladue_record())
     with patch("core.quote_check.judgment",
                return_value={"text": "full judgment text", "url": URL, "citations": ["[1999] 1 SCR 688"]}):
-        result = a2aj_full_text(h, session, ref)
+        result = run_tool(h, session, "a2aj__full_text", ref=ref)
     version = session.records.get(result.content["ref"], Record)
     assert version.fields["full_text"].origin == "database"
     assert version.fields["full_text"].source_id == URL
     assert version.fields["style_of_cause"].value == "R v Gladue"
-
-
-def a2aj_full_text(h, session, ref):
-    from plugins import a2aj
-    return a2aj.full_text(ctx_for(h, session, "a2aj"), a2aj.FullTextParams(ref=ref))
 
 
 def test_quote_needs_a_database_citation():
@@ -192,3 +186,64 @@ def test_quote_needs_a_database_citation():
     with pytest.raises(ValueError):
         quote.check(ctx_for(h, session, "quote"),
                     quote.CheckParams(ref=ref, quote="some quote words here please"))
+
+
+# ── The provenance audit: fabricated leaves cannot become "verified" ──
+
+
+def fabricated(kind: str = "database"):
+    return Artifact("citation_text", "some citation",
+                    Derivation((Field("R v Fabricated", kind, source_id="nowhere:1"),), "cite.render.v1", ("x",)))
+
+
+def test_a_fabricated_database_leaf_is_refused():
+    h, session = make()
+    ctx = ctx_for(h, session, "mcgill")
+    with pytest.raises(Exception) as exc:
+        ctx.save(fabricated("database"))
+    assert "没有出处" in str(exc.value)
+    assert session.records.all(Artifact) == []
+
+
+def test_a_stored_field_passes_the_audit_but_only_as_stored():
+    h, session = make()
+    session.records.put(gladue_record())
+    ctx = ctx_for(h, session, "mcgill")
+    real = session.records.get("rec_1", Record).fields["neutral_citation"]
+    ref = ctx.save(Artifact("citation_text", "*R v Gladue*, [1999] 1 SCR 688.",
+                            Derivation((real,), "cite.render.v1", ("neutral_citation",))))
+    assert ref == "art_2"          # numbering is global: rec_1, then art_2
+    # A fresh Field carrying the same value and source id traces the same way.
+    twin = Field(real.value, "database", source_id=real.source_id)
+    ctx.save(Artifact("citation_text", "twin", Derivation((twin,), "cite.render.v1", ("x",))))
+
+
+def test_a_computed_leaf_without_a_derivation_is_refused():
+    h, session = make()
+    ctx = ctx_for(h, session, "mcgill")
+    bad = Artifact("x", "y", Derivation((Field("out", "computed", rule_id="r:v1"),), "outer:v1"))
+    with pytest.raises(Exception) as exc:
+        ctx.save(bad)
+    assert "推导链" in str(exc.value)
+
+
+def test_a_user_leaf_from_thin_air_is_refused():
+    h, session = make()
+    session.records.put(gladue_record())
+    ctx = ctx_for(h, session, "mcgill")
+    bad = Artifact("x", "y", Derivation((Field("the user said this", "user"),), "cite.render.v1"))
+    with pytest.raises(Exception) as exc:
+        ctx.save(bad)
+    assert "user 叶子" in str(exc.value)
+
+
+def test_an_extracted_leaf_needs_session_evidence():
+    h, session = make()
+    ctx = ctx_for(h, session, "mcgill")
+    bad = Artifact("x", "y", Derivation((Field("scanned text", "extracted"),), "cite.render.v1"))
+    with pytest.raises(Exception) as exc:
+        ctx.save(bad)
+    assert "extracted" in str(exc.value)
+    # Once a file extraction stored it, the same value traces.
+    session.records.put(Record("document", {"text": Field("scanned text", "extracted")}, "file", "att_1"))
+    ctx.save(Artifact("x", "y", Derivation((Field("scanned text", "extracted"),), "cite.render.v1")))

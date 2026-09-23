@@ -33,6 +33,21 @@ from pydantic import BaseModel
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{1,30}$")
 
 
+class UserText(str):
+    """A tool parameter that must be copied from the user's own words (§3.4).
+
+    The harness checks it against the session's user messages before the
+    handler runs and substitutes the exact slice it found, so the plugin
+    never sees the model's paraphrase of the user.
+    """
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type, handler):
+        from pydantic_core import core_schema
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema(max_length=2000))
+
+
 @dataclass
 class Result:
     """What a tool or action hands back.

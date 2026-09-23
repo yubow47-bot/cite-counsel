@@ -77,20 +77,31 @@ class Context:
     def __init__(self, session: Session, plugin: str, harness, settings: dict | None = None):
         self.session, self.plugin, self._harness = session, plugin, harness
         self.settings = settings or {}
+        # Filled in by the harness before the handler runs: the user's words
+        # verified for this call (UserText parameters) and the call's own
+        # parameter values. Direct calls (tests) start from nothing.
+        self.user_values: frozenset[str] = frozenset()
+        self.param_values: frozenset[str] = frozenset()
 
     @property
     def records(self) -> Store:
         """The session's numbered evidence store."""
         return self.session.records
 
+    @property
+    def claimable_user_values(self) -> frozenset[str]:
+        """Values this call may label user-origin: harness-verified slices
+        and the call's own parameter values."""
+        return self.user_values | self.param_values
+
     def save(self, obj, meta: dict | None = None) -> str:
-        """Store an object under its next number, after the category contract
-        check. This is the only way a plugin puts evidence into the session;
-        ``harness`` (the built-in record tools) is exempt from the category
-        check because user-origin fields are its to write."""
+        """Store an object under its next number, after the category and
+        provenance checks. This is the only way a plugin puts evidence into
+        the session; ``harness`` (the built-in record tools) is exempt from
+        the category check because user-origin fields are its to write."""
         if self.plugin != "harness":
             category = getattr(self._harness.plugins[self.plugin], "category", "function")
-            self.session.records.check_output(category, [obj])
+            self.session.records.check_output(category, [obj], self.claimable_user_values)
         return self.session.records.put(obj, meta)
 
     @property
