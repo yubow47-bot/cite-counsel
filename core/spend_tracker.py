@@ -39,6 +39,7 @@ _PRICING: dict[str, dict[str, float]] = {
     "qwen/qwen3.7-flash":     {"input": 0.03, "output": 0.13},
     "openai/gpt-oss-20b":     {"input": 0.03, "output": 0.13},
     "z-ai/glm-4.7-flash":     {"input": 0.0605, "output": 0.40},
+    "z-ai/glm-5.3-flash":     {"input": 0.15, "output": 0.50},  # OpenRouter, checked 2026-09-23
     # TypeSafe Jev is a decision-only model.  Keep a canonical key here and
     # normalize all provider aliases below so a known Jev request never falls
     # through to the deliberately expensive unknown-model fallback.

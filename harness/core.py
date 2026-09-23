@@ -37,7 +37,7 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / ".chatbox-runtime" / "harness.json"
-MAX_STEPS = 6
+MAX_STEPS = 15  # tool rounds per turn; a round that only loads plugins is free
 TOOL_CONTENT_LIMIT = 6000
 SEP = "__"  # model-facing tool names: plugin__tool (dots are not allowed there)
 FOLLOW_UP = (
@@ -46,6 +46,10 @@ FOLLOW_UP = (
     "meant, and that they can pick it). You may mention facts that appear in the tool results; do not "
     "add any that do not. Never write out a full citation yourself: the card shows the exact text, so "
     "refer to it by name and date only.")
+
+
+def _call_name(call: dict) -> str:
+    return (call.get("function") or {}).get("name") or ""
 
 
 def _strip_private(message: dict) -> dict:
@@ -268,6 +272,9 @@ class Harness:
             "in your reply, and never invent facts, sources, citations, dates or numbers. If no "
             "plugin can do what is asked, say so plainly.",
             "Tool arguments that stand for something the user wrote must be copied from the user's words.",
+            "When a lookup finds nothing, do not give up yet: search again in another form (the citation "
+            "alone, the name alone), or load another plugin that could plausibly hold it. Only after those "
+            "fail, start a record with record__new and ask the user for exactly the fields it still lacks.",
         ]
         latest = next((t for t in reversed(session.user_texts()) if t.strip()), "")
         # A bare case name ("gladue") says nothing about the user's language; the
@@ -465,7 +472,11 @@ class Harness:
     def _turn(self, session: Session) -> list[dict]:
         blocks: list[dict] = []
         failures = 0
-        for _ in range(MAX_STEPS):
+        steps = 0
+        # Loading is bounded by the plugin count, so free loads still end.
+        for _ in range(MAX_STEPS + len(self.plugins)):
+            if steps >= MAX_STEPS:
+                break
             message = llm.chat(self.config["model"], [{"role": "system", "content": self._system_prompt(session)},
                                                       *self._history(session)], self._tool_specs(session))
             calls = [c for c in message.get("tool_calls") or [] if isinstance(c, dict) and c.get("id")]
@@ -474,6 +485,8 @@ class Harness:
             if not calls:
                 self._add_caption(session, message.get("content") or "", blocks)
                 return blocks
+            if any(_call_name(c) != "load_plugin" for c in calls):
+                steps += 1
             all_final, all_failed = True, True
             for call in calls:
                 name, result = self._execute(session, call)
