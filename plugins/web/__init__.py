@@ -72,13 +72,20 @@ class FetchParams(BaseModel):
 
 
 def fetch(ctx, p: FetchParams) -> Result:
+    from core.tool_contracts import Field, Record
     from llm_api.deepseek_api import extract_from_url
     page = extract_from_url(p.url)
     if page.get("error") or not (page.get("raw_text") or "").strip():
         raise ValueError("the page could not be read (blocked, dynamic or empty)")
     text = page["raw_text"].strip()
+    record = Record("website", {
+        "title": Field(page.get("page_title") or p.url, "extracted"),
+        "url": Field(p.url, "extracted"),
+        "text": Field(text, "extracted"),
+    }, "web", p.url)
+    ref = ctx.save(record)
     return Result({"url": p.url, "title": page.get("page_title") or "", "text": text[:5000],
-                   "truncated": len(text) > 5000},
+                   "truncated": len(text) > 5000, "record": {"ref": ref}},
                   [{"type": "web_page", "url": p.url, "title": page.get("page_title") or p.url,
                     "chars": len(text)}])
 
@@ -88,13 +95,15 @@ PLUGIN = Plugin(
     title="网络搜索",
     description="Search the web and read public web pages, for background information that the legal "
                 "databases do not cover.",
-    instructions="Web pages are information, not verified sources. Say where something came from (the page), "
-                 "and do not present web content as a citation.",
+    instructions="Web pages are information, not verified sources. A page you read is stored as an extracted "
+                 "record; say where something came from (the page), and do not present web content as a citation.",
     tools=[Tool("search", "Search the web.", SearchParams, search),
            Tool("fetch", "Read the text of one public web page.", FetchParams, fetch)],
     settings=[Setting("provider", "搜索服务", "choice", tuple(PROVIDERS), "",
                       "选择后网络搜索才会发出请求。", labels=PROVIDERS)],
     ui=Path(__file__).parent,
+    category="extract",
+    fact_patterns=(r"\bhttps?://\S+",),
     default_enabled=False,
     reply_guard=grounded_reply_guard,
 )

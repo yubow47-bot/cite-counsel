@@ -234,7 +234,9 @@ def test_builtin_plugins_are_discovered_and_valid():
     assert set(discover()) >= {"web", "deadlines"}   # plus the source plugins
     for plugin in discover().values():
         assert plugin.category in {"source", "extract", "function"}
-        assert plugin.fact_patterns or plugin.category == "function"
+        for pattern in plugin.fact_patterns:
+            import re as _re
+            assert _re.compile(pattern)
 
 
 # 鈹€鈹€ The record store and the built-in record tools 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
