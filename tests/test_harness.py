@@ -85,8 +85,10 @@ def test_nothing_is_loaded_until_the_model_asks(monkeypatch, harness):
     assert "record__add_user_field" in script.calls[0]["tools"]    # harness-owned, always on
     assert script.calls[1]["tools"] == ["alpha__echo", "record__add_user_field", "record__new"]
     assert [b["type"] for b in blocks] == ["activity", "echo", "text"] and blocks[1]["plugin"] == "alpha"
-    # The echo result was final: the model replies once more, with no tools on offer.
-    assert len(script.calls) == 3 and script.calls[2]["tools"] == []
+    # The echo result was final: the model is told it is on screen, but keeps
+    # its tools -- the request may need a next step; here it just replies.
+    assert len(script.calls) == 3 and "alpha__echo" in script.calls[2]["tools"]
+    assert "now on the user's screen" in script.calls[2]["messages"][0]["content"]
     assert harness.seen == [("echo", "hello there")]
 
 
@@ -468,3 +470,14 @@ def test_a_leaked_call_runs_instead_of_being_shown(monkeypatch, harness):
     blocks = harness.run_turn(session, "x")
     assert "alpha" in session.loaded
     assert not any("<tool_call>" in str(b) for b in blocks)
+
+
+def test_a_final_result_does_not_end_a_request_that_needs_more(monkeypatch, harness):
+    """Extracting a file is final (showable), but the user asked for a
+    citation: the model must still be able to take that next step."""
+    script = Script(monkeypatch, [call("load_plugin", name="alpha"), call("alpha__echo", text="x"),
+                                  call("alpha__echo", text="x"), say("done")])
+    session, _ = harness.sessions.start()
+    harness.run_turn(session, "x")
+    assert len(script.calls) == 4                                 # a second tool round after a final one
+    assert harness.seen == [("echo", "x"), ("echo", "x")]

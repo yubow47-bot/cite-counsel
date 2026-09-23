@@ -43,8 +43,9 @@ MAX_STEPS = 15  # tool rounds per turn; a round that only loads plugins is free
 TOOL_CONTENT_LIMIT = 6000
 SEP = "__"  # model-facing tool names: plugin__tool (dots are not allowed there)
 FOLLOW_UP = (
-    "\n\nThe tool results are now on the user's screen. Reply to the user in one to three sentences: "
-    "what you found or did, and what they can do next (e.g. which candidate is most likely what they "
+    "\n\nThe tool results are now on the user's screen. If the user's request still needs another step "
+    "(they asked for a citation and you only have the record, say), take it with the tools. Otherwise "
+    "reply to the user in one to three sentences: what you found or did, and what they can do next (e.g. which candidate is most likely what they "
     "meant, and that they can pick it). You may mention facts that appear in the tool results; do not "
     "add any that do not. Never write out a full citation yourself: the card shows the exact text, so "
     "refer to it by name and date only.")
@@ -486,11 +487,13 @@ class Harness:
         blocks: list[dict] = []
         failures = 0
         steps = 0
+        follow_up = False
         # Loading is bounded by the plugin count, so free loads still end.
         for _ in range(MAX_STEPS + len(self.plugins)):
             if steps >= MAX_STEPS:
                 break
-            message = llm.chat(self.config["model"], [{"role": "system", "content": self._system_prompt(session)},
+            message = llm.chat(self.config["model"], [{"role": "system",
+                                                       "content": self._system_prompt(session, follow_up)},
                                                       *self._history(session)], self._tool_specs(session))
             calls = [c for c in message.get("tool_calls") or [] if isinstance(c, dict) and c.get("id")]
             session.messages.append({"role": "assistant", "content": message.get("content") or "",
@@ -521,15 +524,10 @@ class Harness:
                 blocks.append({"type": "notice", "level": "warning",
                                "text": "工具连续调用失败，已停止。可以换个说法，或直接点选上面的结果。"})
                 return blocks
-            if all_final:
-                # The tools are done; the model still talks to the user, once,
-                # without tools so it cannot start another round.
-                reply = llm.chat(self.config["model"],
-                                 [{"role": "system", "content": self._system_prompt(session, follow_up=True)},
-                                  *self._history(session)], [])
-                session.messages.append({"role": "assistant", "content": reply.get("content") or ""})
-                self._add_caption(session, reply.get("content") or "", blocks)
-                return blocks
+            # A final result is ready to show, not the end of the request: the
+            # model keeps its tools and either takes the next step (a citation
+            # from the record it just got) or replies. The step budget bounds it.
+            follow_up = all_final
         blocks.append({"type": "notice", "level": "warning", "text": "这一轮步骤太多，已停止。请换个说法再试。"})
         return blocks
 
