@@ -19,8 +19,11 @@ _RULES_PATH = Path(__file__).resolve().parent.parent / "mcgill_rules.json"
 
 @lru_cache(maxsize=1)
 def schemas() -> dict:
+    """Every McGill rule in the rules file that says how to render it, by type."""
     with _RULES_PATH.open(encoding="utf-8") as source:
-        return json.load(source)["_chatbox_templates_v1"]
+        rules = json.load(source)
+    return {name: rule["render"] for name, rule in rules.items()
+            if isinstance(rule, dict) and "render" in rule}
 
 
 @lru_cache(maxsize=1)
@@ -128,6 +131,11 @@ def mcgill_clean(name: str, value: str) -> str:
         # Ontario revised-statute chapters are "letter.number" (c F.3); some
         # databases drop that period, which the rule above cannot tell apart.
         value = re.sub(r"^(RSO \d{4}, c [A-Z])(\d+)\b", r"\1.\2", value)
+    elif name in {"session", "parliament"} and value.isdigit():
+        # LEGISinfo gives 1 / 44; McGill writes 1st Sess, 44th Parl.
+        n = int(value)
+        suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+        value = f"{n}{suffix}"
     elif name == "date":
         iso = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})(?:[T ].*)?", value)
         if iso and 1 <= int(iso[2]) <= 12:
