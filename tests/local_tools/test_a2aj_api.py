@@ -259,3 +259,55 @@ def test_statute_shaped_citation_number_uses_legislation_pipeline_first():
     assert result[0]["verified"] is True
     assert result[0]["chapter"] == "c C-46"
     assert result[0]["pinpoint"] == "s 718.2(e)"
+
+
+def test_search_cases_multi_resolves_an_embedded_citation_directly():
+    """"R v Jordan, 2016 SCC 27" is a name search /search cannot match: the
+    citation text is not part of the case's name field. The embedded
+    citation must be pulled out and resolved by direct lookup instead."""
+    from local_tools.a2aj_api import search_cases_multi
+
+    mapped = {"style_of_cause": "R. v. Jordan", "neutral_citation": "2016 SCC 27",
+              "reporter": "[2016] 1 SCR 631", "year": "2016", "date": "2016-07-08",
+              "url": "https://decisions.scc-csc.ca/scc-csc/scc-csc/en/item/16057/index.do"}
+
+    with patch("local_tools.a2aj_api.fetch_by_citation", return_value=mapped) as fetch, \
+         patch("local_tools.utils.request_with_retry") as search_call:
+        results = search_cases_multi("R v Jordan, 2016 SCC 27")
+
+    fetch.assert_called_once_with("2016 SCC 27")
+    search_call.assert_not_called()          # /search never runs once the direct fetch hits
+    assert results == [mapped]
+
+
+def test_search_cases_multi_falls_back_to_search_when_citation_is_not_found():
+    """A citation embedded in the query that A2AJ does not recognize should
+    not swallow the request -- /search still runs on the full query."""
+    from local_tools.a2aj_api import search_cases_multi
+
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"results": [{"name_en": "R. v. Jordan", "dataset": "SCC"}]}
+
+    with patch("local_tools.a2aj_api.fetch_by_citation", return_value={"raw_input": "2016 SCC 27"}), \
+         patch("local_tools.a2aj_api.request_with_retry", return_value=response) as search_call:
+        results = search_cases_multi("R v Jordan, 2016 SCC 27")
+
+    search_call.assert_called_once()
+    assert results == [{"name_en": "R. v. Jordan", "dataset": "SCC"}]
+
+
+def test_search_cases_multi_runs_search_directly_when_no_citation_is_embedded():
+    """A bare name (no citation to pull out) is unaffected: straight to /search."""
+    from local_tools.a2aj_api import search_cases_multi
+
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"results": []}
+
+    with patch("local_tools.a2aj_api.fetch_by_citation") as fetch, \
+         patch("local_tools.a2aj_api.request_with_retry", return_value=response) as search_call:
+        search_cases_multi("R v Jordan")
+
+    fetch.assert_not_called()
+    search_call.assert_called_once()

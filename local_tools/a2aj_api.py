@@ -254,7 +254,20 @@ def search_cases_multi(query: str, size: int = 45,
                        search_type: str = "name",
                        start_date: str | None = None,
                        end_date: str | None = None) -> list:
-    """按名称搜索案件（A2AJ /search），返回结果列表。"""
+    """按名称搜索案件（A2AJ /search），返回结果列表。
+
+    A query that carries both the case name and its citation
+    ("R v Jordan, 2016 SCC 27") is a name search that /search itself cannot
+    match: the citation text is not part of the case's name field. Pull the
+    citation out and resolve it directly first; /search runs only if that
+    lookup comes up empty.
+    """
+    from local_tools.citation_search import _extract_case_citation
+    embedded = _extract_case_citation(query)
+    if embedded and embedded != query.strip():
+        direct = fetch_by_citation(embedded)
+        if direct.get("style_of_cause"):
+            return [direct]
     _is_first = _mark_first_a2aj()
     if _is_first:
         logger.debug("[DUR] A2AJ search_cases_multi — FIRST call (DNS + TCP setup expected)")
