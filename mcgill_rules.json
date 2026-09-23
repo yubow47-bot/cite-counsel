@@ -4,7 +4,7 @@
     "sections": [
       {"id": "legislation", "title": "Legislation", "source_types": ["legislation", "bill"], "sort_field": "title"},
       {"id": "jurisprudence", "title": "Jurisprudence", "source_types": ["jurisprudence"], "sort_field": "style_of_cause"},
-      {"id": "secondary", "title": "Secondary Materials", "source_types": ["book", "journal_article", "newspaper", "website"], "sort_field": "author", "invert_first_author": true}
+      {"id": "secondary", "title": "Secondary Materials", "source_types": ["book", "journal_article", "news_online", "website"], "sort_field": "author", "invert_first_author": true}
     ],
     "residual_section": {"id": "other", "title": "Other Materials"},
     "omit_fields": ["pinpoint"]
@@ -30,80 +30,6 @@
     "saskatchewan court of appeal": "Sask CA",
     "nova scotia court of appeal": "NSCA",
     "new brunswick court of appeal": "NBCA"
-  },
-  "_chatbox_templates_v1": {
-    "jurisprudence": {
-      "label": "判例",
-      "required_any": [["neutral_citation", "reporter"]],
-      "pinpoint_after": ["neutral_citation", "reporter"],
-      "_pinpoint_after_rule": "A pinpoint follows the first citation it refers to, before any parallel citation: R v Sharma, 2022 SCC 39 at para 1, [2022] 3 SCR 147.",
-      "fields": [
-        {"name": "style_of_cause", "label": "案名（保留原文）", "required": true},
-        {"name": "neutral_citation", "label": "中立引用号（如原文存在）"},
-        {"name": "reporter", "label": "报告书引用（包含报告年份、卷、页）"},
-        {"name": "court", "label": "法院缩写（需要时填写）"},
-        {"name": "pinpoint", "label": "定位引用（完整填写，如 at para 64）"}
-      ],
-      "segments": [["style_of_cause", "*", "*"], ["neutral_citation", ", ", ""], ["reporter", ", ", ""], ["court", " (", ")"], ["pinpoint", " ", ""]]
-    },
-    "legislation": {
-      "label": "法律 / 法规",
-      "fields": [
-        {"name": "title", "label": "法律 / 法规标题", "required": true},
-        {"name": "citation", "label": "完整法规引用（如 RSC 1985, c C-46）", "required": true},
-        {"name": "pinpoint", "label": "条款（如 s 718.2(e) 或 r 21.01）"}
-      ],
-      "segments": [["title", "*", "*"], ["citation", ", ", ""], ["pinpoint", ", ", ""]]
-    },
-    "website": {
-      "label": "网页",
-      "fields": [
-        {"name": "author", "label": "作者"},
-        {"name": "title", "label": "页面标题", "required": true},
-        {"name": "date", "label": "发布日期（原文格式）"},
-        {"name": "url", "label": "URL", "required": true}
-      ],
-      "segments": [["author", "", ", "], ["title", "\"", "\""], ["date", " (", ")"], ["url", ", online: <", ">"]]
-    },
-    "book": {
-      "label": "书籍",
-      "fields": [
-        {"name": "author", "label": "作者", "required": true},
-        {"name": "title", "label": "书名", "required": true},
-        {"name": "edition", "label": "版次（如 2nd ed）"},
-        {"name": "place", "label": "出版地", "required": true},
-        {"name": "publisher", "label": "出版社", "required": true},
-        {"name": "year", "label": "出版年份", "required": true},
-        {"name": "pinpoint", "label": "定位引用（如 at 23）"}
-      ],
-      "segments": [["author", "", ", "], ["title", "*", "*"], ["edition", ", ", ""], ["place", " (", ": "], ["publisher", "", ", "], ["year", "", ")"], ["pinpoint", " ", ""]]
-    },
-    "journal_article": {
-      "label": "期刊文章",
-      "fields": [
-        {"name": "author", "label": "作者（多人用 & 连接，超过三人写 et al）"},
-        {"name": "title", "label": "文章标题", "required": true},
-        {"name": "year", "label": "出版年份", "required": true},
-        {"name": "volume", "label": "卷"},
-        {"name": "issue", "label": "期"},
-        {"name": "journal", "label": "期刊名缩写（如 Osgoode Hall LJ）", "required": true},
-        {"name": "first_page", "label": "起始页", "required": true},
-        {"name": "pinpoint", "label": "定位页（只填数字，如 23）"}
-      ],
-      "segments": [["author", "", ", "], ["title", "\"", "\""], ["year", " (", ")"], ["volume", " ", ""], ["issue", ":", ""], ["journal", " *", "*"], ["first_page", " ", ""], ["pinpoint", " at ", ""]]
-    },
-    "newspaper": {
-      "label": "新闻报道",
-      "fields": [
-        {"name": "author", "label": "作者"},
-        {"name": "title", "label": "文章标题", "required": true},
-        {"name": "newspaper", "label": "报纸 / 媒体名称（正体，不加斜体）", "required": true},
-        {"name": "date", "label": "日期（如 26 November 2005）", "required": true},
-        {"name": "page", "label": "版面（如 A4）"},
-        {"name": "site", "label": "网站域名（在线来源，如 news.bbc.co.uk）"}
-      ],
-      "segments": [["author", "", ", "], ["title", "\"", "\""], ["newspaper", ", ", ""], ["date", " (", ")"], ["page", " ", ""], ["site", ", online: <", ">"]]
-    }
   },
   "general_rules": {
     "category": "Legal Citation I – General Rules",
@@ -733,6 +659,7 @@
     ]
   },
   "jurisprudence": {
+    "render": {"label": "判例", "required_any": [["neutral_citation", "reporter"]], "pinpoint_after": ["neutral_citation", "reporter"], "_pinpoint_after_rule": "A pinpoint follows the first citation it refers to, before any parallel citation: R v Sharma, 2022 SCC 39 at para 1, [2022] 3 SCR 147.", "fields": [{"name": "style_of_cause", "label": "案名（保留原文）", "required": true}, {"name": "neutral_citation", "label": "中立引用号（如原文存在）"}, {"name": "reporter", "label": "报告书引用（包含报告年份、卷、页）"}, {"name": "court", "label": "法院缩写（需要时填写）"}, {"name": "pinpoint", "label": "定位引用（完整填写，如 at para 64）"}], "segments": [["style_of_cause", "*", "*"], ["neutral_citation", ", ", ""], ["reporter", ", ", ""], ["court", " (", ")"], ["pinpoint", " ", ""]]},
     "category": "Jurisprudence",
     "source_files": [
       "LAWS 2908D Week 3 Jurisprudence.pdf"
@@ -834,6 +761,7 @@
     ]
   },
   "legislation": {
+    "render": {"label": "法律 / 法规", "fields": [{"name": "title", "label": "法律 / 法规标题", "required": true}, {"name": "citation", "label": "完整法规引用（如 RSC 1985, c C-46）", "required": true}, {"name": "pinpoint", "label": "条款（如 s 718.2(e) 或 r 21.01）"}], "segments": [["title", "*", "*"], ["citation", ", ", ""], ["pinpoint", ", ", ""]]},
     "category": "Legislation",
     "source_files": [
       "LAWS 2908D Winter 2026 Legislation.pdf"
@@ -1009,6 +937,7 @@
     ]
   },
   "by_law": {
+    "render": {"label": "Municipal By-laws", "fields": [{"name": "name", "label": "By-law Name", "required": true}, {"name": "number", "label": "By-law Number", "required": true}, {"name": "year", "label": "Year", "required": true}], "segments": [["name", "", ""], ["number", ", By-law No ", ""], ["year", " (", ")."]]},
     "category": "Municipal By-laws",
     "template": "[name], By-law No [number] ([year]).",
     "fields": [
@@ -1018,6 +947,7 @@
     ]
   },
   "treaty": {
+    "render": {"label": "Treaties / International Agreements", "fields": [{"name": "name", "label": "Treaty Name", "required": true}, {"name": "date", "label": "Date Signed", "required": false}, {"name": "citation", "label": "Citation / Treaty Series", "required": false}], "segments": [["name", "", ""], ["date", ", ", ""], ["citation", ", ", "."]]},
     "category": "Treaties / International Agreements",
     "template": "[name], [date], [citation].",
     "fields": [
@@ -1028,6 +958,7 @@
     ]
   },
   "foreign": {
+    "render": {"label": "Foreign Law", "fields": [{"name": "name", "label": "Case / Statute Name", "required": true}, {"name": "citation", "label": "Citation", "required": false}, {"name": "year", "label": "Year", "required": false}, {"name": "court", "label": "Court / Jurisdiction", "required": false}], "segments": [["name", "", ""], ["citation", ", ", ""], ["year", " (", ")"], ["court", ", ", "."]]},
     "category": "Foreign Law",
     "template": "[name], [citation] ([year]), [court].",
     "fields": [
@@ -1038,6 +969,7 @@
     ]
   },
   "bill": {
+    "render": {"label": "Bills", "fields": [{"name": "number", "label": "Bill Number", "required": true}, {"name": "title", "label": "Title", "required": true}, {"name": "session", "label": "Session", "required": false}, {"name": "parliament", "label": "Parliament", "required": false}, {"name": "year", "label": "Year", "required": false}], "segments": [["number", "Bill ", ""], ["title", ", *", "*"], ["session", ", ", " Sess"], ["parliament", ", ", " Parl"], ["year", ", ", "."]]},
     "category": "Bills",
     "template": "Bill [number], [title], [session] Sess, [parliament] Parl, [year].",
     "fields": [
@@ -1049,8 +981,9 @@
     ]
   },
   "news_online": {
+    "render": {"label": "新闻报道", "fields": [{"name": "author", "label": "作者"}, {"name": "title", "label": "文章标题", "required": true}, {"name": "newspaper", "label": "报纸 / 媒体名称（正体，不加斜体）", "required": true}, {"name": "date", "label": "日期（如 26 November 2005）", "required": true}, {"name": "page", "label": "版面（如 A4）"}, {"name": "site", "label": "网站域名（在线来源，如 news.bbc.co.uk）"}], "segments": [["author", "", ", "], ["title", "\"", "\""], ["newspaper", ", ", ""], ["date", " (", ")"], ["page", " ", ""], ["site", ", online: <", ">"]]},
     "category": "News / Online Sources",
-    "template": "Author, \"[title]\", [newspaper] ([date]), [page].",
+    "template": "[author], \"[title]\", [newspaper] ([date]), [page].",
     "fields": [
       {"key": "author", "label": "Author", "placeholder": "e.g. Bill Curry"},
       {"key": "title", "label": "Article Title", "placeholder": "e.g. PM, Premiers Work Out Deal", "required": true},
@@ -1061,13 +994,16 @@
     ]
   },
   "website": {
+    "render": {"label": "网页", "fields": [{"name": "author", "label": "作者"}, {"name": "title", "label": "页面标题", "required": true}, {"name": "date", "label": "发布日期（原文格式）"}, {"name": "url", "label": "URL", "required": true}], "segments": [["author", "", ", "], ["title", "\"", "\""], ["date", " (", ")"], ["url", ", online: <", ">"]]},
     "category": "Websites",
-    "template": "Author, \"[title]\" ([date]), online: <[url]>.",
+    "template": "[author], \"[title]\" ([date]), online: <[url]>.",
     "fields": [
       {"key": "author", "label": "Author", "placeholder": "e.g. Richard Gold"},
       {"key": "title", "label": "Page Title", "placeholder": "e.g. The Midas Conundrum", "required": true},
       {"key": "date", "label": "Date", "placeholder": "e.g. 25 April 2017"},
       {"key": "url", "label": "URL", "placeholder": "https://...", "required": true}
     ]
-  }
+  },
+  "book": {"category": "Books", "render": {"label": "书籍", "fields": [{"name": "author", "label": "作者", "required": true}, {"name": "title", "label": "书名", "required": true}, {"name": "edition", "label": "版次（如 2nd ed）"}, {"name": "place", "label": "出版地", "required": true}, {"name": "publisher", "label": "出版社", "required": true}, {"name": "year", "label": "出版年份", "required": true}, {"name": "pinpoint", "label": "定位引用（如 at 23）"}], "segments": [["author", "", ", "], ["title", "*", "*"], ["edition", ", ", ""], ["place", " (", ": "], ["publisher", "", ", "], ["year", "", ")"], ["pinpoint", " ", ""]]}},
+  "journal_article": {"category": "Journal Articles", "render": {"label": "期刊文章", "fields": [{"name": "author", "label": "作者（多人用 & 连接，超过三人写 et al）"}, {"name": "title", "label": "文章标题", "required": true}, {"name": "year", "label": "出版年份", "required": true}, {"name": "volume", "label": "卷"}, {"name": "issue", "label": "期"}, {"name": "journal", "label": "期刊名缩写（如 Osgoode Hall LJ）", "required": true}, {"name": "first_page", "label": "起始页", "required": true}, {"name": "pinpoint", "label": "定位页（只填数字，如 23）"}], "segments": [["author", "", ", "], ["title", "\"", "\""], ["year", " (", ")"], ["volume", " ", ""], ["issue", ":", ""], ["journal", " *", "*"], ["first_page", " ", ""], ["pinpoint", " at ", ""]]}}
 }

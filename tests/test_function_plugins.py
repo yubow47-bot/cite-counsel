@@ -247,3 +247,19 @@ def test_an_extracted_leaf_needs_session_evidence():
     # Once a file extraction stored it, the same value traces.
     session.records.put(Record("document", {"text": Field("scanned text", "extracted")}, "file", "att_1"))
     ctx.save(Artifact("x", "y", Derivation((Field("scanned text", "extracted"),), "cite.render.v1")))
+
+
+def test_every_record_type_a_source_produces_has_a_mcgill_rule():
+    """A data source's record is citable from its own fields -- never by
+    making the user retype them as unverified user fields."""
+    from core.mcgill_format import schemas
+    produced = {"jurisprudence", "legislation", "bill", "journal_article", "book"}   # core/source_tools.py
+    assert produced <= set(schemas())
+
+
+def test_a_legisinfo_bill_renders_by_the_bills_rule():
+    from core.mcgill_format import mcgill_clean, render_fields
+    values = {"number": "C-63", "title": "An Act to enact the Online Harms Act",
+              "session": "1", "parliament": "44", "year": "2024"}
+    text = render_fields("bill", {k: mcgill_clean(k, v) for k, v in values.items()})
+    assert text == "Bill C-63, *An Act to enact the Online Harms Act*, 1st Sess, 44th Parl, 2024."
