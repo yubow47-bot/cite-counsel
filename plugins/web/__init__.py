@@ -15,7 +15,6 @@ from urllib.parse import parse_qs, urlsplit
 
 from pydantic import BaseModel, Field
 
-from core.grounding import grounded_reply_guard
 from harness.plugin import Plugin, Result, Setting, Tool
 
 PROVIDERS = {"": "未选择", "duckduckgo_lite": "DuckDuckGo Lite（无需 key）"}
@@ -105,5 +104,4 @@ PLUGIN = Plugin(
     category="extract",
     fact_patterns=(r"\bhttps?://\S+",),
     default_enabled=False,
-    reply_guard=grounded_reply_guard,
 )

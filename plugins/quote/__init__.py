@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field as PField
 
-from core.grounding import grounded_reply_guard
 from core.tool_contracts import Artifact, Derivation
 from harness.plugin import Plugin, Result, Tool, UserText
 
@@ -64,5 +63,4 @@ PLUGIN = Plugin(
     category="function",
     fact_patterns=(r"\bpara(?:s)?\s+\d+",),
     default_enabled=True,
-    reply_guard=grounded_reply_guard,
 )

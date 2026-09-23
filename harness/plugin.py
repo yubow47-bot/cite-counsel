@@ -11,9 +11,10 @@ entry-point group. It declares:
   plugin's own result blocks and, if it wants one, a panel;
 - ``settings``: options shown in the settings bar, owned by the plugin;
 - ``requires``: other plugins whose public ``api`` it uses;
-- ``reply_guard``: an optional check on the model's prose once the plugin is
-  loaded (``core.grounding.grounded_reply_guard`` drops prose that states
-  unsourced facts).
+- ``reply_guard``: an optional, plugin-specific check on the model's prose
+  once the plugin is loaded. Unsourced facts are already hidden paragraph by
+  paragraph by the harness (``harness.grounding``) using every plugin's
+  ``fact_patterns``; a guard is only for something stricter than that.
 
 Plugins are trusted, installed code. Discovery happens at startup; nothing is
 hot-reloaded.
