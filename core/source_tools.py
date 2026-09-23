@@ -117,15 +117,53 @@ def source_legislation(query: str) -> list[Record]:
     return [_legislation_record(item) for item in results]
 
 
+_BILL_NUMBER_RE = re.compile(r"\s*(?:bill\s+)?([CS])\s*-?\s*(\d+)(?:\s+(\d{4}))?\s*", re.I)
+
+
 def source_bills(query: str) -> list[Record]:
     """Find federal bills in LEGISinfo by bill number (and optional year text)."""
-    match = re.fullmatch(r"\s*(?:bill\s+)?([CS])\s*-?\s*(\d+)(?:\s+(\d{4}))?\s*", query, re.I)
+    match = _BILL_NUMBER_RE.fullmatch(query)
     if not match:
         raise SourceContractError("Supply a bill number such as C-22, optionally followed by its year")
     number = f"{match[1].upper()}-{match[2]}"
     results = find_bills(number, year=int(match[3])) if match[3] else find_bills(number)
+    return _bill_records(results)
+
+
+def source_bill_keyword(keywords: str, limit: int = 5) -> list[Record]:
+    """Federal bills whose title contains the keywords, newest first.
+
+    The full session list comes from LEGISinfo either way; the filter runs
+    on it locally. A bill is kept only when every content word of the
+    query appears in its title, so the user still chooses among matches.
+    """
+    from local_tools.legisinfo_api import fetch_legisinfo_bills
+
+    def tokens(text: str) -> set[str]:
+        return {word.casefold() for word in re.findall(r"[^\W\d_]+", text) if len(word) > 2}
+
+    wanted = tokens(keywords)
+    if not wanted:
+        raise SourceContractError("Supply keywords from the bill's title")
+    try:
+        bills = fetch_legisinfo_bills()
+    except Exception:
+        return []
+    scored = []
+    for item in bills:
+        if not isinstance(item, Mapping):
+            continue
+        title = item.get("LongTitleEn") or item.get("ShortTitleEn") or ""
+        if wanted and wanted <= tokens(title):
+            date = item.get("LatestCompletedMajorActivityDateTime") or item.get("IntroducedDateTime") or ""
+            scored.append((str(date), item))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return _bill_records([item for _, item in scored[:limit]])
+
+
+def _bill_records(items: list) -> list[Record]:
     records = []
-    for item in results:
+    for item in items:
         if not isinstance(item, Mapping):
             continue
         record_id = item.get("BillId") or item.get("Id") or item.get("BillID")
@@ -192,6 +230,37 @@ def source_isbn(query: str) -> list[Record]:
     }
     fields = _fields(values, source_id)
     return [Record("book", fields, "openlibrary", isbn)]
+
+
+def source_book_title(query: str, limit: int = 3) -> list[Record]:
+    """Book candidates for a free-text title, one full record per candidate."""
+    from core.bibliographic import book_values, fetch_edition, search_books
+    records = []
+    for candidate in search_books(query, limit):
+        edition = fetch_edition(candidate["olid"])
+        if not isinstance(edition, Mapping):
+            continue
+        values = book_values(edition)
+        if not values.get("title"):
+            continue
+        source_id = _source_id("openlibrary", candidate["olid"], "OLID")
+        records.append(Record("book", _fields(values, source_id), "openlibrary", candidate["olid"]))
+    return records
+
+
+def source_article_title(query: str, limit: int = 3) -> list[Record]:
+    """Journal-article candidates for a free-text title, one record per DOI."""
+    from core.bibliographic import article_values, search_articles
+    records = []
+    for candidate in search_articles(query, limit):
+        item = fetch_crossref(candidate["doi"])
+        if not isinstance(item, Mapping):
+            continue
+        source_id = _source_id("crossref", candidate["doi"], "DOI")
+        values = {**article_values(item), "doi": candidate["doi"]}
+        records.append(Record("journal_article", _fields(values, source_id), "crossref",
+                              candidate["doi"]))
+    return records
 
 
 def _published_year(value: Any) -> str:
