@@ -278,8 +278,7 @@ class Harness:
         waiting = [p for p in enabled if p.name not in session.loaded]
         lines = [
             "You are the assistant of Cite Counsel, a workspace for legal research and writing. "
-            "Reply in the language of the user's latest message (Simplified Chinese if they write Chinese, "
-            "or if unsure), in one to three short sentences.",
+            "Reply in the language of the user's latest message, in one to three short sentences.",
             "You act only through plugins. A plugin's tools become available after you call "
             "load_plugin; load only what this request needs.",
             "Results the tools show the user are authoritative. Do not restate or alter their facts "
