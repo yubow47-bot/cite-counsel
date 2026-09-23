@@ -216,27 +216,29 @@ DOI、ISBN、中立引用号、议案编号这类格式固定的输入，harness
 | 部分 | 位置 | 状态 |
 |---|---|---|
 | 界面、agent 循环、渐进加载、会话、设置 | `harness/` | 可用 |
-| 回复检查（默认实现） | `core/grounding.py` | 可用；尚为插件级，待按 §5.4 移入 harness |
-| 契约数据结构 | `core/tool_contracts.py` | 可用；待并入 harness 的记录存储 |
-| McGill 渲染与规则 | `core/mcgill_format.py`、`mcgill_rules.json` | 可用；待包装为 `mcgill` 插件 |
-| 引语定位 | `core/quote_check.py` | 可用；待包装为 `quote` 插件 |
-| 参考文献 | `core/bibliography.py` | 可用；待包装为 `bibliography` 插件 |
-| 书目检索 | `core/bibliographic.py` | 可用；待并入 `crossref` / `openlibrary` 插件 |
-| 数据源到 Record 的适配 | `core/source_tools.py` | 可用；待包装为各数据源插件 |
-| 期限计算 | `core/legal_tools.py`、`plugins/deadlines` | 已是插件 |
-| 网络搜索与网页读取 | `plugins/web` | 已是插件 |
+| 回复检查（harness 层，段落级隐藏） | `harness/grounding.py` | 已按 §5.4 上收 harness；插件以 `fact_patterns` 声明事实形状 |
+| 契约数据结构 | `core/tool_contracts.py` | 已并入 harness 的记录存储（`harness/records.py`：编号、类别检查、`record.new` / `record.add_user_field`） |
+| McGill 渲染与规则 | `core/mcgill_format.py`、`mcgill_rules.json` | 已包装为 `mcgill` 插件 |
+| 引语定位 | `core/quote_check.py` | 已包装为 `quote` 插件；`a2aj.full_text` 取全文 |
+| 参考文献 | `core/bibliography.py` | 已包装为 `bibliography` 插件；签名机制移除（存储侧编号取代客户端签名） |
+| 书目检索 | `core/bibliographic.py` | 已并入 `crossref` / `openlibrary` 插件 |
+| 数据源到 Record 的适配 | `core/source_tools.py` | 已包装为 `a2aj` / `legisinfo`（含关键词检索）/ `crossref` / `openlibrary` 插件 |
+| 期限计算 | `core/legal_tools.py`、`plugins/deadlines` | 已是插件，产物入库为 Artifact |
+| 网络搜索与网页读取 | `plugins/web` | 已是插件；fetch 产出 `extracted` 记录 |
+| 文件提取 | `plugins/file`、`local_tools/file_extractor.py` | 已是插件（无模型分类调用） |
 | 数据源连接器 | `local_tools/*_api.py` | 可用 |
+| MCP（§7） | — | 未做；等契约与首批插件稳定 |
 
 ### 8.2 步骤
 
-每一步完成后都能运行，测试保持全部通过。
+每一步完成后都能运行，测试保持全部通过。1–5、6 已完成（见 `docs/HARNESS.md`）：
 
-1. **harness 记录存储**：会话内保存 Record / Artifact / Finding 并分配编号；工具参数中的编号在执行前解析为原始对象；按插件类别检查来源权限并校验返回值；内置 `record.add_user_field` 与 `record.new`。
-2. **数据源插件** `a2aj`、`legisinfo`、`crossref`、`openlibrary`：基于 `core/source_tools.py` 与连接器，输出 Record；`legisinfo` 增加按关键词检索。
-3. **功能插件** `mcgill`：输入记录编号，输出引文 Artifact，"已核验"由推导链计算。
-4. **功能插件** `quote`、`bibliography`：只接受记录 / 成品编号。
-5. **提取插件** `file`；`web` 改为输出 `extracted` 记录。
-6. **回复检查移入 harness**（§5.4）；系统提示列出已关闭的插件（§5.1）。
+1. ~~**harness 记录存储**~~ ✅：会话内保存 Record / Artifact / Finding 并分配编号；按插件类别检查来源权限并校验返回值；内置 `record.add_user_field` 与 `record.new`。
+2. ~~**数据源插件**~~ ✅ `a2aj`、`legisinfo`（含按关键词检索）、`crossref`、`openlibrary`：基于 `core/source_tools.py` 与连接器，输出 Record。
+3. ~~**功能插件** `mcgill`~~ ✅：输入记录编号，输出引文 Artifact，"已核验"由推导链计算。
+4. ~~**功能插件** `quote`、`bibliography`~~ ✅：只接受记录 / 成品编号。
+5. ~~**提取插件** `file`~~ ✅；`web` 已改为输出 `extracted` 记录。
+6. ~~**回复检查移入 harness**（§5.4）~~ ✅；系统提示列出已关闭的插件（§5.1）✅。
 7. **MCP**（§7）：在契约和首批插件稳定后进行。
 
 ## 9. 验收场景
