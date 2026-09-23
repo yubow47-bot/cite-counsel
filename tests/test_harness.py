@@ -99,12 +99,13 @@ def test_loaded_plugins_stay_loaded_for_the_session(monkeypatch, harness):
     assert script.calls[0]["tools"][0] == "alpha__echo"          # no load_plugin left to offer
 
 
-def test_disabled_plugins_are_not_offered(monkeypatch, harness):
+def test_disabled_plugins_are_listed_as_off_but_not_loadable(monkeypatch, harness):
     script = Script(monkeypatch, [call("load_plugin", name="beta"), say("no")])
     session, _ = harness.sessions.start()
     harness.run_turn(session, "x")
     offered = script.calls[0]["messages"][0]["content"]
-    assert "beta" not in offered and "beta" not in session.loaded
+    assert "disabled" in offered and "- beta: Peeks at alpha." in offered  # s5.1
+    assert "beta" not in session.loaded
     tool_reply = json.loads(session.messages[2]["content"])
     assert tool_reply == {"error": "no such enabled plugin"}
 
@@ -337,3 +338,46 @@ def test_new_plugins_get_their_default_after_settings_were_saved(tmp_path):
     h = Harness(plugins, model="m", config_path=path)
     assert "alpha" not in h.config["enabled"]   # the user turned it off before
     assert "gamma" in h.config["enabled"]       # unknown then, default on
+
+
+# ── Harness-level grounding (§5.4) and input hints (§5.2) ────────────
+
+
+def test_harness_hides_only_the_paragraph_with_the_unsourced_fact(harness):
+    Script(monkeypatch := None, []) if False else None
+    session, _ = harness.sessions.start()
+    session.messages.append({"role": "user", "content": "R v Gladue 1999"})
+    session.messages.append({"role": "tool", "tool_call_id": "c1",
+                             "content": '{"citation": "[1999] 1 SCR 688"}'})
+    text = ("找到了 [1999] 1 SCR 688，请看卡片。\n"
+            "另外它在 2002 SCC 10 里也被讨论过。")
+    kept = harness._check_reply(session, text)
+    assert "[1999] 1 SCR 688" in kept          # grounded: the tool result has it
+    assert "2002 SCC 10" not in kept           # ungrounded paragraph hidden
+    assert "请看卡片" in kept                   # clean paragraph survives
+
+
+def test_check_applies_even_when_no_plugin_was_loaded(harness):
+    session, _ = harness.sessions.start()
+    session.messages.append({"role": "user", "content": "你好"})
+    assert harness._check_reply(session, "It was decided in 1999.") == ""
+    assert harness._check_reply(session, "没有可以查的插件。") != ""
+
+
+def test_plugin_fact_patterns_apply_without_loading(harness):
+    plugins, _ = make_plugins()
+    from harness.core import Harness as H
+    h = H(plugins, model="m", config_path=harness.config_path)
+    h.plugins["alpha"].fact_patterns = (r"Bill\s+C-\d+",)  # enabled, not loaded
+    session, _ = h.sessions.start()
+    session.messages.append({"role": "user", "content": "查一下那个议案"})
+    assert h._check_reply(session, "查到 Bill C-22。") == ""
+
+
+def test_input_hints_flag_fixed_format_inputs():
+    from harness.core import _input_hints
+    hints = _input_hints("帮我查 10.1234/abc.def")
+    assert "DOI" in hints
+    assert _input_hints("gladue") == ""
+    assert "ISBN" in _input_hints("这本书是 978-0-306-40615-7")
+    assert "bill" in _input_hints("C-22 那个议案进展如何")

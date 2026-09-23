@@ -20,13 +20,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 
-from harness import llm
+from harness import grounding, llm
 from harness.plugin import Plugin, Result, discover
 from harness.records import ContractError
 from harness.session import HISTORY_LIMIT, Context, Session, SessionStore
@@ -55,6 +56,26 @@ def _contains_object(content: Any) -> bool:
     if isinstance(content, (Record, Artifact, Finding)):
         return True
     return isinstance(content, list) and any(isinstance(o, (Record, Artifact, Finding)) for o in content)
+
+
+# Fixed-format inputs the harness may point out (§5.2). Only a hint: which
+# plugin to use stays the model's decision.
+_INPUT_HINTS = (
+    (re.compile(r"\b10\.\d{4,9}/\S+"), "the message contains a DOI"),
+    (re.compile(r"\b(?:97[89][-\s]?)?(?:\d[-\s]?){9}[\dxX]\b"), "the message contains an ISBN"),
+    (re.compile(r"\b\d{4}\s+[A-Z][A-Za-z]{1,5}\s+\d+\b"), "the message contains a neutral citation"),
+    (re.compile(r"\[\d{4}\]"), "the message contains a bracketed citation year"),
+    (re.compile(r"\b[CS]\s*-?\s*\d+\b", re.I), "the message may name a federal bill (e.g. C-22)"),
+)
+
+
+def _input_hints(text: str) -> str:
+    if not text:
+        return ""
+    found = [note for pattern, note in _INPUT_HINTS if pattern.search(text)]
+    if not found:
+        return ""
+    return "[输入提示: " + "; ".join(found) + ". These are only hints; decide yourself which plugin fits.]"
 
 
 class _Builtin:
@@ -263,6 +284,11 @@ class Harness:
                     or len(latest.split()) < 6 else "Reply in the language of the user's latest message.")
         if waiting:
             lines += ["", "Plugins you can load:"] + [f"- {p.name}: {p.description}" for p in waiting]
+        disabled = [p for p in self.plugins.values() if p.name not in self.config["enabled"]]
+        if disabled:
+            lines += ["", "Installed but disabled (the user can enable them in the settings bar; "
+                          "you cannot load these, and no data source here covers them):"] + [
+                f"- {p.name}: {p.description}" for p in disabled]
         if loaded:
             lines += ["", "Loaded plugins:"]
             for plugin in loaded:
@@ -301,6 +327,24 @@ class Harness:
         while messages and messages[0].get("role") != "user":
             messages = messages[1:]
         return [_strip_private(m) for m in messages]
+
+    def _ground(self, session: Session) -> str:
+        """Everything a fact in prose may be traced to: the user's words and
+        every tool result shown this session -- not the model's own prose,
+        which could otherwise launder an invented fact into 'already said'."""
+        return " ".join(session.user_texts()
+                        + [m.get("content") or "" for m in session.messages if m.get("role") == "tool"])
+
+    def _check_reply(self, session: Session, text: str) -> str:
+        """Prose that survives the harness grounding check (§5.4).
+
+        Shapes from every enabled plugin apply, loaded or not; a loaded
+        plugin's own ``reply_guard`` may then still veto what remains.
+        """
+        shapes: list[re.Pattern] = []
+        for plugin in self.enabled():
+            shapes.extend(grounding.fact_shapes(plugin))
+        return grounding.grounded_text(text, self._ground(session), tuple(shapes))
 
     def _execute(self, session: Session, call: dict) -> tuple[str, Result]:
         function = call.get("function") or {}
@@ -373,7 +417,10 @@ class Harness:
                 summaries.append(session.records.summary(ref))
         return summaries
     def _caption(self, session: Session, text: str) -> str:
-        text = (text or "").strip()
+        # Harness-level grounding first: hide every paragraph with an
+        # unsourced fact, whatever plugins are loaded. A loaded plugin's own
+        # guard may then still veto what is left.
+        text = self._check_reply(session, (text or "").strip())
         for plugin in self.enabled():
             if text and plugin.name in session.loaded and plugin.reply_guard:
                 text = plugin.reply_guard(text, self.context(session, plugin.name))
@@ -392,7 +439,9 @@ class Harness:
     def run_turn(self, session: Session, text: str, attachments: list[str] = ()) -> list[dict]:
         notes = [f"[附件 {aid}: {session.attachments[aid]['name']}]" for aid in attachments
                  if aid in session.attachments]
-        session.messages.append({"role": "user", "content": "\n".join([text, *notes]).strip()})
+        hints = _input_hints(text)
+        session.messages.append({"role": "user", "content": "\n".join([text, *notes]).strip()
+                                 + (("\n\n" + hints) if hints else "")})
         blocks: list[dict] = []
         failures = 0
         for _ in range(MAX_STEPS):
