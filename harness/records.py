@@ -40,14 +40,17 @@ class Store:
 
     def __init__(self):
         self._objects: dict[str, Any] = {}
+        self._meta: dict[str, dict] = {}
         self._lock = threading.Lock()
 
     # ── Storage ───────────────────────────────────────────────────────
 
-    def put(self, obj: Any) -> str:
+    def put(self, obj: Any, meta: dict | None = None) -> str:
         with self._lock:
             ref = f"{PREFIX[type(obj)]}_{len(self._objects) + 1}"
             self._objects[ref] = obj
+            if meta:
+                self._meta[ref] = meta
             return ref
 
     def get(self, ref: str, kind: type | tuple[type, ...] | None = None) -> Any:
@@ -58,6 +61,12 @@ class Store:
             raise ValueError(f"编号 {ref} 不是这个工具需要的对象。")
         return obj
 
+    def meta(self, ref: str) -> dict:
+        """The plugin-supplied sidecar of one stored object (e.g. the fields
+        a citation was rendered from). Server-owned: refs are the only handle
+        the model ever gets, so there is nothing to sign."""
+        return self._meta.get(str(ref or "").strip(), {})
+
     def all(self, kind: type | tuple[type, ...] | None = None) -> list[tuple[str, Any]]:
         return [(ref, obj) for ref, obj in self._objects.items()
                 if kind is None or isinstance(obj, kind)]
@@ -66,7 +75,7 @@ class Store:
         """The model-facing view of one stored object."""
         obj = self._objects[ref]
         if isinstance(obj, Record):
-            fields = {name: f.value for name, f in obj.fields.items()}
+            fields = {name: _clip(f.value) for name, f in obj.fields.items()}
             return {"ref": ref, "kind": "record", "record_type": obj.source_type,
                     "provider": obj.provider, "record_id": obj.record_id, "fields": fields}
         if isinstance(obj, Artifact):
@@ -122,6 +131,11 @@ class Store:
 
     def new_record(self, source_type: str) -> Record:
         return Record(str(source_type).strip() or "unknown", {}, "user", "blank")
+
+
+def _clip(value: str, limit: int = 300) -> str:
+    """Summaries are for orientation; long values (a full judgment text) stay out."""
+    return value if len(value) <= limit else value[:limit] + "…"
 
 
 def field_value(record: Record, name: str) -> str:

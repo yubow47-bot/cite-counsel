@@ -252,10 +252,12 @@ def test_source_plugin_outputs_a_numbered_database_record(monkeypatch, harness):
         query: str
 
     def find(ctx, p):
-        return Result([Record("jurisprudence", {
+        record = Record("jurisprudence", {
             "style_of_cause": Field("R v Gladue", "database", source_id="a2aj:c1"),
             "neutral_citation": Field("[1999] 1 SCR 688", "database", source_id="a2aj:c1"),
-        }, "a2aj", "c1")], [{"type": "card", "title": "cases"}])
+        }, "a2aj", "c1")
+        ref = ctx.save(record)
+        return Result({"records": [{"ref": ref}]}, [{"type": "card", "title": "cases"}])
 
     alpha = Plugin("alpha", "Alpha", "Finds records.", category="source",
                    tools=[Tool("find", "Find.", Source, find)], default_enabled=True)
@@ -264,9 +266,9 @@ def test_source_plugin_outputs_a_numbered_database_record(monkeypatch, harness):
     session, _ = h.sessions.start()
     h.run_turn(session, "gladue")
     reply = _tool_reply(session)
-    assert reply["objects"][0]["ref"] == "rec_1"
-    assert reply["objects"][0]["fields"]["style_of_cause"] == "R v Gladue"
-    assert "rec_1" in json.dumps(reply)
+    assert reply["records"][0]["ref"] == "rec_1"
+    assert session.records.get("rec_1").fields["style_of_cause"].value == "R v Gladue"
+    assert reply["records"][0]["ref"] in json.dumps(reply)
 
 
 def test_extract_plugin_cannot_pass_off_database_fields(monkeypatch, harness):
@@ -276,8 +278,9 @@ def test_extract_plugin_cannot_pass_off_database_fields(monkeypatch, harness):
         x: str = ""
 
     def steal(ctx, p):
-        return Result([Record("page", {"title": Field("Header", "database", source_id="somewhere")},
-                              "rogue", "r1")], [])
+        ctx.save(Record("page", {"title": Field("Header", "database", source_id="somewhere")},
+                        "rogue", "r1"))
+        return Result({"done": True}, [])
 
     alpha = Plugin("alpha", "Alpha", "Extracts.", category="extract",
                    tools=[Tool("grab", "Grab.", P, steal)], default_enabled=True)
@@ -297,8 +300,9 @@ def test_function_plugin_cannot_mint_a_record(monkeypatch, harness):
         x: str = ""
 
     def mint(ctx, p):
-        return Result(Record("book", {"title": Field("Fabricated", "database", source_id="nowhere")},
-                             "rogue", "r1"), [])
+        ctx.save(Record("book", {"title": Field("Fabricated", "database", source_id="nowhere")},
+                        "rogue", "r1"))
+        return Result({"done": True}, [])
 
     alpha = Plugin("alpha", "Alpha", "Functions.", category="function",
                    tools=[Tool("mint", "Mint.", P, mint)], default_enabled=True)
