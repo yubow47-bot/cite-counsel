@@ -28,7 +28,10 @@ from pydantic import ValidationError
 
 from harness import llm
 from harness.plugin import Plugin, Result, discover
+from harness.records import ContractError
 from harness.session import HISTORY_LIMIT, Context, Session, SessionStore
+from core.tool_contracts import Artifact, Finding, Record
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent.parent
@@ -46,6 +49,68 @@ FOLLOW_UP = (
 
 def _strip_private(message: dict) -> dict:
     return {k: v for k, v in message.items() if not k.startswith("_")}
+
+
+def _contains_object(content: Any) -> bool:
+    if isinstance(content, (Record, Artifact, Finding)):
+        return True
+    return isinstance(content, list) and any(isinstance(o, (Record, Artifact, Finding)) for o in content)
+
+
+class _Builtin:
+    """One harness-owned tool, available in every session without loading."""
+
+    def __init__(self, name, description, params, handler):
+        self.name, self.description, self.params, self.handler = name, description, params, handler
+
+
+# ── Harness-owned record tools (§4.2 of the blueprint) ────────────────
+
+
+class AddUserField(BaseModel):
+    ref: str = Field(description="The record to extend, e.g. rec_3")
+    field: str = Field(min_length=1, max_length=40, description="The field name, e.g. place or pinpoint")
+    text: str = Field(min_length=1, max_length=500,
+                      description="What the user said, copied from their messages; they must have written it")
+
+
+class NewRecord(BaseModel):
+    record_type: str = Field(min_length=1, max_length=40,
+                             description="e.g. case, legislation, book, article, webpage")
+
+
+def _add_user_field(ctx, p: AddUserField) -> Result:
+    record = ctx.records.get(p.ref, Record)
+    said = ctx.user_said(p.text)
+    updated = ctx.records.add_user_field(record, p.field, p.text, said)
+    ref = ctx.records.put(updated)
+    return Result(
+        {"ref": ref, "field": p.field, "value": said, "origin": "user",
+         "note": "from the user's own words; the record is not verified while it has user fields"},
+        [{"type": "card", "title": f"已补充 {p.field}", "rows": [[p.field, said],
+         ["来源", "你的原话"], ["核验状态", "未核验（含用户补充字段）"]],
+         "note": "用户补充的字段不经过数据库，含补充字段的记录不再标记为已核验。"}])
+
+
+def _new_record(ctx, p: NewRecord) -> Result:
+    record = ctx.records.new_record(p.record_type)
+    ref = ctx.records.put(record)
+    return Result(
+        {"ref": ref, "record_type": record.source_type, "fields": {},
+         "note": "an empty record from the user; its fields are supplied by the user one by one"},
+        [{"type": "card", "title": f"新建空白记录 · {p.record_type}", "rows": [["编号", ref]],
+         "note": "数据库里没有找到。请告诉我要写入的字段（如案名、引用号、年份），我会逐项记录为你的补充。"}])
+
+
+BUILTIN_TOOLS = (
+    _Builtin("record__add_user_field",
+             "Write a field the user themselves supplied into a stored record. The text must be copied "
+             "from the user's messages; it is refused otherwise.",
+             AddUserField, _add_user_field),
+    _Builtin("record__new",
+             "Create an empty record for a source the databases do not have, for the user to fill in.",
+             NewRecord, _new_record),
+)
 
 
 class Harness:
@@ -224,6 +289,10 @@ class Harness:
                 schema.pop("title", None)
                 specs.append({"type": "function", "function": {
                     "name": plugin.name + SEP + tool.name, "description": tool.description, "parameters": schema}})
+        for spec in BUILTIN_TOOLS:
+            specs.append({"type": "function", "function": {
+                "name": spec.name, "description": spec.description,
+                "parameters": spec.params.model_json_schema()}})
         return specs
 
     def _history(self, session: Session) -> list[dict]:
@@ -252,6 +321,9 @@ class Harness:
         plugin = self.plugins.get(plugin_name)
         tool = next((t for t in plugin.tools if t.name == tool_name), None) if plugin else None
         if tool is None or plugin_name not in session.loaded or plugin_name not in self.config["enabled"]:
+            builtin = next((b for b in BUILTIN_TOOLS if b.name == name), None)
+            if builtin is not None:
+                return self._run_builtin(session, builtin, arguments, name)
             return name, Result({"error": "unknown or unloaded tool"})
         try:
             params = tool.params.model_validate(arguments)
@@ -259,13 +331,47 @@ class Harness:
             problems = [{"field": ".".join(map(str, e["loc"])), "problem": e["msg"]} for e in exc.errors()]
             return name, Result({"error": "invalid arguments", "details": problems[:5]})
         try:
-            return name, tool.handler(self.context(session, plugin_name), params)
+            result = tool.handler(self.context(session, plugin_name), params)
+            stored = self._store_objects(session, result.content, plugin.category)
+        except ContractError as exc:
+            return name, Result({"error": "contract violation", "details": str(exc)})
         except ValueError as exc:
             return name, Result({"error": str(exc)})
         except Exception as exc:  # A plugin failure must not take the turn down.
             logger.warning("Tool %s failed: %s", name, type(exc).__name__, exc_info=True)
             return name, Result({"error": "the tool failed; try again later"})
+        if stored:
+            # The model gets references plus a summary; the object itself stays here.
+            result = Result({**(result.content if isinstance(result.content, dict) else
+                               {"result": result.content}), "objects": stored},
+                            result.blocks, result.final)
+        return name, result
 
+    def _run_builtin(self, session: Session, builtin: _Builtin, arguments: Any, name: str) -> tuple[str, Result]:
+        try:
+            params = builtin.params.model_validate(arguments)
+            result = builtin.handler(Context(session, "harness", self), params)
+        except ValidationError as exc:
+            problems = [{"field": ".".join(map(str, e["loc"])), "problem": e["msg"]} for e in exc.errors()]
+            return name, Result({"error": "invalid arguments", "details": problems[:5]})
+        except ValueError as exc:
+            return name, Result({"error": str(exc)})
+        except Exception as exc:
+            logger.warning("Tool %s failed: %s", name, type(exc).__name__, exc_info=True)
+            return name, Result({"error": "the tool failed; try again later"})
+        return name, result
+
+    def _store_objects(self, session: Session, content: Any, category: str) -> list[dict]:
+        """Store contract-clean evidence objects, return their model-facing refs."""
+        checked = session.records.check_output(category, content)
+        if not _contains_object(content):
+            return []
+        summaries = []
+        for obj in checked if isinstance(checked, list) else [checked]:
+            if isinstance(obj, (Record, Artifact, Finding)):
+                ref = session.records.put(obj)
+                summaries.append(session.records.summary(ref))
+        return summaries
     def _caption(self, session: Session, text: str) -> str:
         text = (text or "").strip()
         for plugin in self.enabled():
@@ -338,6 +444,7 @@ class Harness:
         if handler is None or plugin_name not in self.config["enabled"]:
             raise ValueError("这个操作不可用。")
         result = handler(self.context(session, plugin_name), payload if isinstance(payload, dict) else {})
+        self._store_objects(session, result.content, plugin.category)
         if result.content is not None:
             # The user acted through this plugin, so it is in play for the model
             # too. A pure view refresh (content None) loads nothing.

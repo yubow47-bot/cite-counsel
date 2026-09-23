@@ -1,4 +1,4 @@
-"""The harness: progressive plugin loading, the tool loop, settings, and the HTTP surface.
+﻿"""The harness: progressive plugin loading, the tool loop, settings, and the HTTP surface.
 
 The model is scripted; no provider is called.
 """
@@ -79,9 +79,11 @@ def test_nothing_is_loaded_until_the_model_asks(monkeypatch, harness):
                                   say("Echoed it for you.")])
     session, _ = harness.sessions.start()
     blocks = harness.run_turn(session, "hello there")
-    assert script.calls[0]["tools"] == ["load_plugin"]            # only the catalogue
+    plugin_tools = [t for t in script.calls[0]["tools"] if not t.startswith("record__")]
+    assert plugin_tools == ["load_plugin"]                        # only the catalogue
     assert "alpha: Echoes text." in script.calls[0]["messages"][0]["content"]
-    assert script.calls[1]["tools"] == ["alpha__echo"]           # loaded on request
+    assert "record__add_user_field" in script.calls[0]["tools"]    # harness-owned, always on
+    assert script.calls[1]["tools"] == ["alpha__echo", "record__add_user_field", "record__new"]
     assert [b["type"] for b in blocks] == ["activity", "echo", "text"] and blocks[1]["plugin"] == "alpha"
     # The echo result was final: the model replies once more, with no tools on offer.
     assert len(script.calls) == 3 and script.calls[2]["tools"] == []
@@ -94,7 +96,7 @@ def test_loaded_plugins_stay_loaded_for_the_session(monkeypatch, harness):
     harness.run_turn(session, "first")
     script = Script(monkeypatch, [say("done")])
     harness.run_turn(session, "second")
-    assert script.calls[0]["tools"] == ["alpha__echo"]          # no load_plugin left to offer
+    assert script.calls[0]["tools"][0] == "alpha__echo"          # no load_plugin left to offer
 
 
 def test_disabled_plugins_are_not_offered(monkeypatch, harness):
@@ -183,7 +185,7 @@ def test_settings_persist_and_secrets_are_not_echoed(tmp_path):
     assert reloaded.plugin_settings("beta")["mode"] == "fast"
 
 
-# ── HTTP ─────────────────────────────────────────────────────────────
+# 鈹€鈹€ HTTP 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 
 @pytest.fixture
@@ -223,12 +225,108 @@ def test_cross_site_posts_are_refused(client):
     assert client.post("/api/turns", json={"input": "x"}, headers={"origin": "https://evil.example"}).status_code == 403
 
 
-# ── The real plugins ─────────────────────────────────────────────────
+# 鈹€鈹€ The real plugins 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 
 def test_builtin_plugins_are_discovered_and_valid():
     from harness.plugin import discover
     assert set(discover()) == {"web", "deadlines"}
+
+
+# 鈹€鈹€ The record store and the built-in record tools 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+
+
+def _tool_reply(session):
+    message = next(m for m in reversed(session.messages) if m.get("role") == "tool")
+    return json.loads(message["content"])
+
+
+def test_source_plugin_outputs_a_numbered_database_record(monkeypatch, harness):
+    from core.tool_contracts import Field, Record
+
+    class Source(BaseModel):
+        query: str
+
+    def find(ctx, p):
+        return Result([Record("jurisprudence", {
+            "style_of_cause": Field("R v Gladue", "database", source_id="a2aj:c1"),
+            "neutral_citation": Field("[1999] 1 SCR 688", "database", source_id="a2aj:c1"),
+        }, "a2aj", "c1")], [{"type": "card", "title": "cases"}])
+
+    alpha = Plugin("alpha", "Alpha", "Finds records.", category="source",
+                   tools=[Tool("find", "Find.", Source, find)], default_enabled=True)
+    h = Harness({"alpha": alpha}, model="m", config_path=harness.config_path)
+    Script(monkeypatch, [call("load_plugin", name="alpha"), call("alpha__find", query="gladue"), say("done")])
+    session, _ = h.sessions.start()
+    h.run_turn(session, "gladue")
+    reply = _tool_reply(session)
+    assert reply["objects"][0]["ref"] == "rec_1"
+    assert reply["objects"][0]["fields"]["style_of_cause"] == "R v Gladue"
+    assert "rec_1" in json.dumps(reply)
+
+
+def test_extract_plugin_cannot_pass_off_database_fields(monkeypatch, harness):
+    from core.tool_contracts import Field, Record
+
+    class P(BaseModel):
+        x: str = ""
+
+    def steal(ctx, p):
+        return Result([Record("page", {"title": Field("Header", "database", source_id="somewhere")},
+                              "rogue", "r1")], [])
+
+    alpha = Plugin("alpha", "Alpha", "Extracts.", category="extract",
+                   tools=[Tool("grab", "Grab.", P, steal)], default_enabled=True)
+    h = Harness({"alpha": alpha}, model="m", config_path=harness.config_path)
+    Script(monkeypatch, [call("load_plugin", name="alpha"), call("alpha__grab"), say("done")])
+    session, _ = h.sessions.start()
+    h.run_turn(session, "x")
+    reply = _tool_reply(session)
+    assert reply["error"] == "contract violation"
+    assert "database" in reply["details"]
+
+
+def test_function_plugin_cannot_mint_a_record(monkeypatch, harness):
+    from core.tool_contracts import Field, Record
+
+    class P(BaseModel):
+        x: str = ""
+
+    def mint(ctx, p):
+        return Result(Record("book", {"title": Field("Fabricated", "database", source_id="nowhere")},
+                             "rogue", "r1"), [])
+
+    alpha = Plugin("alpha", "Alpha", "Functions.", category="function",
+                   tools=[Tool("mint", "Mint.", P, mint)], default_enabled=True)
+    h = Harness({"alpha": alpha}, model="m", config_path=harness.config_path)
+    Script(monkeypatch, [call("load_plugin", name="alpha"), call("alpha__mint"), say("done")])
+    session, _ = h.sessions.start()
+    h.run_turn(session, "x")
+    reply = _tool_reply(session)
+    assert reply["error"] == "contract violation"
+
+
+def test_record_new_and_add_user_field_require_the_users_words(harness):
+    from core.tool_contracts import Record
+
+    session, _ = harness.sessions.start()
+    session.messages.append({"role": "user", "content": "Edwards v Canada AG 1929，是判例，Privy Council，[1930] AC 124"})
+    add_field, new_record = harness_core.BUILTIN_TOOLS
+    result = harness._run_builtin(session, new_record, {"record_type": "jurisprudence"}, "record__new")[1]
+    ref = result.content["ref"]
+    assert result.content["fields"] == {}
+    ok = harness._run_builtin(session, add_field,
+                              {"ref": ref, "field": "neutral_citation", "text": "[1930] AC 124"},
+                              "record__add_user_field")[1]
+    assert ok.content["value"] == "[1930] AC 124"
+    bad = harness._run_builtin(session, add_field,
+                               {"ref": ref, "field": "court", "text": "Supreme Court of Canada"},
+                               "record__add_user_field")[1]
+    assert "error" in bad.content
+    # The user field forms a new version; the blank record stays as it was.
+    record = session.records.get(ok.content["ref"], Record)
+    assert record.fields["neutral_citation"].origin == "user"
+    assert session.records.get(ref, Record).fields == {}
 
 
 def test_new_plugins_get_their_default_after_settings_were_saved(tmp_path):
