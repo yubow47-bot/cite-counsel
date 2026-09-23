@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field as PField
 
-from core.grounding import grounded_reply_guard
 from harness.plugin import Plugin, Result, Tool
 
 
@@ -58,5 +57,4 @@ PLUGIN = Plugin(
     category="function",
     fact_patterns=(),
     default_enabled=True,
-    reply_guard=grounded_reply_guard,
 )

@@ -481,3 +481,15 @@ def test_a_final_result_does_not_end_a_request_that_needs_more(monkeypatch, harn
     harness.run_turn(session, "x")
     assert len(script.calls) == 4                                 # a second tool round after a final one
     assert harness.seen == [("echo", "x"), ("echo", "x")]
+
+
+def test_a_long_clean_reply_is_shown_in_full(monkeypatch, harness):
+    """A brainstorm runs past a few sentences. With nothing unsourced in it,
+    none of it is hidden -- length alone is not a reason to silence it."""
+    paragraph = "一个 citator 插件可以告诉律师某个判例现在是否仍然有效，这是引注可靠性最缺的一环。"
+    long_reply = "\n\n".join([paragraph] * 20)
+    Script(monkeypatch, [say(long_reply)])
+    session, _ = harness.sessions.start()
+    blocks = harness.run_turn(session, "你 brainstorm 一下")
+    assert len(long_reply) > 600
+    assert [b["type"] for b in blocks] == ["text"] and blocks[0]["text"].count("citator") == 20

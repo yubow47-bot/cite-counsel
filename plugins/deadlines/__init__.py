@@ -11,7 +11,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field as PField
 
-from core.grounding import grounded_reply_guard
 from harness.plugin import Plugin, Result, Tool
 
 
@@ -53,5 +52,4 @@ PLUGIN = Plugin(
                  "holidays). Never assume a court's holidays.",
     tools=[Tool("compute", "Compute a deadline date from explicit inputs.", DeadlineParams, compute)],
     default_enabled=False,
-    reply_guard=grounded_reply_guard,
 )

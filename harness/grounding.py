@@ -20,7 +20,7 @@ import re
 
 logger = logging.getLogger(__name__)
 
-MESSAGE_LIMIT = 600
+MESSAGE_LIMIT = 4000  # a runaway guard, not a style rule: paragraphs are checked one by one
 
 # Generic shapes every session checks, whatever plugins say.
 _GENERIC_SHAPES = (

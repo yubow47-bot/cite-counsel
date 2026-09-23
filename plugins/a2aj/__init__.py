@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from core.grounding import grounded_reply_guard
 from core.source_tools import SourceContractError, source_cases, source_legislation
 from harness.plugin import Plugin, Result, Tool
 
@@ -98,5 +97,4 @@ PLUGIN = Plugin(
     category="source",
     fact_patterns=CASE_FACTS,
     default_enabled=True,
-    reply_guard=grounded_reply_guard,
 )
