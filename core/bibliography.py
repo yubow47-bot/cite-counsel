@@ -112,9 +112,9 @@ def entry_verified(entry: dict) -> bool:
 def build(entries: list) -> dict:
     """Sections in McGill order, alphabetical within each; duplicates collapsed."""
     if not isinstance(entries, list) or not entries:
-        raise ValueError("引文清单是空的。")
+        raise ValueError("The citation list is empty.")
     if len(entries) > MAX_ENTRIES:
-        raise ValueError(f"一次最多整理 {MAX_ENTRIES} 条引文。")
+        raise ValueError(f"At most {MAX_ENTRIES} citations can be assembled at once.")
     config = rules()
     order = [s["id"] for s in config["sections"]] + [config["residual_section"]["id"]]
     titles = {s["id"]: s["title"] for s in config["sections"]}
@@ -124,7 +124,7 @@ def build(entries: list) -> dict:
     for raw in entries:
         entry = raw
         if not isinstance(entry, dict) or not isinstance(entry.get("fields"), dict):
-            raise ValueError("引文条目格式不正确，请重新生成引文后加入。")
+            raise ValueError("This citation entry is malformed; render the citation again before adding it.")
         text, key, section_id = render_entry(entry)
         section_id = section_id or config["residual_section"]["id"]
         verified = entry_verified(entry)

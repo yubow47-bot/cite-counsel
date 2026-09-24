@@ -93,7 +93,7 @@ def test_exa_bad_key_says_so_through_the_harness(h, session):
         call = {"id": "c1", "type": "function", "function": {
             "name": "web__search", "arguments": json.dumps({"query": "Ottawa shooting"})}}
         result = h._execute(session, call)[1]
-    assert result.content["error"] == "API Key 无效或无权限"
+    assert result.content["error"] == "The API key is invalid or unauthorized"
 
 
 def test_a_blocked_duckduckgo_says_so_instead_of_reporting_zero(h):
@@ -103,7 +103,7 @@ def test_a_blocked_duckduckgo_says_so_instead_of_reporting_zero(h):
                return_value=FakeResponse(status_code=202, text=page)):
         with pytest.raises(ValueError) as exc:
             web.duckduckgo_lite("Ottawa shooting", 6)
-    assert "人机校验" in str(exc.value)
+    assert "bot-check" in str(exc.value)
 
 
 def test_two_empty_searches_warn_the_model_to_stop_retrying(h, session):
@@ -115,7 +115,7 @@ def test_two_empty_searches_warn_the_model_to_stop_retrying(h, session):
         first = web.search(ctx, web.SearchParams(query="one"))
         second = web.search(ctx, web.SearchParams(query="two"))
     assert first.content["note"] == ""
-    assert "连续 2 次" in second.content["note"]
+    assert "2 searches in a row" in second.content["note"]
     assert "fetch" in second.content["note"]
 
 

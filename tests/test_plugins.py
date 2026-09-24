@@ -24,8 +24,8 @@ def test_deadline_card_lists_every_input(h):
         "start": "2026-09-25", "days": 10, "mode": "court_days", "rule": "r 3.02", "holidays": ["2026-10-12"]})}}
     result = h._execute(session, call)[1]
     rows = dict(result.blocks[0]["rows"])
-    assert rows["结果日期"] > "2026-10-08"
-    assert rows["节假日"] == "2026-10-12" and result.final is True
+    assert rows["Result date"] > "2026-10-08"
+    assert rows["Holidays"] == "2026-10-12" and result.final is True
 
 
 def test_web_search_does_nothing_until_a_service_is_chosen(h):

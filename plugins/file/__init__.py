@@ -26,31 +26,32 @@ def extract(ctx, p: ExtractParams) -> Result:
     from local_tools.file_extractor import extract_from_file
     attachment = ctx.attachment(p.attachment_id)
     if attachment is None:
-        raise ValueError("没有这个附件；请先上传文件。")
+        raise ValueError("No such attachment; please upload the file first.")
     data = extract_from_file(attachment["path"])
     if not isinstance(data, dict):
-        raise ValueError("这个文件读不出内容。")
+        raise ValueError("Could not read any content from this file.")
     values = {name: str(data.get(name) or "").strip() for name in ("title", "author", "date", "publisher")}
     text = str(data.get("raw_text") or "").strip()
     if not text and not any(values.values()):
-        raise ValueError("文件里没有可提取的文字（可能是扫描件或空文件）。")
+        raise ValueError("No extractable text in this file (it may be a scan or empty).")
     values["text"] = text
     fields = {name: Field(value, "extracted") for name, value in values.items() if value}
     record = Record("document", fields, "file", p.attachment_id)
     ref = ctx.save(record)
-    rows = [["文件", attachment["name"]], ["记录", ref]]
+    rows = [["File", attachment["name"]], ["Record", ref]]
     rows += [[name, value[:120]] for name, value in values.items() if value and name != "text"]
-    rows.append(["正文字符", str(len(text))])
+    rows.append(["Text characters", str(len(text))])
     return Result(
         {"ref": ref, "fields": {name: field.value for name, field in record.fields.items()},
          "note": "an extracted record: fields come from the file, not from a database"},
-        [{"type": "card", "title": "文件已提取", "rows": rows,
-          "note": "字段取自文件本身，来源为“提取”，不标记为已核验；引用前请核对。"}], final=True)
+        [{"type": "card", "title": "File extracted", "rows": rows,
+          "note": "Fields come from the file itself, sourced as \"extracted\", not marked verified -- "
+                  "check them before citing."}], final=True)
 
 
 PLUGIN = Plugin(
     name="file",
-    title="文件提取",
+    title="File extraction",
     description="Extract the fields and text of an uploaded PDF/DOCX/PPTX/XLSX or image as an extracted record.",
     instructions="Extracted records (rec_N) carry fields from the file itself. They are not database records: "
                  "citations from them will read unverified, which is honest. For court decisions, prefer the "

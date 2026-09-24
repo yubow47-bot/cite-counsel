@@ -7,7 +7,7 @@
   }
   H.registerBlock('web', 'web_results', block => {
     const card = el('details', 'web-card');
-    card.append(el('summary', '', `网络搜索 “${block.query}” · ${(block.results || []).length} 条结果`));
+    card.append(el('summary', '', `Web search "${block.query}" · ${(block.results || []).length} results`));
     for (const r of block.results || []) {
       const row = el('div', 'web-row');
       if (/^https?:\/\//.test(r.url)) row.append(link(r.url, r.title || r.url));
@@ -19,7 +19,7 @@
   });
   H.registerBlock('web', 'web_page', block => {
     const row = el('div', 'activity');
-    row.append('已读取网页：');
+    row.append('Read page: ');
     if (/^https?:\/\//.test(block.url)) row.append(link(block.url, block.title || block.url));
     if (block.date) row.append(` · ${block.date}`);
     return row;

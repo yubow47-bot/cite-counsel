@@ -37,7 +37,7 @@ def chat(model: str, messages: list[dict], tools: list[dict], *, timeout: float 
     from core.spend_tracker import spend_tracker
     from llm_api.openrouter_api import track_usage
     if spend_tracker.is_over_cap():
-        raise LLMError("今日模型费用已达上限。")
+        raise LLMError("Today's model spend cap has been reached.")
     try:
         response = _post(model, messages, tools, timeout, include_reasoning=True)
         text = response.text.lower()
@@ -46,15 +46,15 @@ def chat(model: str, messages: list[dict], tools: list[dict], *, timeout: float 
         response.raise_for_status()
         data = response.json()
     except ValueError as exc:
-        raise LLMError("没有配置模型 API Key。") from exc
+        raise LLMError("No model API key is configured.") from exc
     except Exception as exc:
         logger.error("llm.chat failed for model %s: %s", model, exc)
-        raise LLMError("模型服务暂时不可用。") from exc
+        raise LLMError("The model service is temporarily unavailable.") from exc
     track_usage(model, data)
     try:
         message = data["choices"][0]["message"]
     except (KeyError, IndexError, TypeError) as exc:
-        raise LLMError("模型返回格式不正确。") from exc
+        raise LLMError("The model returned an unexpected format.") from exc
     return _finalize(message, tools)
 
 
@@ -76,7 +76,7 @@ def chat_stream(model: str, messages: list[dict], tools: list[dict], *, timeout:
     from core.spend_tracker import spend_tracker
     from llm_api.openrouter_api import track_usage
     if spend_tracker.is_over_cap():
-        raise LLMError("今日模型费用已达上限。")
+        raise LLMError("Today's model spend cap has been reached.")
     try:
         response = _post(model, messages, tools, timeout, include_reasoning=True, stream=True)
         if response.status_code == 400:
@@ -130,12 +130,12 @@ def chat_stream(model: str, messages: list[dict], tools: list[dict], *, timeout:
                 if function.get("arguments"):
                     slot["function"]["arguments"] += function["arguments"]
     except ValueError as exc:
-        raise LLMError("没有配置模型 API Key。") from exc
+        raise LLMError("No model API key is configured.") from exc
     except LLMError:
         raise
     except Exception as exc:
         logger.error("llm.chat_stream failed for model %s: %s", model, exc)
-        raise LLMError("模型服务暂时不可用。") from exc
+        raise LLMError("The model service is temporarily unavailable.") from exc
     if usage:
         track_usage(model, {"usage": usage})
     message = {"role": "assistant", "content": "".join(content_parts)}

@@ -46,7 +46,7 @@ def _result(ctx, records):
 
 PLUGIN = Plugin(
     name="crossref",
-    title="期刊文章（Crossref）",
+    title="Journal articles (Crossref)",
     description="Look up a journal article by DOI or by title; fields come from the Crossref record.",
     instructions="Records you receive are numbered (rec_N). Refer to them by number. For a title search, show "
                  "the candidates and let the user pick; do not pick for them.",

@@ -659,7 +659,7 @@
     ]
   },
   "jurisprudence": {
-    "render": {"label": "判例", "required_any": [["neutral_citation", "reporter"]], "pinpoint_after": ["neutral_citation", "reporter"], "_pinpoint_after_rule": "A pinpoint follows the first citation it refers to, before any parallel citation: R v Sharma, 2022 SCC 39 at para 1, [2022] 3 SCR 147.", "fields": [{"name": "style_of_cause", "label": "案名（保留原文）", "required": true}, {"name": "neutral_citation", "label": "中立引用号（如原文存在）"}, {"name": "reporter", "label": "报告书引用（包含报告年份、卷、页）"}, {"name": "court", "label": "法院缩写（需要时填写）"}, {"name": "pinpoint", "label": "定位引用（完整填写，如 at para 64）"}], "segments": [["style_of_cause", "*", "*"], ["neutral_citation", ", ", ""], ["reporter", ", ", ""], ["court", " (", ")"], ["pinpoint", " ", ""]]},
+    "render": {"label": "判例", "required_any": [["neutral_citation", "reporter"]], "pinpoint_after": ["neutral_citation", "reporter"], "_pinpoint_after_rule": "A pinpoint follows the first citation it refers to, before any parallel citation: R v Sharma, 2022 SCC 39 at para 1, [2022] 3 SCR 147.", "fields": [{"name": "style_of_cause", "label": "Style of cause (keep as written)", "required": true}, {"name": "neutral_citation", "label": "Neutral citation (if the source has one)"}, {"name": "reporter", "label": "Reporter citation (year, volume and page)"}, {"name": "court", "label": "Court abbreviation (when needed)"}, {"name": "pinpoint", "label": "Pinpoint (written in full, e.g. at para 64)"}], "segments": [["style_of_cause", "*", "*"], ["neutral_citation", ", ", ""], ["reporter", ", ", ""], ["court", " (", ")"], ["pinpoint", " ", ""]]},
     "category": "Jurisprudence",
     "source_files": [
       "LAWS 2908D Week 3 Jurisprudence.pdf"
@@ -761,7 +761,7 @@
     ]
   },
   "legislation": {
-    "render": {"label": "法律 / 法规", "fields": [{"name": "title", "label": "法律 / 法规标题", "required": true}, {"name": "citation", "label": "完整法规引用（如 RSC 1985, c C-46）", "required": true}, {"name": "pinpoint", "label": "条款（如 s 718.2(e) 或 r 21.01）"}], "segments": [["title", "*", "*"], ["citation", ", ", ""], ["pinpoint", ", ", ""]]},
+    "render": {"label": "法律 / 法规", "fields": [{"name": "title", "label": "Statute / regulation title", "required": true}, {"name": "citation", "label": "Full statutory citation (e.g. RSC 1985, c C-46)", "required": true}, {"name": "pinpoint", "label": "Provision (e.g. s 718.2(e) or r 21.01)"}], "segments": [["title", "*", "*"], ["citation", ", ", ""], ["pinpoint", ", ", ""]]},
     "category": "Legislation",
     "source_files": [
       "LAWS 2908D Winter 2026 Legislation.pdf"
@@ -981,7 +981,7 @@
     ]
   },
   "news_online": {
-    "render": {"label": "新闻报道", "fields": [{"name": "author", "label": "作者"}, {"name": "title", "label": "文章标题", "required": true}, {"name": "newspaper", "label": "报纸 / 媒体名称（正体，不加斜体）", "required": true}, {"name": "date", "label": "日期（如 26 November 2005）", "required": true}, {"name": "page", "label": "版面（如 A4）"}, {"name": "site", "label": "网站域名（在线来源，如 news.bbc.co.uk）"}], "segments": [["author", "", ", "], ["title", "\"", "\""], ["newspaper", ", ", ""], ["date", " (", ")"], ["page", " ", ""], ["site", ", online: <", ">"]]},
+    "render": {"label": "新闻报道", "fields": [{"name": "author", "label": "Author"}, {"name": "title", "label": "Article title", "required": true}, {"name": "newspaper", "label": "Newspaper / outlet name (roman, not italic)", "required": true}, {"name": "date", "label": "Date (e.g. 26 November 2005)", "required": true}, {"name": "page", "label": "Page (e.g. A4)"}, {"name": "site", "label": "Site domain (online source, e.g. news.bbc.co.uk)"}], "segments": [["author", "", ", "], ["title", "\"", "\""], ["newspaper", ", ", ""], ["date", " (", ")"], ["page", " ", ""], ["site", ", online: <", ">"]]},
     "category": "News / Online Sources",
     "template": "[author], \"[title]\", [newspaper] ([date]), [page].",
     "fields": [
@@ -994,7 +994,7 @@
     ]
   },
   "website": {
-    "render": {"label": "网页", "fields": [{"name": "author", "label": "作者"}, {"name": "title", "label": "页面标题", "required": true}, {"name": "date", "label": "发布日期（原文格式）"}, {"name": "url", "label": "URL", "required": true}], "segments": [["author", "", ", "], ["title", "\"", "\""], ["date", " (", ")"], ["url", ", online: <", ">"]]},
+    "render": {"label": "网页", "fields": [{"name": "author", "label": "Author"}, {"name": "title", "label": "Page title", "required": true}, {"name": "date", "label": "Publication date (as written on the page)"}, {"name": "url", "label": "URL", "required": true}], "segments": [["author", "", ", "], ["title", "\"", "\""], ["date", " (", ")"], ["url", ", online: <", ">"]]},
     "category": "Websites",
     "template": "[author], \"[title]\" ([date]), online: <[url]>.",
     "fields": [
@@ -1004,6 +1004,6 @@
       {"key": "url", "label": "URL", "placeholder": "https://...", "required": true}
     ]
   },
-  "book": {"category": "Books", "render": {"label": "书籍", "fields": [{"name": "author", "label": "作者", "required": true}, {"name": "title", "label": "书名", "required": true}, {"name": "edition", "label": "版次（如 2nd ed）"}, {"name": "place", "label": "出版地", "required": true}, {"name": "publisher", "label": "出版社", "required": true}, {"name": "year", "label": "出版年份", "required": true}, {"name": "pinpoint", "label": "定位引用（如 at 23）"}], "segments": [["author", "", ", "], ["title", "*", "*"], ["edition", ", ", ""], ["place", " (", ": "], ["publisher", "", ", "], ["year", "", ")"], ["pinpoint", " ", ""]]}},
-  "journal_article": {"category": "Journal Articles", "render": {"label": "期刊文章", "fields": [{"name": "author", "label": "作者（多人用 & 连接，超过三人写 et al）"}, {"name": "title", "label": "文章标题", "required": true}, {"name": "year", "label": "出版年份", "required": true}, {"name": "volume", "label": "卷"}, {"name": "issue", "label": "期"}, {"name": "journal", "label": "期刊名缩写（如 Osgoode Hall LJ）", "required": true}, {"name": "first_page", "label": "起始页", "required": true}, {"name": "pinpoint", "label": "定位页（只填数字，如 23）"}], "segments": [["author", "", ", "], ["title", "\"", "\""], ["year", " (", ")"], ["volume", " ", ""], ["issue", ":", ""], ["journal", " *", "*"], ["first_page", " ", ""], ["pinpoint", " at ", ""]]}}
+  "book": {"category": "Books", "render": {"label": "书籍", "fields": [{"name": "author", "label": "Author", "required": true}, {"name": "title", "label": "Title", "required": true}, {"name": "edition", "label": "Edition (e.g. 2nd ed)"}, {"name": "place", "label": "Place of publication", "required": true}, {"name": "publisher", "label": "Publisher", "required": true}, {"name": "year", "label": "Year of publication", "required": true}, {"name": "pinpoint", "label": "Pinpoint (e.g. at 23)"}], "segments": [["author", "", ", "], ["title", "*", "*"], ["edition", ", ", ""], ["place", " (", ": "], ["publisher", "", ", "], ["year", "", ")"], ["pinpoint", " ", ""]]}},
+  "journal_article": {"category": "Journal Articles", "render": {"label": "期刊文章", "fields": [{"name": "author", "label": "Author(s) (join with & ; write et al past three)"}, {"name": "title", "label": "Article title", "required": true}, {"name": "year", "label": "Year of publication", "required": true}, {"name": "volume", "label": "Volume"}, {"name": "issue", "label": "Issue"}, {"name": "journal", "label": "Journal abbreviation (e.g. Osgoode Hall LJ)", "required": true}, {"name": "first_page", "label": "First page", "required": true}, {"name": "pinpoint", "label": "Pinpoint page (digits only, e.g. 23)"}], "segments": [["author", "", ", "], ["title", "\"", "\""], ["year", " (", ")"], ["volume", " ", ""], ["issue", ":", ""], ["journal", " *", "*"], ["first_page", " ", ""], ["pinpoint", " at ", ""]]}}
 }

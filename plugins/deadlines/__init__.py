@@ -32,21 +32,23 @@ def compute(ctx, p: DeadlineParams) -> Result:
                              p.roll_forward, tuple(Field(h, "user") for h in p.holidays),
                              mode=p.mode, weekend_days=tuple(p.weekend_days))
     ref = ctx.save(artifact)
-    names = "一二三四五六日"
-    rows = [["结果日期", artifact.content], ["起算日（不计入）", p.start], ["天数", str(p.days)],
-            ["计算方式", "日历日" if p.mode == "calendar_days" else "工作日"],
-            ["休息日", "、".join("周" + names[d] for d in sorted(p.weekend_days)) or "无"],
-            ["节假日", "、".join(p.holidays) or "无"], ["依据（你提供）", p.rule or "未说明"]]
+    names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    rows = [["Result date", artifact.content], ["Start date (not counted)", p.start], ["Days", str(p.days)],
+            ["Counting method", "Calendar days" if p.mode == "calendar_days" else "Court days"],
+            ["Weekend days", ", ".join(names[d] for d in sorted(p.weekend_days)) or "None"],
+            ["Holidays", ", ".join(p.holidays) or "None"], ["Rule (as you gave it)", p.rule or "Not specified"]]
     if p.mode == "calendar_days":
-        rows.insert(4, ["遇休息日顺延", "是" if p.roll_forward else "否"])
-    block = {"type": "card", "title": "期限计算", "rows": rows,
-             "note": "只按上面列出的输入做日期运算，不判断规则是否适用，也不包含未列出的法院休息日。请逐项核对。"}
+        rows.insert(4, ["Rolls forward past a closed day", "Yes" if p.roll_forward else "No"])
+    block = {"type": "card", "title": "Deadline calculation", "rows": rows,
+             "note": "This only does the date arithmetic on the inputs listed above -- it does not judge "
+                     "whether the rule applies, and does not know any court holiday not listed here. "
+                     "Check each row."}
     return Result({"ref": ref, "date": artifact.content}, [block], final=True)
 
 
 PLUGIN = Plugin(
     name="deadlines",
-    title="期限计算",
+    title="Deadline calculator",
     description="Add a number of calendar or court days to a date, using weekends and holidays the user supplies.",
     instructions="Ask the user for any input they did not give (start date, number of days, counting method, "
                  "holidays). Never assume a court's holidays.",

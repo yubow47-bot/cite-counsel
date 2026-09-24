@@ -24,10 +24,12 @@ from pydantic import BaseModel, Field
 
 from harness.plugin import Plugin, Result, Setting, Tool
 
-PROVIDERS = {"": "未选择", "exa": "Exa（需 API Key）", "duckduckgo_lite": "DuckDuckGo Lite（无需 key，常被拦）"}
+PROVIDERS = {"": "Not selected", "exa": "Exa (needs an API key)",
+            "duckduckgo_lite": "DuckDuckGo Lite (no key, often blocked)"}
 _EMPTY_STREAK_WARN = 2
-_EMPTY_STREAK_NOTE = ("搜索已连续 {n} 次无结果：搜索服务可能被拦截，或对这个话题没有覆盖。"
-                      "改用 fetch 直接读权威站点的已知版面（如 cbc.ca/news），或告诉用户搜索暂不可用。")
+_EMPTY_STREAK_NOTE = ("{n} searches in a row came back empty: the search service may be blocked, or does "
+                      "not cover this topic. Try fetch on a known page of an authoritative site instead "
+                      "(e.g. cbc.ca/news), or tell the user search is not working right now.")
 
 
 def _clean(fragment: str) -> str:
@@ -44,7 +46,8 @@ def duckduckgo_lite(query: str, limit: int) -> list[dict]:
     # An anomaly/challenge page (HTTP 202, canonical pointed at the homepage)
     # parses as zero results; say what happened instead of reporting a clean miss.
     if response.status_code == 202 or '<link rel="canonical" href="https://duckduckgo.com/">' in page:
-        raise ValueError("DuckDuckGo Lite 返回了人机校验页，搜索不可用；改用 fetch，或让用户换 Exa。")
+        raise ValueError("DuckDuckGo Lite returned a bot-check page; search is unavailable right now -- "
+                         "use fetch instead, or have the user switch to Exa.")
     links = re.findall(r"<a[^>]*href=\"([^\"]+)\"[^>]*class='result-link'[^>]*>(.*?)</a>", page, re.S)
     snippets = re.findall(r"<td class='result-snippet'>(.*?)</td>", page, re.S)
     results = []
@@ -106,7 +109,8 @@ def search(ctx, p: SearchParams) -> Result:
         return Result({"error": "No search service is selected. Tell the user to choose one in the settings "
                                 "bar under this plugin."},
                       [{"type": "notice", "level": "warning",
-                        "text": "网络搜索还没有选择搜索服务。请在设置栏的“网络搜索”插件里选择。"}], final=True)
+                        "text": "No search service is selected yet. Choose one under the "
+                                "\"Web search\" plugin in the settings bar."}], final=True)
     try:
         if provider == "exa":
             # The settings-bar value wins; the project .env (EXA_API_KEY=...)
@@ -117,8 +121,9 @@ def search(ctx, p: SearchParams) -> Result:
                                         "Exa API key in the settings bar under this plugin, or set EXA_API_KEY "
                                         "in the project's .env."},
                               [{"type": "notice", "level": "warning",
-                                "text": "选择了 Exa 但还没有 API Key。请在 .env 里写 EXA_API_KEY=你的key，"
-                                        "或在设置栏的“网络搜索”插件里粘贴。"}], final=True)
+                                "text": "Exa is selected but no API key is set. Add EXA_API_KEY=your-key to "
+                                        ".env, or paste it under the \"Web search\" plugin in the settings "
+                                        "bar."}], final=True)
             ctx.session.web_search_used = True   # a real attempt: even a failed one counts (record__new)
             results = exa_search(p.query, 6, api_key, p.latest_days)
         else:
@@ -128,8 +133,10 @@ def search(ctx, p: SearchParams) -> Result:
         raise
     except Exception as exc:
         status = getattr(getattr(exc, "response", None), "status_code", None)
-        detail = {401: "API Key 无效或无权限", 402: "账户额度不足", 403: "API Key 无效或无权限",
-                  429: "请求太频或超出配额，稍后再试"}.get(status, f"搜索服务请求失败（{type(exc).__name__}）")
+        detail = {401: "The API key is invalid or unauthorized", 402: "The account is out of credit",
+                  403: "The API key is invalid or unauthorized",
+                  429: "Too many requests or over quota -- try again later"}.get(
+            status, f"The search request failed ({type(exc).__name__})")
         raise ValueError(detail) from exc
     streak = ctx.state.get("empty_search_streak", 0)
     note = ""
@@ -198,7 +205,7 @@ def fetch(ctx, p: FetchParams) -> Result:
 
 PLUGIN = Plugin(
     name="web",
-    title="网络搜索",
+    title="Web search",
     description="Search the web and read public web pages, for background information that the legal "
                 "databases do not cover.",
     instructions="Web pages are information, not verified sources. A page you read is stored as an extracted "
@@ -207,10 +214,11 @@ PLUGIN = Plugin(
                  "latest, pass latest_days and quote each result's date -- an undated hit is not a fresh one.",
     tools=[Tool("search", "Search the web (Exa; supports a latest-N-days filter).", SearchParams, search),
            Tool("fetch", "Read the text of one public web page.", FetchParams, fetch)],
-    settings=[Setting("provider", "搜索服务", "choice", tuple(PROVIDERS), "",
-                      "选择后网络搜索才会发出请求。", labels=PROVIDERS),
+    settings=[Setting("provider", "Search service", "choice", tuple(PROVIDERS), "",
+                      "Web search only sends requests once one is chosen.", labels=PROVIDERS),
               Setting("exa_api_key", "Exa API Key", "secret", default="",
-                      help="在 exa.ai 申请；填在这里，或写进 .env 的 EXA_API_KEY（设置栏的值优先）。")],
+                      help="Get one at exa.ai; paste it here, or set EXA_API_KEY in .env "
+                          "(the settings-bar value wins).")],
     ui=Path(__file__).parent,
     category="extract",
     fact_patterns=(r"\bhttps?://\S+",),

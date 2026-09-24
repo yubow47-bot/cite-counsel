@@ -38,7 +38,7 @@ def save_api_keys(openrouter_api_key: str | None, typesafe_api_key: str | None) 
     updates = {name: value.strip() for name, value in updates.items() if value is not None and value.strip()}
     for value in updates.values():
         if not 8 <= len(value) <= 512 or any(char.isspace() for char in value):
-            raise ValueError("API Key 格式无效：应为 8–512 个不含空格的字符。")
+            raise ValueError("Invalid API key format: it should be 8–512 characters with no whitespace.")
     with _ENV_LOCK:
         lines = ENV_PATH.read_text(encoding="utf-8-sig").splitlines() if ENV_PATH.is_file() else []
         result = []
