@@ -78,14 +78,18 @@ def test_user_pinpoint_makes_the_citation_honest_about_being_unverified():
     result = run_tool(h, session, "mcgill__cite", ref=ref, pinpoint="at para 64")
     assert result.content["verified"] is False
     assert "at para 64" in result.content["citation"]
+    assert result.content["citation"].count("at para 64") == 1   # the template's own "at" is not doubled
 
 
-def test_a_pinpoint_the_user_never_wrote_is_refused():
+def test_a_pinpoint_the_model_supplied_is_refused():
+    """A pinpoint the user never wrote has no source in this session: the
+    cite refuses it instead of rendering an honestly-labelled invention."""
     h, session = make()
     ref = session.records.put(gladue_record())
     session.messages.append({"role": "user", "content": "引用它"})
     result = run_tool(h, session, "mcgill__cite", ref=ref, pinpoint="at para 999")
-    assert "用户原话" in result.content["error"]
+    assert "找不到来源" in result.content["error"]
+    assert session.records.all(Artifact) == []                # no citation artifact was minted
 
 
 def test_full_text_then_quote_then_cite_stays_verified():
@@ -100,6 +104,7 @@ def test_full_text_then_quote_then_cite_stays_verified():
     cited = run_tool(h, session, "mcgill__cite", ref=ref, pinpoint_from=checked.content["pinpoint_ref"])
     assert cited.content["verified"] is True
     assert "at para 2" in cited.content["citation"]
+    assert cited.content["citation"].count("at para 2") == 1     # no doubled "at"
 
 
 def test_quote_needs_the_stored_full_text():

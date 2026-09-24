@@ -1,9 +1,8 @@
-"""The built-in plugins behind the harness, and the default reply check they share."""
+"""The built-in plugins behind the harness."""
 import json
 
 import pytest
 
-from core.grounding import grounded_reply_guard
 from harness.core import Harness
 from harness.plugin import discover
 
@@ -15,21 +14,6 @@ def h(tmp_path):
 
 def said(session, text):
     session.messages.append({"role": "user", "content": text})
-
-
-def test_reply_guard_drops_facts_nobody_supplied(h):
-    session, _ = h.sessions.start()
-    said(session, "R v Gladue")
-    ctx = h.context(session, "deadlines")
-    assert grounded_reply_guard("这条是 1999 SCC 688。", ctx) == ""
-    assert grounded_reply_guard("找到了，请看卡片。", ctx) == "找到了，请看卡片。"
-
-
-def test_reply_guard_accepts_facts_from_tool_results(h):
-    session, _ = h.sessions.start()
-    said(session, "R v Gladue")
-    session.messages.append({"role": "tool", "tool_call_id": "c1", "content": '{"citation": "[1999] 1 SCR 688"}'})
-    assert grounded_reply_guard("见 [1999] 1 SCR 688。", h.context(session, "deadlines")) == "见 [1999] 1 SCR 688。"
 
 
 def test_deadline_card_lists_every_input(h):

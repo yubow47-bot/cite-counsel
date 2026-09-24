@@ -98,6 +98,13 @@ def render_fields(source_type: str, fields: dict) -> str:
         segments.remove(pinpoint)
         position = next(i for i, segment in enumerate(segments) if segment[0] == anchor)
         segments.insert(position + 1, pinpoint)
+    # Whoever types a pinpoint often includes the "at" the template already
+    # prints ("at para 64"). Strip it only where the template would double it;
+    # a bare suffix template keeps the value as typed.
+    if clean.get("pinpoint"):
+        for key, prefix, _suffix in segments:
+            if key == "pinpoint" and "at" in prefix:
+                clean["pinpoint"] = re.sub(r"^at\s+", "", clean["pinpoint"], flags=re.I)
     text = "".join(prefix + clean[key] + suffix for key, prefix, suffix in segments if clean.get(key))
     return text if text.endswith(".") else text + "."
 

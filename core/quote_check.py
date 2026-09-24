@@ -163,7 +163,7 @@ def case_citation(item: dict) -> str:
     return ""
 
 
-def check(item: dict, quote: str, *, text: str | None = None,
+def check(item: dict, quote: str, *, quoted: Field | None = None, text: str | None = None,
           source_id: str | None = None) -> dict:
     """Locate ``quote`` in the judgment behind ``item``.
 
@@ -172,6 +172,11 @@ def check(item: dict, quote: str, *, text: str | None = None,
     the harness ``quote`` plugin reads the stored ``full_text`` field -- pass
     ``text`` (and its ``source_id``) instead: the source Field then names
     exactly the stored evidence, so the provenance audit can match it.
+
+    ``quoted`` is the quotation's own provenance Field -- the user's words,
+    or ``model``-origin when the model supplied the quote. It defaults to a
+    user field for direct callers (scripts, tests); the harness path always
+    resolves it honestly.
 
     Returns {"verdict", "pinpoint", "excerpt", "match": [start, end] within
     the excerpt, "url", "finding"}. ValueError explains why no check ran.
@@ -190,7 +195,7 @@ def check(item: dict, quote: str, *, text: str | None = None,
         source_id = source_id or url or f"a2aj:{citation}"
     located = locate(text, quote)
     source = Field(text, "database", source_id=source_id or f"a2aj:{citation}")
-    quoted = Field(quote, "user")
+    quoted = quoted or Field(quote, "user")
     if located.verdict == "not_found":
         finding = Finding("contradicted", "The quotation does not appear in the unofficial full text.",
                           "complete", Derivation((quoted, source), RULE_ID, ("quote", "source")))

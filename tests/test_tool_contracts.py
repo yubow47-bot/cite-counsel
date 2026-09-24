@@ -82,6 +82,13 @@ def test_all_unsupported_fields_have_stable_named_paths():
     ]
 
 
+def test_model_origin_is_valid_but_never_grounded():
+    """A model-supplied value is an honest confession, not evidence: valid to
+    build on, always unverified."""
+    proof = Derivation((Field("guess", "model"),), "cite:v1", ("court",))
+    assert [(i.path, i.reason) for i in grounding_issues(proof)] == [(("court",), "unverified_model")]
+
+
 @pytest.mark.parametrize("origin", ["verified", "Database", "", None, 1])
 def test_unknown_origins_rejected(origin):
     with pytest.raises(ValueError):

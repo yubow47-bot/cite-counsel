@@ -1,8 +1,10 @@
 """Check a quotation against the judgment behind a stored case record.
 
-The quotation must come from the user's own words. The location (and its
+The quotation is whoever supplied it -- the user's own words when they gave
+one, otherwise the model's, stamped honestly. The location (and its
 paragraph number) is read from the database's full text, so the pinpoint
-artifact stays database-grounded even though the quotation is the user's.
+artifact stays database-grounded either way; only the quotation leaf's
+origin differs.
 """
 
 from __future__ import annotations
@@ -18,7 +20,8 @@ VERDICT_ZH = {"exact": "逐字一致", "case_differs": "词句一致但大小写
 class CheckParams(BaseModel):
     ref: str = PField(min_length=4, max_length=20, description="The case record to check against, e.g. rec_2")
     quote: UserText = PField(min_length=12, max_length=2000,
-                             description="The quotation, copied word for word from the user's messages")
+                             description="The quotation, copied word for word from the user's messages "
+                                         "when they gave one")
 
 
 def check(ctx, p: CheckParams) -> Result:
@@ -30,7 +33,8 @@ def check(ctx, p: CheckParams) -> Result:
     item = {"source_type": record.source_type, "base": None,
             "fields": {name: {"value": field.value, "origin": field.origin, "source_id": field.source_id}
                        for name, field in record.fields.items()}}
-    result = quote_check.check(item, p.quote, text=full.value, source_id=full.source_id)
+    result = quote_check.check(item, p.quote, quoted=ctx.provenance(p.quote)[0],
+                               text=full.value, source_id=full.source_id)
     finding_ref = ctx.save(result["finding"])
     pinpoint_ref = ""
     if result["pinpoint"]:
@@ -55,9 +59,10 @@ PLUGIN = Plugin(
     name="quote",
     title="引语核对",
     description="Check a quotation against the judgment's full text and find its paragraph number.",
-    instructions="The quotation must be the user's own words, copied exactly (word for word, punctuation "
-                 "included). The verdict and the pinpoint come from the database text, not from you. A "
-                 "not_found verdict means the words are not in the text -- say so plainly.",
+    instructions="Copy the quotation from the user's messages, word for word (punctuation included), when "
+                 "they gave one; a quotation you supply yourself is checked the same way but is recorded "
+                 "as model-supplied, not the user's. The verdict and the pinpoint come from the database "
+                 "text, not from you. A not_found verdict means the words are not in the text -- say so plainly.",
     tools=[Tool("check", "Check a quotation against a stored case's full text; locate its paragraph.",
                 CheckParams, check)],
     category="function",

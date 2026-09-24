@@ -37,8 +37,7 @@ def make_plugins():
     alpha = Plugin("alpha", "Alpha", "Echoes text.", tools=[Tool("echo", "Echo.", Echo, echo)],
                    actions={"bump": lambda ctx, payload: (ctx.state.__setitem__("count", ctx.state.get("count", 0) + 1)
                                                           or Result({"count": ctx.state["count"]}))},
-                   default_enabled=True, api=AlphaApi(),
-                   reply_guard=lambda text, ctx: "" if "1999" in text else text)
+                   default_enabled=True, api=AlphaApi())
     beta = Plugin("beta", "Beta", "Peeks at alpha.", tools=[Tool("peek", "Peek.", Echo, peek)],
                   requires=("alpha",), default_enabled=False,
                   settings=[Setting("mode", "Mode", "choice", ("", "fast"), "")])
@@ -82,8 +81,8 @@ def test_nothing_is_loaded_until_the_model_asks(monkeypatch, harness):
     plugin_tools = [t for t in script.calls[0]["tools"] if not t.startswith("record__")]
     assert plugin_tools == ["load_plugin"]                        # only the catalogue
     assert "alpha: Echoes text." in script.calls[0]["messages"][0]["content"]
-    assert "record__add_user_field" in script.calls[0]["tools"]    # harness-owned, always on
-    assert script.calls[1]["tools"] == ["alpha__echo", "record__add_user_field", "record__new"]
+    assert "record__add_field" in script.calls[0]["tools"]        # harness-owned, always on
+    assert script.calls[1]["tools"] == ["alpha__echo", "record__add_field", "record__new"]
     assert [b["type"] for b in blocks] == ["activity", "echo", "text"] and blocks[1]["plugin"] == "alpha"
     # The echo result was final: the model is told it is on screen, but keeps
     # its tools -- the request may need a next step; here it just replies.
@@ -128,11 +127,15 @@ def test_invalid_arguments_go_back_to_the_model(monkeypatch, harness):
     assert reply["error"] == "invalid arguments"
 
 
-def test_reply_guard_of_a_loaded_plugin_vetoes_prose(monkeypatch, harness):
+def test_a_reply_with_unsourced_facts_is_shown_and_annotated(monkeypatch, harness):
+    """Nothing is hidden any more: the prose survives, and every unsourced
+    fact in it is reported as such right on the text block."""
     Script(monkeypatch, [call("load_plugin", name="alpha"), say("It was decided in 1999.")])
     session, _ = harness.sessions.start()
     blocks = harness.run_turn(session, "x")
-    assert [b["type"] for b in blocks] == ["notice"] and "1999" not in str(blocks)
+    assert [b["type"] for b in blocks] == ["text"]
+    assert "1999" in blocks[-1]["text"]                       # shown, not vetoed
+    assert any(f["fact"] == "1999" and f["verdict"] == "unsourced" for f in blocks[-1]["facts"])
 
 
 def test_repeated_failures_stop_early(monkeypatch, harness):
@@ -338,7 +341,7 @@ def test_function_plugin_cannot_mint_a_record(monkeypatch, harness):
     assert reply["error"] == "contract violation"
 
 
-def test_record_new_and_add_user_field_require_the_users_words(harness):
+def test_record_new_and_add_field_stamp_the_true_origin(harness):
     from core.tool_contracts import Record
 
     session, _ = harness.sessions.start()
@@ -348,25 +351,110 @@ def test_record_new_and_add_user_field_require_the_users_words(harness):
     ref = result.content["ref"]
     assert result.content["fields"] == {}
     ok = harness._run_builtin(session, add_field,
-                              {"ref": ref, "field": "neutral_citation", "text": "[1930] AC 124"},
-                              "record__add_user_field")[1]
+                              {"ref": ref, "field": "neutral_citation", "value": "[1930] AC 124"},
+                              "record__add_field")[1]
     assert ok.content["value"] == "[1930] AC 124"
-    bad = harness._run_builtin(session, add_field,
-                               {"ref": ref, "field": "court", "text": "Supreme Court of Canada"},
-                               "record__add_user_field")[1]
-    assert "error" in bad.content
+    assert ok.content["origin"] == "user"                     # the user wrote it
     # The user field forms a new version; the object stored under the
     # original ref is untouched (still blank) --
     assert session.records._objects[ref].fields == {}
     # -- but a caller that still cites that old ref reaches the latest
     # version instead of a dead end (a model citing a stale ref after the
-    # record moved on, or two add_user_field calls batched in one round).
-    record = session.records.get(ok.content["ref"], Record)
+    # record moved on, or two add_field calls batched in one round).
+    record = session.records.get(ref, Record)                 # the chain's latest version
     assert record.fields["neutral_citation"].origin == "user"
     assert session.records.get(ref, Record) is record
 
 
-def test_two_add_user_field_calls_batched_in_one_round_both_land(harness):
+def test_add_field_refuses_a_value_with_no_source(harness):
+    """A value that is neither a stored record's field nor the user's own
+    words is refused, not written as an honestly-labelled invention."""
+    from core.tool_contracts import Field, Record
+
+    session, _ = harness.sessions.start()
+    session.messages.append({"role": "user", "content": "Edwards v Canada AG 1929，是判例，Privy Council，[1930] AC 124"})
+    add_field, new_record = harness_core.BUILTIN_TOOLS
+    ref = harness._run_builtin(session, new_record, {"record_type": "jurisprudence"}, "record__new")[1].content["ref"]
+    ok = harness._run_builtin(session, add_field,
+                              {"ref": ref, "field": "neutral_citation", "value": "[1930] AC 124"},
+                              "record__add_field")[1]
+    assert ok.content["origin"] == "user"                     # the user's own words still pass
+    refused = harness._run_builtin(session, add_field,
+                                   {"ref": ref, "field": "court", "value": "Supreme Court of Canada"},
+                                   "record__add_field")[1]
+    assert "error" in refused.content and "找不到来源" in refused.content["error"]
+    assert "rec_N" in refused.content["error"]                # the model is told what to do instead
+    record = session.records.get(ref, Record)
+    assert "court" not in record.fields                       # nothing was written
+    # A value copied from a stored record still passes, with its origin.
+    session.records.put(Record("jurisprudence", {"court": Field("Supreme Court of Canada", "database",
+                                                                source_id="a2aj:c1")}, "a2aj", "c1"))
+    copied = harness._run_builtin(session, add_field,
+                                  {"ref": ref, "field": "court", "value": "Supreme Court of Canada"},
+                                  "record__add_field")[1]
+    assert copied.content["origin"] == "database" and copied.content["from_ref"] == "rec_3"
+
+
+def test_record_new_wants_a_web_search_first_when_web_is_enabled(tmp_path):
+    """Giving up on the databases is only allowed after the web was tried."""
+    from harness.plugin import discover
+
+    h = Harness(discover(), model="m", config_path=tmp_path / "h.json")
+    h.set_enabled("web", True)
+    session, _ = h.sessions.start()
+    new_record = harness_core.BUILTIN_TOOLS[1]
+    refused = h._run_builtin(session, new_record, {"record_type": "jurisprudence"}, "record__new")[1]
+    assert "web__search" in refused.content["error"]
+    assert session.records.all() == []                        # nothing was created
+    # One real search attempt -- even one that finds nothing -- opens the gate.
+    session.web_search_used = True
+    result = h._run_builtin(session, new_record, {"record_type": "jurisprudence"}, "record__new")[1]
+    assert result.content["ref"] == "rec_1"
+
+
+def test_a_field_copied_from_a_stored_record_keeps_its_database_origin(tmp_path):
+    """The bill-on-the-card scenario: the value is already on screen in a
+    stored record; the model copies it into a new record and the copy keeps
+    the database origin -- nothing is lost, and nothing is faked."""
+    from core.tool_contracts import Field, Record
+    from harness.plugin import discover
+
+    h = Harness(discover(), model="m", config_path=tmp_path / "h.json")
+    session, _ = h.sessions.start()
+    add_field, new_record = harness_core.BUILTIN_TOOLS
+    blank = h._run_builtin(session, new_record, {"record_type": "jurisprudence"}, "record__new")[1].content["ref"]
+    session.records.put(Record("jurisprudence", {
+        "style_of_cause": Field("R v Gladue", "database", source_id="a2aj:c1"),
+        "neutral_citation": Field("[1999] 1 SCR 688", "database", source_id="a2aj:c1"),
+    }, "a2aj", "c1"))
+    for field, value in (("style_of_cause", "R v Gladue"), ("neutral_citation", "[1999] 1 SCR 688")):
+        result = h._run_builtin(session, add_field,
+                                {"ref": blank, "field": field, "value": value},
+                                "record__add_field")[1]
+        assert result.content["origin"] == "database" and result.content["from_ref"] == "rec_2"
+    # And the assembled record cites as verified -- every field traces.
+    from plugins import mcgill
+    merged_ref = result.content["ref"]                        # the latest version's ref
+    citation = mcgill.cite(h.context(session, "mcgill"), mcgill.CiteParams(ref=merged_ref))
+    assert citation.content["verified"] is True
+
+
+def test_a_model_value_is_never_evidence_for_the_next_copy(harness):
+    """At the store level a model-origin value stays model however many
+    times it is stored -- a copy of a copy cannot launder itself into a
+    source. (record__add_field now refuses such values outright; this guard
+    keeps the resolver honest for anything that still stores one.)"""
+    from core.tool_contracts import Field, Record
+
+    session, _ = harness.sessions.start()
+    for _ in range(2):
+        session.records.put(Record("jurisprudence", {"court": Field("The Court of Fairy Tales", "model")},
+                                   "user", "blank"))
+        field, ref = session.records.resolve("The Court of Fairy Tales")
+        assert field.origin == "model" and ref == ""           # never promoted to a source
+
+
+def test_two_add_field_calls_batched_in_one_round_both_land(harness):
     """A model that issues both field-writing calls before either result
     comes back can only pass the SAME starting ref to both -- the harness
     still merges them, because the second call resolves that stale ref to
@@ -381,17 +469,18 @@ def test_two_add_user_field_calls_batched_in_one_round_both_land(harness):
                                      "record__new")[1].content["ref"]
 
     first = harness._run_builtin(session, add_field,
-                                 {"ref": blank_ref, "field": "style_of_cause", "text": "Zzyx v Qwerty"},
-                                 "record__add_user_field")[1]
+                                 {"ref": blank_ref, "field": "style_of_cause", "value": "Zzyx v Qwerty"},
+                                 "record__add_field")[1]
     # Issued against the SAME blank_ref as `first` -- as a model would when
     # both calls are queued in one assistant turn, before either result exists.
     second = harness._run_builtin(session, add_field,
-                                  {"ref": blank_ref, "field": "neutral_citation", "text": "2099 FAKE 999"},
-                                  "record__add_user_field")[1]
+                                  {"ref": blank_ref, "field": "neutral_citation", "value": "2099 FAKE 999"},
+                                  "record__add_field")[1]
 
     merged = session.records.get(second.content["ref"], Record)
     assert merged.fields["style_of_cause"].value == "Zzyx v Qwerty"
     assert merged.fields["neutral_citation"].value == "2099 FAKE 999"
+    assert merged.fields["style_of_cause"].origin == "user" and merged.fields["neutral_citation"].origin == "user"
     # The stale starting ref both calls were given now reaches the merged
     # version -- the second call's forwarding overtakes the first's.
     assert session.records.get(blank_ref, Record) is merged
@@ -410,25 +499,45 @@ def test_new_plugins_get_their_default_after_settings_were_saved(tmp_path):
 # ── Harness-level grounding (§5.4) and input hints (§5.2) ────────────
 
 
-def test_harness_hides_only_the_paragraph_with_the_unsourced_fact(harness):
-    Script(monkeypatch := None, []) if False else None
+def test_reply_facts_carry_their_source_and_stay_visible(harness):
+    """Annotation, not hiding: the prose survives untouched; a fact that
+    traces to the session carries its source, a fact that traces nowhere is
+    reported as unsourced."""
     session, _ = harness.sessions.start()
     session.messages.append({"role": "user", "content": "R v Gladue 1999"})
     session.messages.append({"role": "tool", "tool_call_id": "c1",
                              "content": '{"citation": "[1999] 1 SCR 688"}'})
     text = ("找到了 [1999] 1 SCR 688，请看卡片。\n"
             "另外它在 2002 SCC 10 里也被讨论过。")
-    kept = harness._check_reply(session, text)
-    assert "[1999] 1 SCR 688" in kept          # grounded: the tool result has it
-    assert "2002 SCC 10" not in kept           # ungrounded paragraph hidden
-    assert "请看卡片" in kept                   # clean paragraph survives
+    facts = harness._annotate_reply(session, text)
+    sourced = {f["fact"]: f for f in facts if f["verdict"] == "sourced"}
+    unsourced = {f["fact"] for f in facts if f["verdict"] == "unsourced"}
+    assert "[1999] 1 SCR 688" in sourced                       # grounded: the tool result has it
+    assert "2002 SCC 10" in unsourced
+    assert "请看卡片" in text and "2002 SCC 10" in text          # nothing was removed
 
 
-def test_check_applies_even_when_no_plugin_was_loaded(harness):
+def test_a_fact_from_a_stored_record_links_to_it(harness):
+    from core.tool_contracts import Field, Record
+
+    session, _ = harness.sessions.start()
+    session.records.put(Record("jurisprudence", {"pinpoint": Field("at para 12", "database",
+                                                                  source_id="a2aj:c1")}, "a2aj", "c1"))
+    facts = harness._annotate_reply(session, "判决在 at para 12 讲了这一点，又在 at para 12 重申。")
+    entry = next(f for f in facts if f["fact"] == "para 12")
+    assert entry["verdict"] == "sourced" and entry["kind"] == "record"
+    assert entry["ref"] == "rec_1" and entry["field"] == "pinpoint"
+    assert entry["origin"] == "database" and entry["source_id"] == "a2aj:c1"
+    assert entry["excerpt"] == "at para 12"
+    assert len(entry["spans"]) == 2                            # both occurrences
+
+
+def test_an_unsourced_fact_is_annotated_without_a_source(harness):
     session, _ = harness.sessions.start()
     session.messages.append({"role": "user", "content": "你好"})
-    assert harness._check_reply(session, "It was decided in 1999.") == ""
-    assert harness._check_reply(session, "没有可以查的插件。") != ""
+    facts = harness._annotate_reply(session, "It was decided in 1999.")
+    assert facts and all(f["verdict"] == "unsourced" and f["ref"] is None for f in facts)
+    assert harness._annotate_reply(session, "没有可以查的插件。") == []
 
 
 def test_plugin_fact_patterns_apply_without_loading(harness):
@@ -438,7 +547,8 @@ def test_plugin_fact_patterns_apply_without_loading(harness):
     h.plugins["alpha"].fact_patterns = (r"Bill\s+C-\d+",)  # enabled, not loaded
     session, _ = h.sessions.start()
     session.messages.append({"role": "user", "content": "查一下那个议案"})
-    assert h._check_reply(session, "查到 Bill C-22。") == ""
+    facts = h._annotate_reply(session, "查到 Bill C-22。")
+    assert facts and facts[0]["verdict"] == "unsourced" and facts[0]["fact"] == "Bill C-22"
 
 
 def test_input_hints_flag_fixed_format_inputs():

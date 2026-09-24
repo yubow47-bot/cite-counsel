@@ -46,6 +46,7 @@ class Session:
     state: dict[str, dict] = field(default_factory=dict)  # plugin name -> its state
     attachments: dict[str, dict] = field(default_factory=dict)
     records: Store = field(default_factory=Store)         # numbered evidence objects
+    web_search_used: bool = False                         # web__search has actually run this session
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def user_texts(self) -> list[str]:
@@ -110,6 +111,7 @@ class SessionStore:
                 "messages": session.messages,
                 "loaded": session.loaded,
                 "state": session.state,
+                "web_search_used": session.web_search_used,
                 "attachments": [{"id": aid, "name": att["name"], "file": Path(att["path"]).name}
                                 for aid, att in session.attachments.items()],
                 "records": [{"ref": ref, "data": encode(obj), "meta": meta or None}
@@ -143,6 +145,7 @@ class SessionStore:
         session.messages = list(payload.get("messages") or [])
         session.loaded = list(payload.get("loaded") or [])
         session.state = dict(payload.get("state") or {})
+        session.web_search_used = bool(payload.get("web_search_used"))
         attachments_dir = self.store_dir / session_id / "attachments"
         for att in payload.get("attachments") or []:
             path = attachments_dir / str(att.get("file") or "")
@@ -250,6 +253,33 @@ class Context:
             if at >= 0:
                 return flat[at:at + len(probe)]
         return ""
+
+    def provenance(self, value: str) -> tuple[Field, str]:
+        """The honest origin of a value the model or the user supplied: the
+        stored record it was copied from (with that record's ref), or the
+        user's own words.
+
+        Anything else is refused. A value the model typed from its own memory
+        used to be written into the record as an honestly-labelled ``model``
+        field -- which still put invented text on the record and let it reach
+        the user inside a citation card. The model must copy a real source
+        (a record on screen, including one from a web search or page read) or
+        ask the user; it may no longer write what nobody in this session said.
+
+        Raises ValueError with model-facing guidance when neither source
+        holds the value.
+        """
+        from core.tool_contracts import Field
+        field, ref = self.records.resolve(value)
+        if field.origin != "model":
+            return field, ref
+        said = self.user_said(value)
+        if said:
+            return Field(said, "user"), ""
+        raise ValueError(
+            "这个值在当前会话里找不到来源（既不在已有记录里，也不是用户说的话）。"
+            "如果你已经用网络搜索或网页读取找到了它，把那条记录的编号（rec_N）作为来源复制过来；"
+            "如果没有，请向用户确认这个值，不要自己填。")
 
     def attachment(self, attachment_id: str) -> dict | None:
         found = self.session.attachments.get(attachment_id)

@@ -11,15 +11,17 @@
     for (const r of block.results || []) {
       const row = el('div', 'web-row');
       if (/^https?:\/\//.test(r.url)) row.append(link(r.url, r.title || r.url));
-      row.append(el('small', '', r.url), el('p', '', r.snippet || ''));
+      row.append(el('small', '', r.url + (r.date ? ` · ${r.date}` : '')), el('p', '', r.snippet || ''));
       card.append(row);
     }
+    if (block.note) card.append(el('p', 'note', block.note));
     return card;
   });
   H.registerBlock('web', 'web_page', block => {
     const row = el('div', 'activity');
     row.append('已读取网页：');
     if (/^https?:\/\//.test(block.url)) row.append(link(block.url, block.title || block.url));
+    if (block.date) row.append(` · ${block.date}`);
     return row;
   });
 })();

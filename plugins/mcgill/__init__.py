@@ -4,15 +4,18 @@ The tool takes record numbers only. The citation text is rendered by
 ``core/mcgill_format`` (the rule file is the single source of templates);
 every field used becomes a named leaf of the artifact's derivation, so
 "verified" is computed from the derivation chain -- all-database leaves
-are verified, any user-supplied field (a pinpoint the user typed, a place
-of publication they added) makes it honest about being unverified.
+are verified, and any user-supplied or model-supplied field (a pinpoint
+the model typed, a place of publication copied from somewhere else) makes
+it honest about being unverified. The model may also write a citation
+itself from a record's fields; the reply check then annotates each fact
+with the record it came from.
 """
 
 from __future__ import annotations
 
 from pydantic import BaseModel, Field as PField
 
-from core.tool_contracts import Artifact, Derivation, Field, is_grounded
+from core.tool_contracts import Artifact, Derivation, is_grounded
 from harness.plugin import Plugin, Result, Tool, UserText
 
 RENDER_RULE = "cite.render.v1"
@@ -40,14 +43,17 @@ def cite(ctx, p: CiteParams) -> Result:
         artifact = ctx.records.get(p.pinpoint_from)
         if not isinstance(artifact, Artifact) or artifact.kind != "pinpoint":
             raise ValueError("pinpoint_from must be a pinpoint artifact from the quote plugin (art_N).")
-        values["pinpoint"] = artifact.content
+        values["pinpoint"] = mcgill_format.mcgill_clean("pinpoint", artifact.content)
         derivation_inputs.append(artifact.derivation)
         derivation_names.append("pinpoint")
     elif p.pinpoint:
-        # The harness verified this against the user's messages and substituted
-        # the exact slice; the provenance audit accepts precisely this value.
-        values["pinpoint"] = p.pinpoint
-        derivation_inputs.append(Field(p.pinpoint, "user"))
+        # The value passes through as typed; its provenance is stamped
+        # honestly. The user's words keep the citation honest about where
+        # the pinpoint came from; a model-typed one is marked model-supplied
+        # and the citation reports unverified -- shown, not refused.
+        field, _ = ctx.provenance(p.pinpoint)
+        values["pinpoint"] = mcgill_format.mcgill_clean("pinpoint", field.value)
+        derivation_inputs.append(field)
         derivation_names.append("pinpoint")
     content = mcgill_format.render_fields(record.source_type, values)
     artifact = Artifact("citation_text", content,
@@ -80,10 +86,11 @@ def missing(ctx, p: MissingParams) -> Result:
     missing_fields = mcgill_format.missing_required(record.source_type, values)
     if gap:
         return Result({"ref": p.ref, "missing": gap,
-                       "note": "ask the user for these; write them with record__add_user_field"},
+                       "note": "write the values you have with record__add_field -- copy from a record on "
+                              "screen or ask the user; a copied database value keeps the record verified"},
                       [{"type": "card", "title": "还缺的字段",
-                        "rows": [["记录", p.ref], ["缺少", gap], ["补充方式", "请用户直接在输入框里写出来"]],
-                        "note": "补充后的字段标记为你本人的补充，含它的引文不会标记为已核验。"}])
+                        "rows": [["记录", p.ref], ["缺少", gap], ["补充方式", "从已有记录复制，或请用户直接在输入框里写"]],
+                        "note": "字段来源照实记录；含非数据库字段的引文不会标记为已核验。"}])
     return Result({"ref": p.ref, "missing": [], "note": "the record has every required field; cite it"},
                   [{"type": "card", "title": "字段齐备", "rows": [["编号", p.ref]],
                     "note": "必需字段齐全，可以直接生成引文。"}])
@@ -93,9 +100,12 @@ PLUGIN = Plugin(
     name="mcgill",
     title="引文格式（McGill 第 10 版）",
     description="Render a stored record into a McGill citation; verified is computed from the derivation chain.",
-    instructions="Citations take record numbers (rec_N), never retyped fields. When fields are missing, ask the "
-                 "user and write them with record__add_user_field -- the citation then reports unverified, which "
-                 "is correct. Never write a citation in prose; show the card.",
+    instructions="Citations take record numbers (rec_N), never retyped fields. Rendering with cite is "
+                 "preferred: it is deterministic, stamps verified from the derivation, and the artifact "
+                 "can join a bibliography. You may also write a citation yourself from a record's fields, "
+                 "following the McGill rules -- say which record it came from. When fields are missing, "
+                 "write the values you have with record__add_field (copied from a record on screen, or "
+                 "the user's words); the citation then reports unverified, which is correct.",
     tools=[Tool("cite", "Render a McGill citation from a stored record.", CiteParams, cite),
            Tool("missing", "List the fields a record still needs before it can be cited.", MissingParams, missing)],
     category="function",

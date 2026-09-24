@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parent.parent
 ENV_PATH = ROOT / ".env"
 _ENV_LOCK = threading.Lock()
-_SECRET_NAMES = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY")
+_SECRET_NAMES = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "EXA_API_KEY")
 
 
 def _load_api_keys_from_env_file() -> None:

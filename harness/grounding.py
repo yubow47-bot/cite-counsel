@@ -1,16 +1,17 @@
-"""Harness-level reply check: no fact without a source in this session (§5.4).
+"""Harness-level reply check: every fact carries its source (§5.4).
 
 Every paragraph of the model's prose -- whether or not any plugin was loaded
 or called this turn -- is scanned for fact-shaped strings. A shape is
 declared by the installed plugins (``fact_patterns``: citations, bill
 numbers, DOIs, paragraph pins, years); the harness adds a few generic ones.
-A fact that cannot be found in the session's ground (the user's own words
-plus every tool result shown this session) hides the whole paragraph that
-carries it, and the user is told so.
+Each fact is matched against the session's evidence: stored record fields
+first (so a fact links to the record it came from), then tool results, then
+the user's own words. A match carries its source; a miss is reported as
+unsourced. Nothing is hidden -- the prose the user reads is the prose the
+model wrote. The model may be wrong in public, but it can no longer be wrong
+invisibly, which is what paragraph-hiding used to allow.
 
-"Grounded" here means traceable, not correct. Plugins may also keep their
-own stricter ``reply_guard`` on top; the harness check runs for every
-enabled plugin's patterns regardless of load state.
+"Grounded" here means traceable, not correct.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import re
 
 logger = logging.getLogger(__name__)
 
-MESSAGE_LIMIT = 4000  # a runaway guard, not a style rule: paragraphs are checked one by one
+SCAN_LIMIT = 20000  # a runaway guard, not a style rule
 
 # Generic shapes every session checks, whatever plugins say.
 _GENERIC_SHAPES = (
@@ -44,37 +45,58 @@ def fact_shapes(plugin) -> tuple[re.Pattern, ...]:
     return tuple(shapes)
 
 
-def unsupported_facts(message: str, grounded: str, shapes=()) -> list[str]:
-    """Fact-shaped strings in *message* that do not already appear in *grounded*."""
-    haystack = re.sub(r"\s+", " ", grounded).casefold()
-    found = []
-    for shape in (*_GENERIC_SHAPES, *shapes):
-        for match in shape.finditer(message):
-            token = re.sub(r"\s+", " ", match.group(0)).casefold()
-            if token not in haystack:
-                found.append(match.group(0))
-    return found
+def _norm(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip().casefold()
 
 
-def grounded_text(text: str, grounded: str, shapes=()) -> str:
-    """The prose with every paragraph carrying an unsourced fact removed.
+def _excerpt(text: str, at: int, length: int, pad: int = 60) -> str:
+    """The match with a little context, clipped on whitespace where possible."""
+    lo = max(0, at - pad)
+    hi = min(len(text), at + length + pad)
+    while 0 < lo < at and not text[lo - 1].isspace():
+        lo += 1
+    while at + length < hi < len(text) and not text[hi].isspace():
+        hi -= 1
+    return ("…" if lo > 0 else "") + text[lo:hi].strip() + ("…" if hi < len(text) else "")
 
-    A paragraph is a non-empty line or sentence run; hiding is per paragraph
-    so one bad sentence does not silence an otherwise clean reply.
+
+def annotate_facts(text: str, index: list[dict], shapes=()) -> list[dict]:
+    """Per-fact provenance for the model's prose, in text order.
+
+    ``index`` entries: ``{"kind": "record"|"tool"|"user", "text": str}`` and,
+    for records, ``{"ref", "field", "origin", "source_id"}``. A fact found in
+    a record carries ``ref``/``field``/``origin``/``source_id`` and an
+    excerpt; one found in a tool result or the user's words carries only the
+    excerpt; one found nowhere is ``unsourced``. Nothing is removed from the
+    text -- the annotation describes it, the user judges it. Spans are
+    offsets into the scanned text (the first SCAN_LIMIT characters).
     """
-    if not isinstance(text, str):
-        return ""
-    text = re.sub(r"[ \t]+", " ", text).strip()
-    if not text or len(text) > MESSAGE_LIMIT:
-        return ""
-    kept = []
-    for paragraph in re.split(r"\n+|(?<=[。！？.!?])\s+", text):
-        paragraph = paragraph.strip()
-        if not paragraph:
-            continue
-        leaked = unsupported_facts(paragraph, grounded, shapes)
-        if leaked:
-            logger.warning("Dropped a paragraph carrying ungrounded facts: %s", leaked)
-        else:
-            kept.append(paragraph)
-    return " ".join(kept)
+    if not isinstance(text, str) or not text.strip():
+        return []
+    text = text[:SCAN_LIMIT]
+    sources = [(source, _norm(source.get("text") or "")) for source in index]
+    annotations: dict[str, dict] = {}
+    order: list[str] = []
+    for shape in (*_GENERIC_SHAPES, *shapes):
+        for match in shape.finditer(text):
+            fact = match.group(0)
+            key = _norm(fact)
+            if key in annotations:
+                annotations[key]["spans"].append([match.start(), match.end()])
+                continue
+            entry = {"fact": fact, "verdict": "unsourced", "spans": [[match.start(), match.end()]],
+                     "kind": None, "ref": None, "field": None, "origin": None,
+                     "source_id": None, "excerpt": None}
+            for source, haystack in sources:
+                at = haystack.find(key)
+                if at < 0:
+                    continue
+                entry.update(verdict="sourced", kind=source["kind"],
+                             excerpt=_excerpt(haystack, at, len(key)))
+                if source["kind"] == "record":
+                    entry.update(ref=source.get("ref"), field=source.get("field"),
+                                 origin=source.get("origin"), source_id=source.get("source_id"))
+                break
+            annotations[key] = entry
+            order.append(key)
+    return [annotations[key] for key in order]
