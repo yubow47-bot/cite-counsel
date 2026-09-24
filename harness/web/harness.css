@@ -49,6 +49,16 @@ body.has-panels .shell { grid-template-columns: 290px minmax(0, 1fr) 320px; }
 .card .rows { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; font-size: 14px; }
 .card dt { color: var(--muted); } .card dd { margin: 0; }
 .card .note, .note { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+.record-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 13px; }
+.record-head .record-type { font-weight: 600; }
+.record-head .record-ref { color: var(--muted); font-size: 12px; }
+.badge { padding: 1px 8px; border-radius: 10px; font-size: 11px; }
+.badge.ok { background: var(--okbg); color: var(--ok); }
+.badge.warn { background: var(--warnbg); color: var(--warn); }
+mark.unsourced { background: #f9e3e0; color: inherit; border-bottom: 2px solid var(--red); padding: 0 1px; }
+.fact-sources { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; font-size: 11px; color: var(--muted); }
+.fact-sources .label { letter-spacing: .06em; text-transform: uppercase; }
+.fact-source { padding: 1px 7px; border-radius: 9px; background: white; border: 1px solid var(--line); }
 .typing { color: var(--muted); font-size: 13px; }
 .composer-wrap { position: sticky; bottom: 0; width: min(820px, 100%); margin: 0 auto; padding: 10px 0 18px; background: linear-gradient(transparent, var(--paper) 30%); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
