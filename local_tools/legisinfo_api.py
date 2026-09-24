@@ -177,7 +177,7 @@ def _normalize_bill_number(raw: str) -> str:
     return s
 
 
-def _ordinal(n: int) -> str:
+def ordinal_suffix(n: int) -> str:
     """Return ordinal string: 1 → 1st, 2 → 2nd, 3 → 3rd, 21 → 21st, etc."""
     suffix = "th" if 11 <= (n % 100) <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
     return f"{n}{suffix}"
@@ -307,7 +307,7 @@ def build_bill_citation(record: dict, pinpoint: str | None = None) -> str:
         elif ps_code:
             year = str(datetime.now().year)
 
-    citation = f"Bill {number}, {title}, {_ordinal(sess)} Sess, {_ordinal(parl)} Parl"
+    citation = f"Bill {number}, {title}, {ordinal_suffix(sess)} Sess, {ordinal_suffix(parl)} Parl"
     if year:
         citation += f", {year}"
     if pinpoint:

@@ -32,9 +32,9 @@ from pydantic import ValidationError
 from core import mcgill_format
 from harness import grounding, llm
 from harness.plugin import Plugin, Result, UserText, discover
-from harness.records import ContractError
+from harness.records import ContractError, _probe
 from harness.session import HISTORY_LIMIT, Context, Session, SessionStore
-from core.tool_contracts import Artifact, Finding, Record
+from core.tool_contracts import Artifact, Field as EvidenceField, Finding, Record
 from pydantic import BaseModel, Field
 from typing import Literal
 
@@ -51,6 +51,92 @@ FOLLOW_UP = (
     "meant, and that they can pick it). You may mention facts that appear in the tool results; do not "
     "add any that do not. Render a citation with the cite tool when you can; you may also write one "
     "yourself from a record's fields, following the McGill rules -- say which record it came from.")
+
+
+# Some models write their chain of thought as <think> tags inside ``content``
+# instead of the structured ``reasoning`` field. Either way it becomes a
+# collapsible thinking block and stays out of the reply text.
+_THINK_PAIR = re.compile(r"<think>(.*?)</think>", re.S)
+_THINK_OPEN = re.compile(r"<think>(.*)\Z", re.S)
+
+
+def _split_thinking(content: str) -> tuple[str, str]:
+    """(reply, thinking): every <think> section moves out of the content. An
+    unclosed <think> (a turn cut off mid-thought) counts as thinking to the
+    end of the text; sections join with blank lines."""
+    if '<think>' not in content and '</think>' not in content:
+        return content, ""
+    without_pairs = _THINK_PAIR.sub("", content)
+    parts = _THINK_PAIR.findall(content)
+    if '</think>' in without_pairs and '<think>' not in content:
+        # A stray closer with no opener: drop it, nothing is thinking.
+        return without_pairs.replace('</think>', "").strip(), ""
+    open_without_pair = _THINK_OPEN.search(without_pairs)
+    if open_without_pair:
+        parts.append(open_without_pair.group(1))
+        without_pairs = without_pairs[:open_without_pair.start()]
+    reply = without_pairs.replace('</think>', "").strip()
+    return reply, "\n\n".join(part.strip() for part in parts if part.strip())
+
+
+class _ThinkSniffer:
+    """The streaming counterpart to ``_split_thinking``: watches content
+    deltas as they arrive for a leading ``<think>...</think>`` block (a model
+    that has no structured ``reasoning`` field puts its whole chain of
+    thought there instead) and peels reasoning text off it live, chunk by
+    chunk, instead of only once the full reply is in. Content that is never
+    a think tag is recognised within the first few characters and passed
+    straight through after that -- no per-delta overhead once resolved."""
+
+    _OPEN, _CLOSE = "<think>", "</think>"
+
+    def __init__(self):
+        self._buffer = ""
+        self._mode = "sniff"   # "sniff" -> "think" -> "content"
+        self.plain: list[str] = []
+
+    def feed(self, chunk: str) -> list[str]:
+        """Reasoning text pulled out of this chunk, if any, to show live."""
+        if self._mode == "content":
+            self.plain.append(chunk)
+            return []
+        self._buffer += chunk
+        if self._mode == "sniff":
+            if self._buffer.startswith(self._OPEN):
+                self._buffer = self._buffer[len(self._OPEN):]
+                self._mode = "think"
+            elif len(self._buffer) < len(self._OPEN) and self._OPEN.startswith(self._buffer):
+                return []          # still ambiguous -- wait for more
+            else:
+                self._mode = "content"
+                self.plain.append(self._buffer)
+                self._buffer = ""
+                return []
+        if self._mode == "think":
+            idx = self._buffer.find(self._CLOSE)
+            if idx == -1:
+                safe = len(self._buffer) - (len(self._CLOSE) - 1)
+                if safe <= 0:
+                    return []
+                out, self._buffer = self._buffer[:safe], self._buffer[safe:]
+                return [out]
+            out, rest = self._buffer[:idx], self._buffer[idx + len(self._CLOSE):]
+            self._buffer, self._mode = "", "content"
+            if rest:
+                self.plain.append(rest)
+            return [out] if out else []
+        return []
+
+    def flush(self) -> list[str]:
+        """An unclosed ``<think>`` at the end of the stream counts as
+        reasoning to the end, matching ``_split_thinking``."""
+        if self._mode == "think" and self._buffer:
+            text, self._buffer = self._buffer, ""
+            return [text]
+        if self._buffer:
+            self.plain.append(self._buffer)
+            self._buffer = ""
+        return []
 
 
 def _call_name(call: dict) -> str:
@@ -92,11 +178,24 @@ class _Builtin:
 
 
 class AddField(BaseModel):
+    """Write one field, saying where it came from when you know.
+
+    ``value`` is what to write; ``from_ref`` / ``from_field`` point at the
+    record it was read from. The source is a label, never a gate: the harness
+    looks for the value in the named record, then in every stored record,
+    then in the user's words, and whatever it finds becomes the field's
+    origin. A value found nowhere is still written, marked ``model`` --
+    shown as unverified, never refused.
+    """
+
     ref: str = Field(description="The record to extend, e.g. rec_3")
     field: str = Field(min_length=1, max_length=40, description="The field name, e.g. place or pinpoint")
-    value: str = Field(min_length=1, max_length=500,
-                       description="The value, copied faithfully from where it comes from: another "
-                                   "record's fields on screen (best), or the user's own words")
+    value: str | None = Field(default=None, min_length=1, max_length=500,
+                              description="The value to write. Leave it out to copy from_field whole.")
+    from_ref: str | None = Field(default=None, max_length=20,
+                                 description="Where the value came from, e.g. rec_2 (a database, web or file record)")
+    from_field: str | None = Field(default=None, max_length=40,
+                                   description="The field on from_ref holding the value, e.g. date or text")
 
 
 _RECORD_TYPES = tuple(sorted(mcgill_format.schemas().keys()))
@@ -116,21 +215,53 @@ _FIELD_STATUS = {
 }
 
 
+def _from_named(ctx, p: AddField) -> tuple[EvidenceField, str] | None:
+    """The value as found in the record the model named: the whole field when
+    no value is given, or the value read out of that record's text."""
+    if not p.from_ref:
+        return None
+    try:
+        source = ctx.records.get(p.from_ref, Record)
+    except Exception:
+        return None
+    fields = ([source.fields[p.from_field]] if p.from_field in source.fields
+              else list(source.fields.values()))
+    if p.value is None:
+        if p.from_field in source.fields:
+            return source.fields[p.from_field], p.from_ref
+        return None
+    probe = _probe(p.value)
+    for found in fields:
+        if found.origin != "model" and probe and probe in _probe(found.value):
+            return EvidenceField(p.value, found.origin, source_id=found.source_id), p.from_ref
+    return None
+
+
 def _add_field(ctx, p: AddField) -> Result:
     record = ctx.records.get(p.ref, Record)
-    field, from_ref = ctx.provenance(p.value)
+    named = _from_named(ctx, p)
+    if named:
+        field, from_ref = named
+    elif p.value is not None:
+        field, from_ref = ctx.provenance(p.value)
+    else:
+        raise ValueError(f"Nothing to write: pass value, or from_ref + from_field naming an existing field "
+                         f"({p.from_ref or '?'} has no field {p.from_field or '?'}).")
     updated = ctx.records.add_field(record, p.field, field)
     ref = ctx.save(updated, supersedes=p.ref)
-    source = {"database": "数据库字段", "extracted": "文件提取", "user": "你的原话"}.get(field.origin, "模型填写")
+    source = {"database": "数据库字段", "extracted": "网页/文件提取", "user": "你的原话"}.get(field.origin, "模型填写")
     origin_note = f"{from_ref}（{source}）" if from_ref and field.origin != "user" else source
+    note = ("the value is stored with its true origin; the citation is verified only while every field "
+            "traces to a database. To add another field, use this ref -- not the one you passed in.")
+    if field.origin == "model":
+        note += (" This value was not found in any stored record or the user's messages, so it is marked "
+                 "model-supplied (unverified). If you read it from a record, pass that record as from_ref.")
     return Result(
-        {"ref": ref, "field": p.field, "value": p.value, "origin": field.origin, "from_ref": from_ref,
-         "note": "the value is stored with its true origin; the citation is verified only while every "
-                "field traces to a database. To add another field, use this ref -- not the one you "
-                "passed in."},
+        {"ref": ref, "field": p.field, "value": field.value, "origin": field.origin, "from_ref": from_ref,
+         "note": note},
         [{"type": "card", "title": f"已写入 {p.field}",
-          "rows": [[p.field, p.value], ["来源", origin_note], ["核验状态", _FIELD_STATUS[field.origin]]],
-          "note": "字段来源照实记录：来自某条记录的会附上编号；模型自己填的会明确标出，引用不受影响，"
+          "rows": [[p.field, field.value], ["来源", origin_note], ["核验状态", _FIELD_STATUS[field.origin]]],
+          "note": "字段来源照实记录：来自某条记录的会附上编号；模型自己填的会明确标出，引用照常生成，"
                   "但含它的引文不会标记为已核验。"}])
 
 
@@ -161,13 +292,14 @@ def _new_record(ctx, p: NewRecord) -> Result:
 
 BUILTIN_TOOLS = (
     _Builtin("record__add_field",
-             "Write a value into a stored record. Copy it faithfully from where it comes from -- another "
-             "record's fields on screen (best: the copy keeps its database origin and the citation stays "
-             "verified), or the user's own words. The value is REFUSED when it is neither: the harness will "
-             "not record a value the model supplied from its own memory. Each call returns a NEW ref for "
-             "the updated record -- to add a second field, call this again with THAT ref, not the one you "
-             "started with. Do not call this twice in the same turn against the same record: the second "
-             "call would not see the first one's field.",
+             "Write a value into a stored record. Pass value, and when you read it from a record say which: "
+             "from_ref (e.g. rec_2) and from_field (e.g. text for a fact inside a fetched page, date for the "
+             "page's date). A value found in that record keeps its origin, so the citation can stay verified; "
+             "omit value to copy from_field whole. A value found nowhere is still written, marked "
+             "model-supplied and unverified -- prefer copying from a record or the user's words. Each call "
+             "returns a NEW ref for the updated record -- to add a second field, call this again with THAT "
+             "ref, not the one you started with. Do not call this twice in the same turn against the same "
+             "record: the second call would not see the first one's field.",
              AddField, _add_field),
     _Builtin("record__new",
              "Create an empty record for a source the databases do not have, for you and the user to fill in. "
@@ -316,9 +448,10 @@ class Harness:
             "Results the tools show the user are authoritative. Do not restate or alter their facts "
             "in your reply, and never invent facts, sources, citations, dates or numbers. If no "
             "plugin can do what is asked, say so plainly.",
-            "When you write a value into a record, copy it faithfully from its source -- a record on "
-            "screen or the user's own words. A value that is neither is refused: never fill a field "
-            "from your own memory.",
+            "When you write a value into a record, name where it came from -- a record on screen "
+            "(from_ref/from_field) or the user's own words. A value from neither is still written, but "
+            "it is marked model-supplied and the citation reports itself unverified -- prefer a real "
+            "source when one is on screen.",
             "When a lookup finds nothing, do not give up yet: search again in another form (the citation "
             "alone, the name alone), or load another plugin that could plausibly hold it. If the web plugin "
             "is enabled, you must call web__search at least once before record__new will open an empty "
@@ -326,10 +459,11 @@ class Harness:
             "screen, and ask the user for exactly the fields still missing.",
         ]
         latest = next((t for t in reversed(session.user_texts()) if t.strip()), "")
-        # A bare case name ("gladue") says nothing about the user's language; the
-        # interface is Chinese, so that is the default.
+        # Chinese characters in the latest message are the one clear signal;
+        # anything else replies in the language the user actually wrote in,
+        # including a short one like "hello" -- no default language is baked in.
         language = ("Reply in Simplified Chinese." if any("一" <= ch <= "鿿" for ch in latest)
-                    or len(latest.split()) < 6 else "Reply in the language of the user's latest message.")
+                    else "Reply in the language of the user's latest message.")
         if waiting:
             lines += ["", "Plugins you can load:"] + [f"- {p.name}: {p.description}" for p in waiting]
         disabled = [p for p in self.plugins.values() if p.name not in self.config["enabled"]]
@@ -528,6 +662,12 @@ class Harness:
             message = llm.chat(self.config["model"], [{"role": "system",
                                                        "content": self._system_prompt(session, follow_up)},
                                                       *self._history(session)], self._tool_specs(session))
+            reasoning = message.get("reasoning")
+            if not isinstance(reasoning, str) or not reasoning.strip():
+                reply, reasoning = _split_thinking(message.get("content") or "")
+                message = {**message, "content": reply}
+            if isinstance(reasoning, str) and reasoning.strip():
+                blocks.append({"type": "thinking", "text": reasoning.strip()})
             calls = [c for c in message.get("tool_calls") or [] if isinstance(c, dict) and c.get("id")]
             session.messages.append({"role": "assistant", "content": message.get("content") or "",
                                      **({"tool_calls": calls} if calls else {})})
@@ -563,6 +703,96 @@ class Harness:
             follow_up = all_final
         blocks.append({"type": "notice", "level": "warning", "text": "这一轮步骤太多，已停止。请换个说法再试。"})
         return blocks
+
+    def run_turn_stream(self, session: Session, text: str, attachments: list[str] = ()):
+        """Same as ``run_turn``, live: a generator of ``(kind, payload)``
+        pairs -- ``("thinking_delta", text)`` as the model's reasoning
+        streams in, then ``("block", block)`` for each block ``run_turn``
+        would have returned, in the same order. The reply text itself still
+        lands as one whole ``text`` block, same as before -- only the
+        thinking is meant to be watched as it happens."""
+        notes = [f"[附件 {aid}: {session.attachments[aid]['name']}]" for aid in attachments
+                 if aid in session.attachments]
+        hints = _input_hints(text)
+        session.messages.append({"role": "user", "content": "\n".join([text, *notes]).strip()
+                                 + (("\n\n" + hints) if hints else "")})
+        try:
+            yield from self._turn_events(session)
+        finally:
+            self.sessions.save(session)
+
+    def _turn_events(self, session: Session):
+        failures = 0
+        steps = 0
+        follow_up = False
+        # Loading is bounded by the plugin count, so free loads still end.
+        for _ in range(MAX_STEPS + len(self.plugins)):
+            if steps >= MAX_STEPS:
+                break
+            history = [{"role": "system", "content": self._system_prompt(session, follow_up)}, *self._history(session)]
+            tools = self._tool_specs(session)
+            sniffer = _ThinkSniffer()
+            reasoning_parts: list[str] = []
+            sniffed_parts: list[str] = []
+            message: dict = {}
+            for kind, payload in llm.chat_stream(self.config["model"], history, tools):
+                if kind == "reasoning" and payload:
+                    reasoning_parts.append(payload)
+                    yield "thinking_delta", payload
+                elif kind == "content" and payload:
+                    for text in sniffer.feed(payload):
+                        if text:
+                            sniffed_parts.append(text)
+                            yield "thinking_delta", text
+                elif kind == "done":
+                    message = payload
+            for text in sniffer.flush():
+                if text:
+                    sniffed_parts.append(text)
+                    yield "thinking_delta", text
+            # Unlike _turn, no consolidated "thinking" block follows: the
+            # thinking_delta events above already carried it, live -- adding
+            # it again here would just repeat what the page already showed.
+            # sniffer.plain has the <think> block peeled off, but not the leaked
+            # <tool_call> markup chat_stream already recovered -- strip that too.
+            plain = "".join(sniffer.plain)
+            if "<tool_call>" in plain:
+                plain = llm._LEAKED_CALL.sub("", plain).strip()
+            message = {**message, "content": plain}
+            calls = [c for c in message.get("tool_calls") or [] if isinstance(c, dict) and c.get("id")]
+            session.messages.append({"role": "assistant", "content": message.get("content") or "",
+                                     **({"tool_calls": calls} if calls else {})})
+            if not calls:
+                blocks: list[dict] = []
+                self._add_caption(session, message.get("content") or "", blocks)
+                for block in blocks:
+                    yield "block", block
+                return
+            if any(_call_name(c) != "load_plugin" for c in calls):
+                steps += 1
+            all_final, all_failed = True, True
+            for call in calls:
+                name, result = self._execute(session, call)
+                plugin_name = name.partition(SEP)[0]
+                if name != "load_plugin":
+                    yield "block", {"type": "activity", "plugin": plugin_name,
+                                    "text": self.plugins[plugin_name].title if plugin_name in self.plugins else name,
+                                    "tool": name.partition(SEP)[2], "error": isinstance(result.content, dict)
+                                    and "error" in result.content}
+                for block in result.blocks:
+                    yield "block", {"plugin": plugin_name, **block}
+                content = json.dumps(result.content, ensure_ascii=False, default=str)
+                session.messages.append({"role": "tool", "tool_call_id": call["id"],
+                                         "content": content[:TOOL_CONTENT_LIMIT]})
+                all_final = all_final and result.final and name != "load_plugin"
+                all_failed = all_failed and isinstance(result.content, dict) and "error" in result.content
+            failures = failures + 1 if all_failed else 0
+            if failures >= 2:
+                yield "block", {"type": "notice", "level": "warning",
+                                "text": "工具连续调用失败，已停止。可以换个说法，或直接点选上面的结果。"}
+                return
+            follow_up = all_final
+        yield "block", {"type": "notice", "level": "warning", "text": "这一轮步骤太多，已停止。请换个说法再试。"}
 
     def run_action(self, session: Session, plugin_name: str, action: str, payload: dict) -> list[dict]:
         """A button in a plugin's UI: deterministic, no model call."""

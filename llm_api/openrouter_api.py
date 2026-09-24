@@ -39,15 +39,21 @@ def api_key() -> str:
     return key
 
 
-def post_chat_completion(body: dict, *, connect_timeout: float = 2.7, read_timeout: float = 30):
-    """Issue one OpenAI-compatible completion request; POST is never retried."""
+def post_chat_completion(body: dict, *, connect_timeout: float = 2.7, read_timeout: float = 30, stream: bool = False):
+    """Issue one OpenAI-compatible completion request; POST is never retried.
+
+    ``stream=True`` returns the response with the body unread (SSE lines,
+    ``response.iter_lines()``) instead of buffering the whole reply first --
+    what lets the caller show reasoning as it arrives instead of after the
+    model finishes thinking.
+    """
     if not check_budget():
         raise RuntimeError("Daily LLM spend cap reached or unavailable.")
     return request_with_retry(
         generic_session, "POST", completions_url(), retries=0,
         connect_timeout=connect_timeout, read_timeout=read_timeout,
         headers={"Authorization": f"Bearer {api_key()}", "Content-Type": "application/json"},
-        json=body,
+        json=body, stream=stream,
     )
 
 

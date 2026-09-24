@@ -81,15 +81,16 @@ def test_user_pinpoint_makes_the_citation_honest_about_being_unverified():
     assert result.content["citation"].count("at para 64") == 1   # the template's own "at" is not doubled
 
 
-def test_a_pinpoint_the_model_supplied_is_refused():
+def test_a_pinpoint_the_model_supplied_is_labelled_not_refused():
     """A pinpoint the user never wrote has no source in this session: the
-    cite refuses it instead of rendering an honestly-labelled invention."""
+    citation is still produced, and it reports itself unverified."""
     h, session = make()
     ref = session.records.put(gladue_record())
     session.messages.append({"role": "user", "content": "引用它"})
     result = run_tool(h, session, "mcgill__cite", ref=ref, pinpoint="at para 999")
-    assert "找不到来源" in result.content["error"]
-    assert session.records.all(Artifact) == []                # no citation artifact was minted
+    assert "error" not in result.content
+    assert "para 999" in result.content["citation"]
+    assert result.content["verified"] is False
 
 
 def test_full_text_then_quote_then_cite_stays_verified():
@@ -254,6 +255,22 @@ def test_an_extracted_leaf_needs_session_evidence():
     ctx.save(Artifact("x", "y", Derivation((Field("scanned text", "extracted"),), "cite.render.v1")))
 
 
+def test_every_record_type_a_source_produces_has_a_mcgill_rule():
+    """A data source's record is citable from its own fields -- never by
+    making the user retype them as unverified user fields."""
+    from core.mcgill_format import schemas
+    produced = {"jurisprudence", "legislation", "bill", "journal_article", "book"}   # core/source_tools.py
+    assert produced <= set(schemas())
+
+
+def test_a_legisinfo_bill_renders_by_the_bills_rule():
+    from core.mcgill_format import mcgill_clean, render_fields
+    values = {"number": "C-63", "title": "An Act to enact the Online Harms Act",
+              "session": "1", "parliament": "44", "year": "2024"}
+    text = render_fields("bill", {k: mcgill_clean(k, v) for k, v in values.items()})
+    assert text == "Bill C-63, *An Act to enact the Online Harms Act*, 1st Sess, 44th Parl, 2024."
+
+
 def test_a_leaf_read_out_of_a_stored_page_passes_the_audit():
     """A fact contained in a stored page's text traces to that page -- the
     Donoghue year read out of a fetched case report is sourced, not invented.
@@ -296,19 +313,3 @@ def test_a_database_leaf_from_a_different_source_id_still_fails():
         ctx.save(Artifact("x", "y", Derivation(
             (Field("conditional sentencing regime in 1996", "database", source_id="a2aj:other"),), "cite.render.v1")))
     assert "没有出处" in str(exc.value)
-
-
-def test_every_record_type_a_source_produces_has_a_mcgill_rule():
-    """A data source's record is citable from its own fields -- never by
-    making the user retype them as unverified user fields."""
-    from core.mcgill_format import schemas
-    produced = {"jurisprudence", "legislation", "bill", "journal_article", "book"}   # core/source_tools.py
-    assert produced <= set(schemas())
-
-
-def test_a_legisinfo_bill_renders_by_the_bills_rule():
-    from core.mcgill_format import mcgill_clean, render_fields
-    values = {"number": "C-63", "title": "An Act to enact the Online Harms Act",
-              "session": "1", "parliament": "44", "year": "2024"}
-    text = render_fields("bill", {k: mcgill_clean(k, v) for k, v in values.items()})
-    assert text == "Bill C-63, *An Act to enact the Online Harms Act*, 1st Sess, 44th Parl, 2024."

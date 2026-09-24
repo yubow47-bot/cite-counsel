@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import queue
 import re
 import secrets
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from starlette.concurrency import run_in_threadpool
@@ -179,6 +182,33 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
                                                           "message": "这一轮没有完成，请稍后重试。"})
         return envelope(session, token, blocks)
 
+    @app.post("/api/turns/stream")
+    def turn_stream(body: Turn):
+        text = body.input.strip()
+        if not text and not body.attachments:
+            return fail("请输入内容。")
+        session, token = session_for(body)
+
+        def frames():
+            if token:
+                yield _sse("session", {"session": {"id": session.id, "token": token}})
+            try:
+                for kind, payload in _stream_locked(session, harness.run_turn_stream, session,
+                                                    text or "请处理附件。", body.attachments):
+                    if kind == "thinking_delta":
+                        yield _sse("thinking_delta", {"text": payload})
+                    elif kind == "block":
+                        yield _sse("block", {"block": payload})
+            except LLMError as exc:
+                yield _sse("error", {"message": str(exc)})
+            except Exception as exc:
+                logger.warning("Streamed turn failed: %s", type(exc).__name__, exc_info=True)
+                yield _sse("error", {"message": "这一轮没有完成，请稍后重试。"})
+            yield _sse("done", {})
+
+        return StreamingResponse(frames(), media_type="text/event-stream",
+                                 headers={"X-Accel-Buffering": "no"})
+
     @app.post("/api/actions/{plugin}/{action}")
     async def action(plugin: str, action: str, body: Action):
         session, _ = session_for(body, create=False)
@@ -225,3 +255,42 @@ def _locked(session, fn, *args):
     """One turn or action at a time per session; other sessions run in parallel."""
     with session.lock:
         return fn(*args)
+
+
+# Streamed turns run on their own worker threads, outside the asyncio
+# ``slots`` the JSON endpoints use; this caps them the same way (2 at once).
+_STREAM_SLOTS = threading.BoundedSemaphore(2)
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"data: {json.dumps({'type': event, **data}, ensure_ascii=False, default=str)}\n\n"
+
+
+def _stream_locked(session, gen_fn, *args):
+    """Bridge a synchronous generator that makes blocking network calls
+    (``run_turn_stream``, streaming from the model) into the request: held
+    for the session's lock the whole time like ``_locked``, but each item
+    handed to the caller as soon as it is produced instead of all collected
+    first. Starlette runs a sync generator's ``next()`` in a threadpool, so
+    the blocking ``queue.get()`` below does not stall the event loop."""
+    events: queue.Queue = queue.Queue()
+    DONE = object()
+
+    def worker():
+        with _STREAM_SLOTS, session.lock:
+            try:
+                for item in gen_fn(*args):
+                    events.put(("item", item))
+            except BaseException as exc:  # noqa: BLE001 -- re-raised on the caller's side below
+                events.put(("error", exc))
+            finally:
+                events.put(("end", DONE))
+
+    threading.Thread(target=worker, daemon=True).start()
+    while True:
+        kind, payload = events.get()
+        if kind == "end":
+            return
+        if kind == "error":
+            raise payload
+        yield payload

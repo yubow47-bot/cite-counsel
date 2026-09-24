@@ -60,6 +60,17 @@ def _excerpt(text: str, at: int, length: int, pad: int = 60) -> str:
     return ("…" if lo > 0 else "") + text[lo:hi].strip() + ("…" if hi < len(text) else "")
 
 
+def _find_span(original: str, key: str) -> tuple[int, int] | None:
+    """Locate the normalized ``key`` inside the untouched ``original`` text,
+    tolerating whitespace runs and case, so the excerpt keeps real casing
+    ("R v Gladue", not "r v gladue")."""
+    if not key:
+        return None
+    pattern = re.escape(key).replace(r"\ ", r"\s+")
+    match = re.search(pattern, original, re.IGNORECASE)
+    return (match.start(), match.end()) if match else None
+
+
 def annotate_facts(text: str, index: list[dict], shapes=()) -> list[dict]:
     """Per-fact provenance for the model's prose, in text order.
 
@@ -74,7 +85,8 @@ def annotate_facts(text: str, index: list[dict], shapes=()) -> list[dict]:
     if not isinstance(text, str) or not text.strip():
         return []
     text = text[:SCAN_LIMIT]
-    sources = [(source, _norm(source.get("text") or "")) for source in index]
+    sources = [(source, source.get("text") or "") for source in index]
+    sources = [(source, original, _norm(original)) for source, original in sources]
     annotations: dict[str, dict] = {}
     order: list[str] = []
     for shape in (*_GENERIC_SHAPES, *shapes):
@@ -87,12 +99,14 @@ def annotate_facts(text: str, index: list[dict], shapes=()) -> list[dict]:
             entry = {"fact": fact, "verdict": "unsourced", "spans": [[match.start(), match.end()]],
                      "kind": None, "ref": None, "field": None, "origin": None,
                      "source_id": None, "excerpt": None}
-            for source, haystack in sources:
+            for source, original, haystack in sources:
                 at = haystack.find(key)
                 if at < 0:
                     continue
-                entry.update(verdict="sourced", kind=source["kind"],
-                             excerpt=_excerpt(haystack, at, len(key)))
+                span = _find_span(original, key)
+                excerpt = (_excerpt(original, span[0], span[1] - span[0]) if span
+                           else _excerpt(haystack, at, len(key)))
+                entry.update(verdict="sourced", kind=source["kind"], excerpt=excerpt)
                 if source["kind"] == "record":
                     entry.update(ref=source.get("ref"), field=source.get("field"),
                                  origin=source.get("origin"), source_id=source.get("source_id"))

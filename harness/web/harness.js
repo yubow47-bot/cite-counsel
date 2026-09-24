@@ -33,6 +33,32 @@
     if (!response.ok || data.ok === false) throw new Error(data.message || 'The request did not complete.');
     return data;
   }
+  // Server-sent events: each frame is "data: {...json...}\n\n". onEvent gets
+  // one parsed {type, ...} object per frame, as soon as it arrives -- not
+  // buffered until the whole response is in, which is the point of this
+  // over post() for a turn (thinking shown live, not just the final reply).
+  async function postStream(url, body, onEvent) {
+    const response = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    if (!response.ok || !response.body) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'The request did not complete.');
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+      let split;
+      while ((split = buffer.indexOf('\n\n')) !== -1) {
+        const frame = buffer.slice(0, split); buffer = buffer.slice(split + 2);
+        const line = frame.split('\n').find(l => l.startsWith('data:'));
+        if (!line) continue;
+        try { onEvent(JSON.parse(line.slice(5).trim())); } catch { /* malformed frame, skip it */ }
+      }
+    }
+  }
 
   // ── Rendering ─────────────────────────────────────────────────────
   // Inline text: **bold** and *italic*, as an array of nodes.
@@ -94,6 +120,16 @@
         return node;
       }
       case 'notice': return el('div', 'bubble notice ' + (block.level || 'info'), block.text || block.message);
+      case 'thinking': {
+        // Open by default: how the model decided what to do is part of the answer.
+        const details = el('details', 'thinking');
+        details.open = true;
+        details.append(el('summary', '', 'Thinking'));
+        const body = el('div', 'thinking-text');
+        body.append(...inline(String(block.text ?? '')));
+        details.append(body);
+        return details;
+      }
       case 'activity': {
         // The chip names the plugin and tool by id — short and stable.
         return el('div', 'activity' + (block.error ? ' failed' : ''),
@@ -222,11 +258,39 @@
     setBusy(true);
     const typing = el('div', 'typing', 'Working…'); $('transcript').append(typing);
     typing.scrollIntoView({block: 'end'});
+    // Built live as events arrive, not assembled after the fact: one turn
+    // container, placed on the first thing that actually has something to
+    // show (a thinking token or a block) so an empty bubble never appears.
+    const turn = el('article', 'turn assistant-turn');
+    let placed = false, thinkingBody = null, thinkingBuffer = '';
+    const place = () => {
+      if (!placed) { typing.remove(); $('transcript').append(turn); placed = true; }
+      turn.scrollIntoView({block: 'end', behavior: 'smooth'});
+    };
     try {
-      const data = await post('/api/turns', {...sessionRef(), input: text, attachments: used.map(a => a.id)});
-      typing.remove(); show(data.blocks);
+      await postStream('/api/turns/stream', {...sessionRef(), input: text, attachments: used.map(a => a.id)}, event => {
+        if (event.type === 'session' && event.session) saveSession(event.session);
+        else if (event.type === 'thinking_delta') {
+          if (!thinkingBody) {
+            const details = el('details', 'thinking'); details.open = true;
+            details.append(el('summary', '', 'Thinking'));
+            thinkingBody = el('div', 'thinking-text');
+            details.append(thinkingBody);
+            turn.append(details); place();
+          }
+          thinkingBuffer += event.text;
+          thinkingBody.textContent = thinkingBuffer;
+          thinkingBody.scrollTop = thinkingBody.scrollHeight;
+        } else if (event.type === 'block') {
+          const node = renderBlock(event.block);
+          if (node) { turn.append(node); place(); }
+        } else if (event.type === 'error') {
+          turn.append(generic({type: 'notice', level: 'error', text: event.message})); place();
+        }
+      });
     } catch (error) {
-      typing.remove(); show([{type: 'notice', level: 'error', text: error.message}]);
+      typing.remove();
+      if (!placed) { turn.append(generic({type: 'notice', level: 'error', text: error.message})); place(); }
     } finally { setBusy(false); $('input').focus(); }
   }
   async function upload(file) {
