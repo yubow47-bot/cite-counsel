@@ -27,11 +27,12 @@ def find_case(ctx, p: CaseParams) -> Result:
     blocks = [{"type": "record_card", "ref": ref, "source_type": r.source_type,
                "fields": {k: f.value for k, f in r.fields.items()},
                "verified": True} for ref, r in zip(refs, records)]
-    note = "" if records else "。A2AJ 里没有匹配的判例：查询的是按名称与引用号的加拿大判例库，不含美国或英国判例。"
     return Result({"found": len(records), "records": [{"ref": ref} for ref in refs],
                    "note": ("records are stored; refer to them by ref" if records else
                             "no match in the Canadian databases searched; this does not mean it does not exist")},
-                  blocks + ([{"type": "notice", "level": "info", "text": "没有找到匹配的判例。" + note[1:]}]
+                  blocks + ([{"type": "notice", "level": "info",
+                              "text": "No matching case found. A2AJ searches Canadian case law by name and "
+                                      "citation only -- it does not cover US or UK cases."}]
                             if not records else []), final=bool(records))
 
 
@@ -61,10 +62,11 @@ def full_text(ctx, p: FullTextParams) -> Result:
     record = ctx.records.get(p.ref)
     citation = (record.fields.get("neutral_citation") or record.fields.get("reporter"))
     if citation is None or citation.origin != "database" or not citation.value:
-        raise ValueError("只有数据库返回的判例记录能取全文；引用号必须来自数据库字段。")
+        raise ValueError("Only a case record the database returned can have its full text fetched; the "
+                         "citation must come from a database field.")
     found = quote_check.judgment(citation.value)
     if found is None:
-        raise ValueError("数据库没有这份判决的全文，无法取回。")
+        raise ValueError("The database has no full text for this judgment; it cannot be fetched.")
     version = Record(record.source_type,
                      {**record.fields, "full_text": Field(found["text"], "database",
                                                           source_id=found["url"] or f"a2aj:{citation.value}")},
@@ -72,10 +74,10 @@ def full_text(ctx, p: FullTextParams) -> Result:
     ref = _ref(ctx, version)
     return Result({"ref": ref, "replaces": p.ref, "chars": len(found["text"]),
                    "note": "the full text is a database field on the new record version"},
-                  [{"type": "card", "title": "判决全文已取回",
-                    "rows": [["记录", ref], ["字符数", str(len(found["text"]))],
-                             ["来源", found["url"] or f"a2aj:{citation.value}"]],
-                    "note": "全文来自 A2AJ 的非官方文本；引语核对会使用它。"}])
+                  [{"type": "card", "title": "Full text fetched",
+                    "rows": [["Record", ref], ["Characters", str(len(found["text"]))],
+                             ["Source", found["url"] or f"a2aj:{citation.value}"]],
+                    "note": "The full text is A2AJ's unofficial text; the quote check tool uses it."}])
 
 
 def _ref(ctx, record) -> str:
@@ -84,7 +86,7 @@ def _ref(ctx, record) -> str:
 
 PLUGIN = Plugin(
     name="a2aj",
-    title="加拿大判例与法规（A2AJ）",
+    title="Canadian cases & legislation (A2AJ)",
     description="Look up Canadian cases and legislation by name or citation; fields come from the database "
                 "and are traceable.",
     instructions="Records you receive are numbered (rec_N). Cite them by number; never retype their fields. "

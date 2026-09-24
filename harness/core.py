@@ -41,7 +41,7 @@ from typing import Literal
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / ".chatbox-runtime" / "harness.json"
-MAX_STEPS = 15  # tool rounds per turn; a round that only loads plugins is free
+MAX_STEPS = 20  # tool rounds per turn; a round that only loads plugins is free
 TOOL_CONTENT_LIMIT = 6000
 SEP = "__"  # model-facing tool names: plugin__tool (dots are not allowed there)
 FOLLOW_UP = (
@@ -208,10 +208,10 @@ class NewRecord(BaseModel):
 
 
 _FIELD_STATUS = {
-    "database": "已核验（字段可溯源到数据库）",
-    "extracted": "未核验（来自文件提取）",
-    "user": "未核验（用户补充）",
-    "model": "未核验（模型填写，未经核实）",
+    "database": "Verified (traces to the database)",
+    "extracted": "Unverified (from a file extraction)",
+    "user": "Unverified (added by you)",
+    "model": "Unverified (written by the model, not checked)",
 }
 
 
@@ -249,7 +249,7 @@ def _add_field(ctx, p: AddField) -> Result:
                          f"({p.from_ref or '?'} has no field {p.from_field or '?'}).")
     updated = ctx.records.add_field(record, p.field, field)
     ref = ctx.save(updated, supersedes=p.ref)
-    source = {"database": "数据库字段", "extracted": "网页/文件提取", "user": "你的原话"}.get(field.origin, "模型填写")
+    source = {"database": "database field", "extracted": "web/file extraction", "user": "your own words"}.get(field.origin, "written by the model")
     origin_note = f"{from_ref}（{source}）" if from_ref and field.origin != "user" else source
     note = ("the value is stored with its true origin; the citation is verified only while every field "
             "traces to a database. To add another field, use this ref -- not the one you passed in.")
@@ -259,10 +259,11 @@ def _add_field(ctx, p: AddField) -> Result:
     return Result(
         {"ref": ref, "field": p.field, "value": field.value, "origin": field.origin, "from_ref": from_ref,
          "note": note},
-        [{"type": "card", "title": f"已写入 {p.field}",
-          "rows": [[p.field, field.value], ["来源", origin_note], ["核验状态", _FIELD_STATUS[field.origin]]],
-          "note": "字段来源照实记录：来自某条记录的会附上编号；模型自己填的会明确标出，引用照常生成，"
-                  "但含它的引文不会标记为已核验。"}])
+        [{"type": "card", "title": f"Wrote {p.field}",
+          "rows": [[p.field, field.value], ["Source", origin_note], ["Status", _FIELD_STATUS[field.origin]]],
+          "note": "The field's source is recorded honestly: one copied from a record carries its ref; one "
+                  "the model supplied is labelled as such. Citations still render, but one that includes a "
+                  "non-database field is not marked verified."}])
 
 
 def _new_record(ctx, p: NewRecord) -> Result:
@@ -272,10 +273,10 @@ def _new_record(ctx, p: NewRecord) -> Result:
         # Giving up on the databases is allowed only after the web was tried;
         # a session that never searched would fabricate its way to a record.
         return Result(
-            {"error": "数据库里没找到，但你还没有尝试网络搜索。先调用 web__search 找找看，"
-                      "找不到再回来建空记录。"},
+            {"error": "Not found in the databases, and you have not tried a web search yet. Call "
+                      "web__search first; come back to open a blank record if that finds nothing."},
             [{"type": "notice", "level": "warning",
-              "text": "还没尝试过网络搜索，暂不新建空记录。请先 web__search。"}])
+              "text": "No web search has been tried yet, so no blank record was opened. Try web__search first."}])
     record = ctx.records.new_record(p.record_type)
     ref = ctx.records.put(record)
     field_names = [f["name"] for f in mcgill_format.schema_fields(p.record_type)]
@@ -284,10 +285,11 @@ def _new_record(ctx, p: NewRecord) -> Result:
          "fields_this_type_takes": field_names,
          "note": "an empty record; write its fields with record__add_field -- copy each value from the "
                 "records already on screen (it keeps its database origin) or from the user's words"},
-        [{"type": "card", "title": f"新建空白记录 · {p.record_type}", "rows": [["编号", ref]],
-          "note": "数据库里没有找到。这个记录可以直接由你填写（record__add_field）：优先从屏幕上已有的记录"
-                  "复制字段值，其次是用户原话；每个值都会照实标记来源。需要用户补的，让用户直接在输入框里"
-                  "写（" + "、".join(field_names) + "）。"}])
+        [{"type": "card", "title": f"New blank record · {p.record_type}", "rows": [["Ref", ref]],
+          "note": "Not found in the databases. This record can be filled in directly (record__add_field): "
+                  "prefer copying field values from records already on screen, then the user's own words; "
+                  "each value is labelled with its real source honestly. If something is still missing, ask "
+                  "the user to type it in directly (" + ", ".join(field_names) + ")."}])
 
 
 BUILTIN_TOOLS = (
@@ -297,9 +299,12 @@ BUILTIN_TOOLS = (
              "page's date). A value found in that record keeps its origin, so the citation can stay verified; "
              "omit value to copy from_field whole. A value found nowhere is still written, marked "
              "model-supplied and unverified -- prefer copying from a record or the user's words. Each call "
-             "returns a NEW ref for the updated record -- to add a second field, call this again with THAT "
-             "ref, not the one you started with. Do not call this twice in the same turn against the same "
-             "record: the second call would not see the first one's field.",
+             "returns a NEW ref for the updated record. To fill several fields on the SAME record, you may "
+             "call this more than once in the same turn, all against the SAME starting ref -- the calls run "
+             "one after another, not at once, so each sees what the last one wrote; there is no need to wait "
+             "for one result before writing the next call. The one thing that does not work in a batch: a "
+             "from_ref/from_field pointing at a field ANOTHER call in this same turn is writing -- that value "
+             "does not exist yet. Only copy from records that already existed before this turn.",
              AddField, _add_field),
     _Builtin("record__new",
              "Create an empty record for a source the databases do not have, for you and the user to fill in. "
@@ -363,7 +368,7 @@ class Harness:
 
     def set_enabled(self, name: str, enabled: bool) -> list[str]:
         if name not in self.plugins:
-            raise ValueError("没有这个插件。")
+            raise ValueError("No such plugin.")
         with self._config_lock:
             current = [n for n in self.config["enabled"] if n != name]
             if enabled:
@@ -371,7 +376,8 @@ class Harness:
             else:
                 dependents = [n for n in current if name in self.plugins[n].requires]
                 if dependents:
-                    raise ValueError("先停用依赖它的插件：" + "、".join(self.plugins[n].title for n in dependents))
+                    raise ValueError("Disable the plugins that depend on it first: "
+                                     + ", ".join(self.plugins[n].title for n in dependents))
             self.config["enabled"] = self._with_requirements(current)
             self._save_config()
             return self.config["enabled"]
@@ -384,21 +390,21 @@ class Harness:
     def set_plugin_settings(self, name: str, values: dict) -> None:
         plugin = self.plugins.get(name)
         if plugin is None:
-            raise ValueError("没有这个插件。")
+            raise ValueError("No such plugin.")
         known = {s.name: s for s in plugin.settings}
         with self._config_lock:
             saved = dict(self.config["plugin_settings"].get(name) or {})
             for key, value in values.items():
                 setting = known.get(key)
                 if setting is None:
-                    raise ValueError(f"插件没有设置项 {key}。")
+                    raise ValueError(f"This plugin has no setting named {key}.")
                 if setting.kind == "bool":
                     value = bool(value)
                 elif setting.kind == "choice":
                     if value not in setting.choices:
-                        raise ValueError(f"{setting.label} 的取值无效。")
+                        raise ValueError(f"{setting.label} has an invalid value.")
                 elif not isinstance(value, str) or len(value) > 500:
-                    raise ValueError(f"{setting.label} 必须是 500 字以内的文本。")
+                    raise ValueError(f"{setting.label} must be text of 500 characters or fewer.")
                 saved[key] = value
             self.config["plugin_settings"][name] = saved
             self._save_config()
@@ -640,15 +646,25 @@ class Harness:
         blocks.append({"type": "text", "text": raw, **({"facts": facts} if facts else {})})
 
     def run_turn(self, session: Session, text: str, attachments: list[str] = ()) -> list[dict]:
-        notes = [f"[附件 {aid}: {session.attachments[aid]['name']}]" for aid in attachments
-                 if aid in session.attachments]
         hints = _input_hints(text)
-        session.messages.append({"role": "user", "content": "\n".join([text, *notes]).strip()
+        session.messages.append({"role": "user", "content": text.strip()
                                  + (("\n\n" + hints) if hints else "")})
+        self._note_attachments(session, attachments)
         try:
             return self._turn(session)
         finally:
             self.sessions.save(session)
+
+    def _note_attachments(self, session: Session, attachments: list[str]) -> None:
+        # A filename is not the user's words -- an uploaded file's own name
+        # ("...pp.161-189.pdf") must not be able to pass a fact it contains
+        # (a page range, a year) off as something the user typed. Kept as
+        # its own _note message: visible to the model, invisible to
+        # user_said()'s grounding check.
+        notes = [f"[附件 {aid}: {session.attachments[aid]['name']}]" for aid in attachments
+                 if aid in session.attachments]
+        if notes:
+            session.messages.append({"role": "user", "_note": True, "content": "\n".join(notes)})
 
     def _turn(self, session: Session) -> list[dict]:
         blocks: list[dict] = []
@@ -695,13 +711,13 @@ class Harness:
             if failures >= 2:
                 # The model is retrying the same dead end; stop instead of burning steps.
                 blocks.append({"type": "notice", "level": "warning",
-                               "text": "工具连续调用失败，已停止。可以换个说法，或直接点选上面的结果。"})
+                               "text": "The tool failed twice in a row, so this stopped. Try rephrasing, or use the results above directly."})
                 return blocks
             # A final result is ready to show, not the end of the request: the
             # model keeps its tools and either takes the next step (a citation
             # from the record it just got) or replies. The step budget bounds it.
             follow_up = all_final
-        blocks.append({"type": "notice", "level": "warning", "text": "这一轮步骤太多，已停止。请换个说法再试。"})
+        blocks.append({"type": "notice", "level": "warning", "text": "Too many steps this round, so this stopped. Try rephrasing."})
         return blocks
 
     def run_turn_stream(self, session: Session, text: str, attachments: list[str] = ()):
@@ -711,11 +727,10 @@ class Harness:
         would have returned, in the same order. The reply text itself still
         lands as one whole ``text`` block, same as before -- only the
         thinking is meant to be watched as it happens."""
-        notes = [f"[附件 {aid}: {session.attachments[aid]['name']}]" for aid in attachments
-                 if aid in session.attachments]
         hints = _input_hints(text)
-        session.messages.append({"role": "user", "content": "\n".join([text, *notes]).strip()
+        session.messages.append({"role": "user", "content": text.strip()
                                  + (("\n\n" + hints) if hints else "")})
+        self._note_attachments(session, attachments)
         try:
             yield from self._turn_events(session)
         finally:
@@ -789,17 +804,17 @@ class Harness:
             failures = failures + 1 if all_failed else 0
             if failures >= 2:
                 yield "block", {"type": "notice", "level": "warning",
-                                "text": "工具连续调用失败，已停止。可以换个说法，或直接点选上面的结果。"}
+                                "text": "The tool failed twice in a row, so this stopped. Try rephrasing, or use the results above directly."}
                 return
             follow_up = all_final
-        yield "block", {"type": "notice", "level": "warning", "text": "这一轮步骤太多，已停止。请换个说法再试。"}
+        yield "block", {"type": "notice", "level": "warning", "text": "Too many steps this round, so this stopped. Try rephrasing."}
 
     def run_action(self, session: Session, plugin_name: str, action: str, payload: dict) -> list[dict]:
         """A button in a plugin's UI: deterministic, no model call."""
         plugin = self.plugins.get(plugin_name)
         handler = plugin.actions.get(action) if plugin else None
         if handler is None or plugin_name not in self.config["enabled"]:
-            raise ValueError("这个操作不可用。")
+            raise ValueError("This action is not available.")
         try:
             result = handler(self.context(session, plugin_name), payload if isinstance(payload, dict) else {})
         finally:

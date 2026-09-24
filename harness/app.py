@@ -81,12 +81,12 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
         if request.method == "POST":
             origin = request.headers.get("origin")
             if origin and origin != str(request.base_url).rstrip("/"):
-                return fail("不允许跨站请求。", 403)
+                return fail("Cross-site requests are not allowed.", 403)
             size = request.headers.get("content-length", "0")
             if not size.isdigit() or int(size) > max_bytes + 1024 * 1024:
-                return fail(f"请求太大，文件上限为 {max_upload_mb} MB。", 413)
+                return fail(f"Request too large; the file limit is {max_upload_mb} MB.", 413)
             if not limiter.check(request.client.host if request.client else "local"):
-                return fail("请求较频繁，请稍后重试。", 429)
+                return fail("Too many requests -- please try again shortly.", 429)
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -121,10 +121,10 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
         plugin = harness.plugins.get(name)
         if (plugin is None or plugin.ui is None or name not in harness.config["enabled"]
                 or not re.fullmatch(r"[a-z0-9_-]+\.(js|css)", filename)):
-            return fail("没有这个插件资源。", 404)
+            return fail("No such plugin asset.", 404)
         path = (Path(plugin.ui) / filename).resolve()
         if path.parent != Path(plugin.ui).resolve() or not path.is_file():
-            return fail("没有这个插件资源。", 404)
+            return fail("No such plugin asset.", 404)
         return FileResponse(path)
 
     @app.get("/api/config")
@@ -145,11 +145,11 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
         from core.chatbox_settings import save_api_keys
         key = body.openrouter_api_key.get_secret_value().strip()
         if not key:
-            return fail("请填写 API Key。")
+            return fail("Please enter an API key.")
         try:
             save_api_keys(key, None)
         except (ValueError, OSError) as exc:
-            return fail(str(exc) if isinstance(exc, ValueError) else "无法写入本机 .env。", 500)
+            return fail(str(exc) if isinstance(exc, ValueError) else "Could not write to the local .env file.", 500)
         return {"ok": True, **harness.describe()}
 
     @app.post("/api/settings/plugins/{name}")
@@ -167,26 +167,26 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
     async def turn(body: Turn):
         text = body.input.strip()
         if not text and not body.attachments:
-            return fail("请输入内容。")
+            return fail("Please enter a message.")
         session, token = session_for(body)
         try:
             async with slots:
                 blocks = await run_in_threadpool(_locked, session, harness.run_turn, session,
-                                                 text or "请处理附件。", body.attachments)
+                                                 text or "Please process the attachment.", body.attachments)
         except LLMError as exc:
             return JSONResponse(status_code=502, content={**envelope(session, token, []), "ok": False,
                                                           "message": str(exc)})
         except Exception as exc:
             logger.warning("Turn failed: %s", type(exc).__name__, exc_info=True)
             return JSONResponse(status_code=502, content={**envelope(session, token, []), "ok": False,
-                                                          "message": "这一轮没有完成，请稍后重试。"})
+                                                          "message": "This turn did not complete -- please try again shortly."})
         return envelope(session, token, blocks)
 
     @app.post("/api/turns/stream")
     def turn_stream(body: Turn):
         text = body.input.strip()
         if not text and not body.attachments:
-            return fail("请输入内容。")
+            return fail("Please enter a message.")
         session, token = session_for(body)
 
         def frames():
@@ -194,7 +194,7 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
                 yield _sse("session", {"session": {"id": session.id, "token": token}})
             try:
                 for kind, payload in _stream_locked(session, harness.run_turn_stream, session,
-                                                    text or "请处理附件。", body.attachments):
+                                                    text or "Please process the attachment.", body.attachments):
                     if kind == "thinking_delta":
                         yield _sse("thinking_delta", {"text": payload})
                     elif kind == "block":
@@ -203,7 +203,7 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
                 yield _sse("error", {"message": str(exc)})
             except Exception as exc:
                 logger.warning("Streamed turn failed: %s", type(exc).__name__, exc_info=True)
-                yield _sse("error", {"message": "这一轮没有完成，请稍后重试。"})
+                yield _sse("error", {"message": "This turn did not complete -- please try again shortly."})
             yield _sse("done", {})
 
         return StreamingResponse(frames(), media_type="text/event-stream",
@@ -213,7 +213,7 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
     async def action(plugin: str, action: str, body: Action):
         session, _ = session_for(body, create=False)
         if session is None:
-            return fail("这次对话已过期，请重新开始。", 409)
+            return fail("This conversation has expired -- please start a new one.", 409)
         try:
             async with slots:
                 blocks = await run_in_threadpool(_locked, session, harness.run_action, session,
@@ -222,7 +222,7 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
             return fail(str(exc), 409)
         except Exception as exc:
             logger.warning("Action %s.%s failed: %s", plugin, action, type(exc).__name__, exc_info=True)
-            return fail("操作没有完成，请稍后重试。", 502)
+            return fail("The action did not complete -- please try again shortly.", 502)
         return {"ok": True, "blocks": blocks}
 
     @app.post("/api/files")
@@ -230,13 +230,13 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
                      session_token: str = Form(default="")):
         suffix = Path(file.filename or "").suffix.lower()
         if suffix not in UPLOAD_SUFFIXES:
-            return fail("请上传 PDF、DOCX、PPTX、XLSX 或 JPG/PNG/WebP 图片。")
+            return fail("Please upload a PDF, DOCX, PPTX, XLSX, or a JPG/PNG/WebP image.")
         contents = await file.read(max_bytes + 1)
         if len(contents) > max_bytes:
-            return fail(f"文件上限为 {max_upload_mb} MB。", 413)
+            return fail(f"The file limit is {max_upload_mb} MB.", 413)
         from api.main import _magic_byte_ok
         if not _magic_byte_ok(contents[:16], suffix):
-            return fail("文件内容与扩展名不匹配。")
+            return fail("The file content does not match its extension.")
         session, token = session_for(SessionRef(session_id=session_id or None, session_token=session_token or None))
         attachment_id = "att_" + secrets.token_hex(4)
         # The file lives inside the session's own directory, so it survives

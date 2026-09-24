@@ -65,31 +65,31 @@ def missing_summary(source_type: str, values: dict) -> str:
     filled = _filled(values)
     labels = {f["name"]: f["label"] for f in schema.get("fields", [])}
     parts = [f["label"] for f in schema.get("fields", []) if f.get("required") and f["name"] not in filled]
-    parts += ["或".join(labels[key] for key in options if key in labels)
+    parts += [" or ".join(labels[key] for key in options if key in labels)
               for options in schema.get("required_any", []) if not filled & set(options)]
-    return "、".join(parts)
+    return ", ".join(parts)
 
 
 def render_fields(source_type: str, fields: dict) -> str:
     """Literal segments + provided field values only. No guessed defaults."""
     schema = schemas().get(source_type)
     if schema is None:
-        raise ValueError("此类型尚未支持确定性组装。")
+        raise ValueError("This type has no deterministic assembly yet.")
     allowed = {f["name"] for f in schema["fields"]}
     if set(fields) - allowed:
-        raise ValueError("包含此类型不支持的字段。")
+        raise ValueError("Contains a field this type does not support.")
     clean = {}
     for key, value in fields.items():
         if not isinstance(value, str) or len(value) > 2000:
-            raise ValueError("字段必须是 2000 字以内的文本。")
+            raise ValueError("Each field must be text of 2000 characters or fewer.")
         clean[key] = value.strip()
     gap = missing_summary(source_type, clean)
     if gap:
-        raise ValueError("请补充：" + gap)
+        raise ValueError("Still needed: " + gap)
     if source_type == "website":
         parsed = urlsplit(clean["url"])
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise ValueError("请填写完整的 HTTP(S) URL。")
+            raise ValueError("Please provide a full HTTP(S) URL.")
     segments = list(schema["segments"])
     anchor = next((name for name in schema.get("pinpoint_after", []) if clean.get(name)), None)
     if anchor and clean.get("pinpoint"):

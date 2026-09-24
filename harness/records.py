@@ -112,9 +112,9 @@ class Store:
         key = self._current_ref(str(ref or "").strip())
         obj = self._objects.get(key)
         if obj is None:
-            raise ValueError("没有这个编号，或它不属于本次对话。")
+            raise ValueError("No such ref, or it does not belong to this conversation.")
         if kind is not None and not isinstance(obj, kind):
-            raise ValueError(f"编号 {ref} 不是这个工具需要的对象。")
+            raise ValueError(f"{ref} is not the kind of object this tool needs.")
         return obj
 
     def meta(self, ref: str) -> dict:
@@ -271,7 +271,7 @@ class Store:
         """
         name = str(field).strip()
         if not name:
-            raise ValueError("需要字段名。")
+            raise ValueError("A field name is required.")
         return Record(record.source_type, {**record.fields, name: item},
                       record.provider, record.record_id)
 

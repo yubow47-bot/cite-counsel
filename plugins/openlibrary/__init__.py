@@ -47,7 +47,7 @@ def _result(ctx, records):
 
 PLUGIN = Plugin(
     name="openlibrary",
-    title="书籍（Open Library）",
+    title="Books (Open Library)",
     description="Look up a book by ISBN or by title; fields come from the library catalogue record.",
     instructions="Records you receive are numbered (rec_N). Refer to them by number. For a title search, show "
                  "the candidates and let the user pick. If a field is missing, write it with "

@@ -349,6 +349,26 @@ def test_http_turn_stream_runs_tool_calls_like_the_json_endpoint(monkeypatch, cl
     assert block_types == ["activity", "echo", "text"]
 
 
+def test_an_attachment_filename_is_not_the_users_own_words(monkeypatch, harness):
+    """A fact sitting in an uploaded file's NAME (a page range, a year) must
+    not be able to pass itself off as something the user typed -- it is the
+    harness's own note about the upload, not the user's words. Regression:
+    the note used to be spliced into the same user message as the real
+    input, so user_said() (and therefore record__add_field's fallback
+    source-matching) found it there and called it "the user's own words"."""
+    Script(monkeypatch, [say("noted")])
+    session, _ = harness.sessions.start()
+    session.attachments["att_1"] = {"path": "/tmp/x.pdf",
+                                    "name": "Ch06 Data on Law & Society (pp.161-189).pdf"}
+    harness.run_turn(session, "process it", attachments=["att_1"])
+    ctx = harness.context(session, "alpha")
+    assert ctx.user_said("161-189") == ""            # not something the user said
+    assert ctx.user_said("process it") == "process it"   # the real input still is
+    # The note is still visible to the model in history, just not as a user statement.
+    history_text = " ".join(m.get("content") or "" for m in session.messages)
+    assert "161-189" in history_text
+
+
 # 鈹€鈹€ The real plugins 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 

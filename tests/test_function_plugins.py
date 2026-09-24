@@ -68,7 +68,7 @@ def test_mcgill_cite_lists_what_is_missing():
                                      "openlibrary", "OL1"))
     with pytest.raises(ValueError) as exc:
         mcgill.cite(ctx_for(h, session, "mcgill"), mcgill.CiteParams(ref=ref))
-    assert "出版地" in str(exc.value)
+    assert "Place of publication" in str(exc.value)
 
 
 def test_user_pinpoint_makes_the_citation_honest_about_being_unverified():
@@ -115,7 +115,7 @@ def test_quote_needs_the_stored_full_text():
     session.messages.append({"role": "user", "content": f"核对：{QUOTE}"})
     with pytest.raises(ValueError) as exc:
         quote.check(ctx_for(h, session, "quote"), quote.CheckParams(ref=ref, quote=QUOTE))
-    assert "全文" in str(exc.value)
+    assert "full text" in str(exc.value)
 
 
 def test_quote_pinpoint_artifact_is_database_grounded():

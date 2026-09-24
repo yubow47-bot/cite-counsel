@@ -63,12 +63,13 @@ def cite(ctx, p: CiteParams) -> Result:
                                    "fields": {name: {"value": values.get(name, field.value),
                                                      "origin": field.origin, "source_id": field.source_id}
                                               for name, field in used.items()}})
-    state = "已核验" if verified else "未核验（字段并非全部来自数据库）"
+    state = "Verified" if verified else "Unverified (not every field comes from a database)"
     return Result(
         {"ref": ref, "citation": content, "verified": verified,
          "note": "the citation is stored as an artifact; cite it by ref when building a bibliography"},
-        [{"type": "card", "title": "引文", "rows": [["引文", content], ["核验状态", state]],
-          "note": "引文由规则从记录字段生成；核验状态由字段来源推导，不由模型判断。"}],
+        [{"type": "card", "title": "Citation", "rows": [["Citation", content], ["Status", state]],
+          "note": "The citation is rendered by rule from the record's fields; the status is derived from "
+                  "the fields' sources, never decided by the model."}],
         final=True)
 
 
@@ -81,24 +82,27 @@ def missing(ctx, p: MissingParams) -> Result:
     record = ctx.records.get(p.ref)
     values = {name: field.value for name, field in record.fields.items()}
     if not mcgill_format.schema_fields(record.source_type):
-        raise ValueError(f"此类型（{record.source_type}）尚未支持确定性组装；可以生成引文的类型见引文插件说明。")
+        raise ValueError(f"This type ({record.source_type}) has no deterministic assembly yet; see the "
+                         f"citation plugin's instructions for which types can be rendered.")
     gap = mcgill_format.missing_summary(record.source_type, values)
     missing_fields = mcgill_format.missing_required(record.source_type, values)
     if gap:
         return Result({"ref": p.ref, "missing": gap,
                        "note": "write the values you have with record__add_field -- copy from a record on "
                               "screen or ask the user; a copied database value keeps the record verified"},
-                      [{"type": "card", "title": "还缺的字段",
-                        "rows": [["记录", p.ref], ["缺少", gap], ["补充方式", "从已有记录复制，或请用户直接在输入框里写"]],
-                        "note": "字段来源照实记录；含非数据库字段的引文不会标记为已核验。"}])
+                      [{"type": "card", "title": "Fields still missing",
+                        "rows": [["Record", p.ref], ["Missing", gap],
+                                 ["How to add them", "Copy from an existing record, or ask the user to type it in"]],
+                        "note": "Fields are recorded with their true source; a citation with a non-database "
+                                "field is not marked verified."}])
     return Result({"ref": p.ref, "missing": [], "note": "the record has every required field; cite it"},
-                  [{"type": "card", "title": "字段齐备", "rows": [["编号", p.ref]],
-                    "note": "必需字段齐全，可以直接生成引文。"}])
+                  [{"type": "card", "title": "All fields present", "rows": [["Ref", p.ref]],
+                    "note": "Every required field is present; the citation can be rendered now."}])
 
 
 PLUGIN = Plugin(
     name="mcgill",
-    title="引文格式（McGill 第 10 版）",
+    title="Citation format (McGill 10th ed.)",
     description="Render a stored record into a McGill citation; verified is computed from the derivation chain.",
     instructions="Citations take record numbers (rec_N), never retyped fields. Rendering with cite is "
                  "preferred: it is deterministic, stamps verified from the derivation, and the artifact "

@@ -183,14 +183,14 @@ def check(item: dict, quote: str, *, quoted: Field | None = None, text: str | No
     """
     quote = (quote or "").strip()
     if not MIN_QUOTE <= len(quote) <= MAX_QUOTE:
-        raise ValueError(f"请粘贴 {MIN_QUOTE}–{MAX_QUOTE} 个字符的引语。")
+        raise ValueError(f"Paste a quotation of {MIN_QUOTE}–{MAX_QUOTE} characters.")
     citation = case_citation(item)
     if not citation:
-        raise ValueError("只有从判例数据库取回的判决可以对照原文核对引语。")
+        raise ValueError("Only a judgment fetched from a case database can be checked against its own text.")
     if text is None:
         found = judgment(citation)
         if found is None:
-            raise ValueError("数据库没有这份判决的全文，无法核对。")
+            raise ValueError("The database has no full text for this judgment, so it cannot be checked.")
         text, url = found["text"], found["url"]
         source_id = source_id or url or f"a2aj:{citation}"
     located = locate(text, quote)

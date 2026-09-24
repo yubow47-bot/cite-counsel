@@ -46,7 +46,7 @@ def _result(ctx, records):
 
 PLUGIN = Plugin(
     name="legisinfo",
-    title="联邦议案（LEGISinfo）",
+    title="Federal bills (LEGISinfo)",
     description="Look up federal bills by number or by keywords in the title, with their status and dates.",
     instructions="Records you receive are numbered (rec_N). Refer to them by number; the card shows the title "
                  "and status. Say what was searched when nothing matches.",
