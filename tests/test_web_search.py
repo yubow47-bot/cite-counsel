@@ -158,6 +158,20 @@ def test_fetch_keeps_the_page_date_and_strips_the_site_suffix(h, session):
     assert citation.content["verified"] is False
 
 
+def test_fetch_strips_the_site_suffix_even_when_site_name_is_shorter(h, session):
+    """Regression, seen live: og:site_name gives the brand alone ("CBC")
+    while the <title> tag's own chrome is longer ("CBC News") -- an exact
+    match missed this and left "| CBC News" baked into the stored title and
+    every citation rendered from it."""
+    page = {"page_title": "Man who murdered 7-week-old baby can't apply for parole for 15 years | CBC News",
+            "site_name": "CBC", "date": "2026-07-02", "author": "Kristy Nease",
+            "raw_text": "For murder in the second degree of a baby who was seven weeks old..."}
+    with patch("llm_api.deepseek_api.extract_from_url", return_value=page):
+        result = web.fetch(h.context(session, "web"),
+                           web.FetchParams(url="https://www.cbc.ca/news/canada/ottawa/x-9.7254177"))
+    assert result.content["title"] == "Man who murdered 7-week-old baby can't apply for parole for 15 years"
+
+
 def test_fetch_still_works_when_the_page_has_no_metadata(h, session):
     page = {"page_title": "A bare page", "raw_text": "Some text only."}
     with patch("llm_api.deepseek_api.extract_from_url", return_value=page):

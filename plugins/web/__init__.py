@@ -183,8 +183,14 @@ def fetch(ctx, p: FetchParams) -> Result:
         raise ValueError("the site answered with a bot-check page, not the content; try another source")
     site = str(page.get("site_name") or "").strip()
     title = str(page.get("page_title") or p.url).strip()
-    if site and title.endswith(f" | {site}"):
-        title = title[: -len(f" | {site}")].strip()      # the page chrome, not the headline
+    if site and " | " in title:
+        head, _, tail = title.rpartition(" | ")
+        # site_name from the page's own metadata ("CBC") often differs from
+        # the <title> tag's chrome suffix ("CBC News") -- an exact match
+        # missed this. A substring check either way catches it without
+        # stripping a genuine "A | B" headline unrelated to the site.
+        if head and (site.casefold() in tail.casefold() or tail.casefold() in site.casefold()):
+            title = head.strip()
     fields = {"title": Field(title, "extracted"), "url": Field(p.url, "extracted"), "text": Field(text, "extracted")}
     for name, value in (("date", page.get("date")), ("author", page.get("author")), ("site_name", site)):
         value = str(value or "").strip()
