@@ -55,7 +55,8 @@
 - **叶子来源对账**：保存 Artifact / Finding 时，推导链逐叶子审计（`Store._audit`）。
   存储维护本会话的证据库——每条入库字段与推导叶子的 `(origin, value, source_id)`：
   - `database` 叶子必须对上证据库里的同 `(value, source_id)` 条目——function 插件无法
-    伪造一个"标着 database"的叶子让成品被算成已核验；
+    伪造一个"标着 database"的叶子让成品被算成已核验；叶子值作为子串出现在**同一
+    source_id** 的已存长文本里同样算出处（从判决全文/网页正文里读出的事实）；
   - `computed` 叶子必须带推导链；
   - `user` 叶子必须来自本调用经 harness 核验的切片（`UserText` 参数）、本调用的参数值，
     或已在证据库中的字段；
@@ -69,9 +70,10 @@
   参数——插件永远拿不到模型的转述版；不是用户的话时**直接放行**，由 handler 用
   `Context.provenance` 打上真实来源，不再拒绝调用（拒绝的代价曾经全落在用户头上）。
 - **值→来源解析**（`Context.provenance` → `Store.resolve`）：一个模型想写进记录的值，
-  依次对：已在库的记录字段（database 优先于 extracted 优先于 user，附来源记录编号）→
-  用户原话（`user_said` 切片）→ 都不中则**拒绝写入**：模型要么从已有记录（含 web 搜索/
-  网页读取产出的 rec_N）复制，要么引用用户原话，要么先向用户确认。`model` 仍是合法的
+  依次对：已在库记录字段的**精确匹配**（database 优先于 extracted 优先于 user，附来源
+  记录编号）→ **子串包含**（值出现在某记录的长字段里——比如从抓回的网页正文里读出的
+  事实，继承该记录的来源）→ 用户原话（`user_said` 切片）→ 都不中则**拒绝写入**：模型
+  要么从已有记录复制，要么引用用户原话，要么先向用户确认。`model` 仍是合法的
   契约来源（推导叶子层保留），但不再能悄悄写进记录。
 - "已核验"不由任何人声明：由推导链计算（`core.tool_contracts.grounding_issues`）。
   推导链叶子全为 `database` 且带 `source_id` 才算核验；一个 `user`/`extracted`/`model`
@@ -123,7 +125,7 @@
 | `crossref` | source | doi / article | `core/source_tools.py`、`core/bibliographic.py` |
 | `openlibrary` | source | isbn / book | 同上 |
 | `file` | extract | extract | `local_tools/file_extractor.py`（无模型分类调用） |
-| `web` | extract | search / fetch | Exa `/search`（API Key 在插件设置或 `.env` 的 `EXA_API_KEY`，设置栏值优先；支持最近 N 天过滤）；备选 DuckDuckGo Lite（拦截页现在会显式报错，连续空结果会告警）；页面读取走 `llm_api.deepseek_api.extract_from_url`（SSRF 防护 + trafilatura，确定性），抓到的页面连 `date` / `author` / `site_name` 一起存为 extracted 记录 |
+| `web` | extract | search / fetch | Exa `/search`（API Key 在插件设置或 `.env` 的 `EXA_API_KEY`，设置栏值优先；支持最近 N 天过滤）；备选 DuckDuckGo Lite（拦截页现在会显式报错，连续空结果会告警）；页面读取走 `llm_api.deepseek_api.extract_from_url`（SSRF 防护 + trafilatura，确定性），抓到的页面连 `date` / `author` / `site_name` 一起存为 extracted 记录；反爬挑战页（Anubis / Cloudflare 等）直接报错拒绝，不入库 |
 | `mcgill` | function | cite / missing | `core/mcgill_format.py`、`mcgill_rules.json` |
 | `quote` | function | check | `core/quote_check.py` |
 | `bibliography` | function | build | `core/bibliography.py` |

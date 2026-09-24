@@ -254,6 +254,50 @@ def test_an_extracted_leaf_needs_session_evidence():
     ctx.save(Artifact("x", "y", Derivation((Field("scanned text", "extracted"),), "cite.render.v1")))
 
 
+def test_a_leaf_read_out_of_a_stored_page_passes_the_audit():
+    """A fact contained in a stored page's text traces to that page -- the
+    Donoghue year read out of a fetched case report is sourced, not invented.
+    A value the page never says still does not trace."""
+    h, session = make()
+    session.records.put(Record("website", {
+        "text": Field("Case report 1932 HL. Donoghue v. Stevenson. 26 May 1932. Lord Atkin.",
+                      "extracted", source_id="https://case.report"),
+    }, "web", "https://case.report"))
+    ctx = ctx_for(h, session, "mcgill")
+    ref = ctx.save(Artifact("citation_text", "26 May 1932",
+                            Derivation((Field("26 May 1932", "extracted", source_id="https://case.report"),),
+                                       "cite.render.v1", ("date",))))
+    assert ref == "art_2"
+    with pytest.raises(Exception) as exc:
+        ctx.save(Artifact("x", "y", Derivation(
+            (Field("31 December 2099", "extracted", source_id="https://case.report"),), "cite.render.v1")))
+    assert "没有出处" in str(exc.value)
+
+
+def test_a_database_leaf_quoted_from_stored_full_text_passes():
+    """Same rule for database full text: a quotation located in the stored
+    judgment traces to the same source id."""
+    h, session = make()
+    session.records.put(Record("jurisprudence", {
+        "full_text": Field(TEXT, "database", source_id=URL),
+    }, "a2aj", "c1"))
+    ctx = ctx_for(h, session, "mcgill")
+    ctx.save(Artifact("x", "y", Derivation(
+        (Field("conditional sentencing regime in 1996", "database", source_id=URL),), "cite.render.v1")))
+
+
+def test_a_database_leaf_from_a_different_source_id_still_fails():
+    h, session = make()
+    session.records.put(Record("jurisprudence", {
+        "full_text": Field(TEXT, "database", source_id=URL),
+    }, "a2aj", "c1"))
+    ctx = ctx_for(h, session, "mcgill")
+    with pytest.raises(Exception) as exc:
+        ctx.save(Artifact("x", "y", Derivation(
+            (Field("conditional sentencing regime in 1996", "database", source_id="a2aj:other"),), "cite.render.v1")))
+    assert "没有出处" in str(exc.value)
+
+
 def test_every_record_type_a_source_produces_has_a_mcgill_rule():
     """A data source's record is citable from its own fields -- never by
     making the user retype them as unverified user fields."""

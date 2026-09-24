@@ -395,6 +395,31 @@ def test_add_field_refuses_a_value_with_no_source(harness):
     assert copied.content["origin"] == "database" and copied.content["from_ref"] == "rec_3"
 
 
+def test_add_field_accepts_a_value_read_out_of_a_stored_page(harness):
+    """The Donoghue case: the model read the year out of a fetched page.
+    A value contained in a stored record's text is a copy from that source,
+    not an invention."""
+    from core.tool_contracts import Field, Record
+
+    session, _ = harness.sessions.start()
+    add_field, new_record = harness_core.BUILTIN_TOOLS
+    ref = harness._run_builtin(session, new_record, {"record_type": "foreign"}, "record__new")[1].content["ref"]
+    session.records.put(Record("website", {
+        "title": Field("Donoghue v Stevenson Case Resources", "extracted", source_id="https://case.report"),
+        "text": Field("Case report 1932 HL. Donoghue v. Stevenson. 26 May 1932. Lord Atkin.",
+                      "extracted", source_id="https://case.report"),
+    }, "web", "https://case.report"))
+    copied = harness._run_builtin(session, add_field,
+                                  {"ref": ref, "field": "year", "value": "26 May 1932"},
+                                  "record__add_field")[1]
+    assert copied.content["origin"] == "extracted" and copied.content["from_ref"] == "rec_2"
+    # A value the page never says is still refused.
+    refused = harness._run_builtin(session, add_field,
+                                   {"ref": ref, "field": "year", "value": "31 December 2099"},
+                                   "record__add_field")[1]
+    assert "找不到来源" in refused.content["error"]
+
+
 def test_record_new_wants_a_web_search_first_when_web_is_enabled(tmp_path):
     """Giving up on the databases is only allowed after the web was tried."""
     from harness.plugin import discover
