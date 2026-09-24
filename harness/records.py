@@ -10,10 +10,10 @@ Two gates live here:
 
 - **Category vs. origins** (§3.2 of the blueprint): a data source may only
   produce ``database`` fields, an extraction plugin only ``extracted`` fields,
-  a function plugin only Artifacts / Findings. The built-in ``record.*`` tools
-  are the only writers of ``user`` fields, and only from values this session
-  can source -- a copied record field or the user's own words; anything else
-  is refused before it reaches a record (``Context.provenance``).
+  a function plugin only Artifacts / Findings. The built-in
+  ``record__compose`` is the only writer of ``user`` fields: a field inherits
+  an origin only when the model names its source and quotes it, and the
+  quote checks out; anything else is written as ``model``, never refused.
 - **Leaf provenance**: every derivation chain of a saved Artifact or Finding
   is walked leaf by leaf and audited against the store's own evidence --
   what data sources and extraction plugins have actually put into *this*
@@ -260,23 +260,6 @@ class Store:
             return Field(value, "model"), ""
         _, ref, field = best
         return Field(value, field.origin, source_id=field.source_id), ref
-
-    def add_field(self, record: Record, field: str, item: Field) -> Record:
-        """A new record version with one field written from outside.
-
-        The caller resolves the field's honest origin first
-        (``Context.provenance``): copied from a stored record, the user's own
-        words, or the model itself. Nothing is refused -- an honest origin is
-        what makes a fabricated value visible instead of fatal.
-        """
-        name = str(field).strip()
-        if not name:
-            raise ValueError("A field name is required.")
-        return Record(record.source_type, {**record.fields, name: item},
-                      record.provider, record.record_id)
-
-    def new_record(self, source_type: str) -> Record:
-        return Record(str(source_type).strip() or "unknown", {}, "user", "blank")
 
 
 def _clip(value: str, limit: int = 300) -> str:

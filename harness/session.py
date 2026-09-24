@@ -180,6 +180,20 @@ class SessionStore:
             else:
                 kept += 1
 
+    def delete(self, session_id: str) -> None:
+        """Forget a session for good: dropped from memory, its file and
+        uploaded attachments removed from disk. No chat-history feature
+        exists yet, so a "New chat" click deletes the old session outright
+        rather than leaving it to expire on its own -- nothing lingers for
+        a later turn to accidentally inherit."""
+        with self._lock:
+            self._sessions.pop(session_id, None)
+        if self.store_dir is None:
+            return
+        path = self.store_dir / f"{session_id}.json"
+        path.unlink(missing_ok=True)
+        self._drop_attachments(path)
+
     def _drop_attachments(self, session_file: Path) -> None:
         try:
             import shutil

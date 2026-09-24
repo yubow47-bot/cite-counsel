@@ -139,6 +139,34 @@ class _ThinkSniffer:
         return []
 
 
+def _plain_schema(schema: dict) -> dict:
+    """A tool's JSON schema with every ``$ref`` inlined, schema titles
+    dropped, and ``anyOf [X, null]`` (an optional field) collapsed to X --
+    nested parameters (record__compose's per-field objects) reach the model
+    spelled out instead of behind a reference some providers do not follow."""
+    defs = schema.get("$defs", {})
+
+    def walk(node, properties=False):
+        if isinstance(node, list):
+            return [walk(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+        if properties:                       # keys here are field names, not keywords
+            return {name: walk(value) for name, value in node.items()}
+        if "$ref" in node:
+            return walk(defs[node["$ref"].rsplit("/", 1)[-1]])
+        out = {key: walk(value, key == "properties") for key, value in node.items()
+               if key not in ("$defs", "title")}
+        options = out.get("anyOf")
+        if isinstance(options, list):
+            kept = [option for option in options if option.get("type") != "null"]
+            if len(kept) == 1:
+                out = {**kept[0], **{k: v for k, v in out.items() if k != "anyOf"}}
+        return out
+
+    return walk(schema)
+
+
 def _call_name(call: dict) -> str:
     return (call.get("function") or {}).get("name") or ""
 
@@ -174,142 +202,148 @@ class _Builtin:
         self.name, self.description, self.params, self.handler = name, description, params, handler
 
 
-# ── Harness-owned record tools (§4.2 of the blueprint) ────────────────
-
-
-class AddField(BaseModel):
-    """Write one field, saying where it came from when you know.
-
-    ``value`` is what to write; ``from_ref`` / ``from_field`` point at the
-    record it was read from. The source is a label, never a gate: the harness
-    looks for the value in the named record, then in every stored record,
-    then in the user's words, and whatever it finds becomes the field's
-    origin. A value found nowhere is still written, marked ``model`` --
-    shown as unverified, never refused.
-    """
-
-    ref: str = Field(description="The record to extend, e.g. rec_3")
-    field: str = Field(min_length=1, max_length=40, description="The field name, e.g. place or pinpoint")
-    value: str | None = Field(default=None, min_length=1, max_length=500,
-                              description="The value to write. Leave it out to copy from_field whole.")
-    from_ref: str | None = Field(default=None, max_length=20,
-                                 description="Where the value came from, e.g. rec_2 (a database, web or file record)")
-    from_field: str | None = Field(default=None, max_length=40,
-                                   description="The field on from_ref holding the value, e.g. date or text")
+# ── Harness-owned record tool (§4.2 of the blueprint) ─────────────────
 
 
 _RECORD_TYPES = tuple(sorted(mcgill_format.schemas().keys()))
+# Types whose citation stands for a decision or an enactment itself; built
+# only from news or web text, such a record cites a report, not the source.
+_AUTHORITY_TYPES = {"jurisprudence", "legislation", "bill", "treaty", "foreign", "by_law"}
 
 
-class NewRecord(BaseModel):
-    record_type: Literal[_RECORD_TYPES] = Field(
-        description="The kind of source, matching what the citation plugin renders it as "
-                    "(jurisprudence for a case, journal_article for an article, website for a webpage)")
+class ComposeField(BaseModel):
+    value: str = Field(min_length=1, max_length=500, description="What goes in the field")
+    source: str | None = Field(default=None, max_length=20,
+                               description="Where you read it: a record ref (rec_N), or \"user\" for the user's "
+                                           "own words. Leave out when it has no source.")
+    quote: str | None = Field(default=None, max_length=2000,
+                              description="The exact words in that source that contain the value, copied. "
+                                          "Leave out when the value is the whole source field.")
+
+
+class Compose(BaseModel):
+    record_type: Literal[_RECORD_TYPES] | None = Field(
+        default=None, description="The kind of source, as the citation plugin renders it (jurisprudence for a "
+                                  "case, journal_article for an article, website for a web page)")
+    base_ref: str | None = Field(default=None, max_length=20,
+                                 description="An existing record to add fields to or correct; its other fields "
+                                             "are kept")
+    fields: dict[str, ComposeField] = Field(description="Every field to write, in this one call")
 
 
 _FIELD_STATUS = {
     "database": "Verified (traces to the database)",
-    "extracted": "Unverified (from a file extraction)",
+    "extracted": "Unverified (extracted from a page or file)",
     "user": "Unverified (added by you)",
     "model": "Unverified (written by the model, not checked)",
 }
 
 
-def _from_named(ctx, p: AddField) -> tuple[EvidenceField, str] | None:
-    """The value as found in the record the model named: the whole field when
-    no value is given, or the value read out of that record's text."""
-    if not p.from_ref:
-        return None
+def _evidence(ctx, value: str, source: str | None, quote: str | None) -> tuple[EvidenceField, str, str]:
+    """(field, source ref, why unverified). A field inherits a source's origin
+    only when the model names the source and quotes it: the quote must be in
+    that source and the value inside the quote. No guessing across records."""
+    if not source:
+        return EvidenceField(value, "model"), "", "no source was given"
+    evidence = quote or value
+    if _probe(value) not in _probe(evidence):
+        return EvidenceField(value, "model"), "", "the value is not inside the quote"
+    if source.strip().lower() == "user":
+        if ctx.user_said(evidence):
+            return EvidenceField(value, "user"), "", ""
+        return EvidenceField(value, "model"), "", "those words are not in the user's messages"
     try:
-        source = ctx.records.get(p.from_ref, Record)
-    except Exception:
-        return None
-    fields = ([source.fields[p.from_field]] if p.from_field in source.fields
-              else list(source.fields.values()))
-    if p.value is None:
-        if p.from_field in source.fields:
-            return source.fields[p.from_field], p.from_ref
-        return None
-    probe = _probe(p.value)
-    for found in fields:
-        if found.origin != "model" and probe and probe in _probe(found.value):
-            return EvidenceField(p.value, found.origin, source_id=found.source_id), p.from_ref
-    return None
+        record = ctx.records.get(source, Record)
+    except ValueError:
+        return EvidenceField(value, "model"), "", f"{source} is not a record in this conversation"
+    probe = _probe(evidence)
+    for found in record.fields.values():
+        if found.origin != "model" and probe in _probe(found.value):
+            return EvidenceField(value, found.origin, source_id=found.source_id), source, ""
+    return EvidenceField(value, "model"), "", f"the quote is not in {source}"
 
 
-def _add_field(ctx, p: AddField) -> Result:
-    record = ctx.records.get(p.ref, Record)
-    named = _from_named(ctx, p)
-    if named:
-        field, from_ref = named
-    elif p.value is not None:
-        field, from_ref = ctx.provenance(p.value)
-    else:
-        raise ValueError(f"Nothing to write: pass value, or from_ref + from_field naming an existing field "
-                         f"({p.from_ref or '?'} has no field {p.from_field or '?'}).")
-    updated = ctx.records.add_field(record, p.field, field)
-    ref = ctx.save(updated, supersedes=p.ref)
-    source = {"database": "database field", "extracted": "web/file extraction", "user": "your own words"}.get(field.origin, "written by the model")
-    origin_note = f"{from_ref}（{source}）" if from_ref and field.origin != "user" else source
-    note = ("the value is stored with its true origin; the citation is verified only while every field "
-            "traces to a database. To add another field, use this ref -- not the one you passed in.")
-    if field.origin == "model":
-        note += (" This value was not found in any stored record or the user's messages, so it is marked "
-                 "model-supplied (unverified). If you read it from a record, pass that record as from_ref.")
+def _compose(ctx, p: Compose) -> Result:
+    if not p.fields:
+        raise ValueError("Give at least one field.")
+    base = ctx.records.get(p.base_ref, Record) if p.base_ref else None
+    if base is None:
+        harness = ctx._harness
+        web_available = "web" in harness.config["enabled"] or "web" in ctx.session.loaded
+        if web_available and not ctx.session.web_search_used:
+            # A new record is for a source the databases lack; the web is tried first.
+            return Result(
+                {"error": "Not found in the databases, and you have not tried a web search yet. Call "
+                          "web__search first; compose a record only if that finds nothing citable."},
+                [{"type": "notice", "level": "warning",
+                  "text": "No web search has been tried yet, so no record was composed. Try web__search first."}])
+    record_type = p.record_type or (base.source_type if base else None)
+    if not record_type:
+        raise ValueError("Give record_type, or base_ref to extend an existing record.")
+    if base is not None and p.record_type and p.record_type != base.source_type:
+        raise ValueError(f"{p.base_ref} is a {base.source_type} record, not {p.record_type}.")
+    fields = dict(base.fields) if base else {}
+    written, rejected = {}, {}
+    for name, item in p.fields.items():
+        problem = mcgill_format.field_problem(record_type, name, item.value)
+        if problem:
+            rejected[name] = problem
+            continue
+        value = re.sub(r"\s+", " ", item.value).strip()
+        field, from_ref, why = _evidence(ctx, value, item.source, item.quote)
+        fields[name] = field
+        written[name] = {"value": value, "origin": field.origin, "from_ref": from_ref,
+                         **({"unverified_because": why} if why else {})}
+    if not written:
+        return Result({"error": "nothing was written: every field was rejected", "rejected": rejected},
+                      [{"type": "notice", "level": "warning",
+                        "text": "No record was written: " + "; ".join(f"{k}: {v}" for k, v in rejected.items())}])
+    record = Record(record_type, fields, base.provider if base else "user", base.record_id if base else "blank")
+    ref = ctx.save(record, supersedes=p.base_ref) if base else ctx.save(record)
+    missing = mcgill_format.missing_summary(record_type, {n: f.value for n, f in fields.items()})
+    warnings = []
+    if record_type in _AUTHORITY_TYPES and not any(f.origin in ("database", "user") for f in fields.values()):
+        sources = sorted({w["from_ref"] for w in written.values() if w["from_ref"]})
+        if not sources:
+            # Nothing was quoted: point at the pages and files this session holds.
+            sources = [r for r, obj in ctx.records.all(Record)
+                       if obj.source_type in ("website", "news_online", "document")][-3:]
+        warnings.append(
+            f"No field of this {record_type} record comes from a database or the user. A citation built from "
+            f"news or web text is not a citation of the {record_type} itself: if the only source is a report "
+            f"or a page, cite that record directly" + (f" ({', '.join(sources)})" if sources else "")
+            + " and tell the user no reported source was found.")
+    rows = []
+    for name, entry in written.items():
+        label = _FIELD_STATUS[entry["origin"]] + (f" — {entry['from_ref']}" if entry["from_ref"] else "")
+        rows.append([name, f"{entry['value']}  ·  {label}"])
+    rows += [["✕ " + name, reason] for name, reason in rejected.items()]
+    if missing:
+        rows.append(["Still missing", missing])
     return Result(
-        {"ref": ref, "field": p.field, "value": field.value, "origin": field.origin, "from_ref": from_ref,
-         "note": note},
-        [{"type": "card", "title": f"Wrote {p.field}",
-          "rows": [[p.field, field.value], ["Source", origin_note], ["Status", _FIELD_STATUS[field.origin]]],
-          "note": "The field's source is recorded honestly: one copied from a record carries its ref; one "
-                  "the model supplied is labelled as such. Citations still render, but one that includes a "
-                  "non-database field is not marked verified."}])
-
-
-def _new_record(ctx, p: NewRecord) -> Result:
-    harness = ctx._harness
-    web_available = "web" in harness.config["enabled"] or "web" in ctx.session.loaded
-    if web_available and not ctx.session.web_search_used:
-        # Giving up on the databases is allowed only after the web was tried;
-        # a session that never searched would fabricate its way to a record.
-        return Result(
-            {"error": "Not found in the databases, and you have not tried a web search yet. Call "
-                      "web__search first; come back to open a blank record if that finds nothing."},
-            [{"type": "notice", "level": "warning",
-              "text": "No web search has been tried yet, so no blank record was opened. Try web__search first."}])
-    record = ctx.records.new_record(p.record_type)
-    ref = ctx.records.put(record)
-    field_names = [f["name"] for f in mcgill_format.schema_fields(p.record_type)]
-    return Result(
-        {"ref": ref, "record_type": record.source_type, "fields": {},
-         "fields_this_type_takes": field_names,
-         "note": "an empty record; write its fields with record__add_field -- copy each value from the "
-                "records already on screen (it keeps its database origin) or from the user's words"},
-        [{"type": "card", "title": f"New blank record · {p.record_type}", "rows": [["Ref", ref]],
-          "note": "Not found in the databases. This record can be filled in directly (record__add_field): "
-                  "prefer copying field values from records already on screen, then the user's own words; "
-                  "each value is labelled with its real source honestly. If something is still missing, ask "
-                  "the user to type it in directly (" + ", ".join(field_names) + ")."}])
+        {"ref": ref, "record_type": record_type, "written": written, "rejected": rejected, "missing": missing,
+         "warnings": warnings,
+         "note": "cite this ref with the citation plugin; rejected fields were not written -- fix their shape "
+                 "or leave them out. A field is verified only when it traces to a database."},
+        [{"type": "card", "title": f"Composed record · {record_type} · {ref}", "rows": rows,
+          "note": " ".join(warnings) or "Each field shows where it came from. Citations still render; one with "
+                                       "a non-database field is not marked verified."}])
 
 
 BUILTIN_TOOLS = (
-    _Builtin("record__add_field",
-             "Write a value into a stored record. Pass value, and when you read it from a record say which: "
-             "from_ref (e.g. rec_2) and from_field (e.g. text for a fact inside a fetched page, date for the "
-             "page's date). A value found in that record keeps its origin, so the citation can stay verified; "
-             "omit value to copy from_field whole. A value found nowhere is still written, marked "
-             "model-supplied and unverified -- prefer copying from a record or the user's words. Each call "
-             "returns a NEW ref for the updated record. To fill several fields on the SAME record, you may "
-             "call this more than once in the same turn, all against the SAME starting ref -- the calls run "
-             "one after another, not at once, so each sees what the last one wrote; there is no need to wait "
-             "for one result before writing the next call. The one thing that does not work in a batch: a "
-             "from_ref/from_field pointing at a field ANOTHER call in this same turn is writing -- that value "
-             "does not exist yet. Only copy from records that already existed before this turn.",
-             AddField, _add_field),
-    _Builtin("record__new",
-             "Create an empty record for a source the databases do not have, for you and the user to fill in. "
-             "When the web plugin is enabled, it is refused until you have called web__search once this session.",
-             NewRecord, _new_record),
+    _Builtin("record__compose",
+             "Build a citation record in one call, for a source no stored record already covers. First: if a "
+             "stored record already IS the source (a fetched page, an extracted file, a database hit), cite that "
+             "record directly -- do not rebuild it. Pass record_type and every field at once, each as "
+             "{value, source, quote}: source is the record you read the value from (rec_N) or \"user\" for the "
+             "user's own words; quote is the exact words in that source containing the value. A field whose "
+             "quote checks out keeps that source's origin; one without a source is written as model-supplied, "
+             "unverified. A value in the wrong shape for its field (a sentence where a citation number goes, a "
+             "year that is not four digits) is not written and the result says why -- fix it or leave it out. "
+             "Never write a citation number (neutral_citation, reporter) you do not actually have. Pass base_ref "
+             "to add or correct fields on an existing record; the new version replaces it. When the web plugin "
+             "is enabled, a new record is refused until web__search has run once this session.",
+             Compose, _compose),
 )
 
 
@@ -454,15 +488,13 @@ class Harness:
             "Results the tools show the user are authoritative. Do not restate or alter their facts "
             "in your reply, and never invent facts, sources, citations, dates or numbers. If no "
             "plugin can do what is asked, say so plainly.",
-            "When you write a value into a record, name where it came from -- a record on screen "
-            "(from_ref/from_field) or the user's own words. A value from neither is still written, but "
-            "it is marked model-supplied and the citation reports itself unverified -- prefer a real "
-            "source when one is on screen.",
+            "Cite what you actually found. A stored record -- a database hit, a fetched page, an extracted "
+            "file -- is citable as it is: cite it directly. Build a record with record__compose only when "
+            "no stored record is the source, and then quote, for each field, the words you read it from.",
             "When a lookup finds nothing, do not give up yet: search again in another form (the citation "
-            "alone, the name alone), or load another plugin that could plausibly hold it. If the web plugin "
-            "is enabled, you must call web__search at least once before record__new will open an empty "
-            "record. After searching in vain: start the record, copy what you can from the records on "
-            "screen, and ask the user for exactly the fields still missing.",
+            "alone, the name alone), or load another plugin that could plausibly hold it. If what you find "
+            "is only a report about a source (a news story about a decision), say that the source itself "
+            "was not found and offer to cite the report -- do not present the report as the decision.",
         ]
         latest = next((t for t in reversed(session.user_texts()) if t.strip()), "")
         # Chinese characters in the latest message are the one clear signal;
@@ -499,22 +531,39 @@ class Harness:
             if plugin.name not in session.loaded:
                 continue
             for tool in plugin.tools:
-                schema = tool.params.model_json_schema()
-                schema.pop("title", None)
                 specs.append({"type": "function", "function": {
-                    "name": plugin.name + SEP + tool.name, "description": tool.description, "parameters": schema}})
+                    "name": plugin.name + SEP + tool.name, "description": tool.description,
+                    "parameters": _plain_schema(tool.params.model_json_schema())}})
         for spec in BUILTIN_TOOLS:
             specs.append({"type": "function", "function": {
                 "name": spec.name, "description": spec.description,
-                "parameters": spec.params.model_json_schema()}})
+                "parameters": _plain_schema(spec.params.model_json_schema())}})
         return specs
 
     def _history(self, session: Session) -> list[dict]:
-        messages = session.messages[-HISTORY_LIMIT:]
-        # Never start inside a tool exchange: begin at a user message.
-        while messages and messages[0].get("role") != "user":
-            messages = messages[1:]
-        return [_strip_private(m) for m in messages]
+        """The model-visible slice: whole turns only, most recent last.
+
+        A turn starts at its own user message and is never cut mid-way, no
+        matter how many tool rounds it took. The old version sliced the
+        last HISTORY_LIMIT messages first and only then trimmed forward to
+        the next user message -- so a turn with more tool rounds than
+        HISTORY_LIMIT (a long search-then-compose-then-cite
+        chain) produced a window with no user message in it at all, and
+        every message in it got trimmed away. The next call then got the
+        system prompt alone, looking like a brand new conversation, with
+        the turn actually in progress simply gone. HISTORY_LIMIT is now a
+        soft budget: earlier whole turns are added while there is room,
+        oldest first to drop, but the current turn is always kept whole.
+        """
+        user_indices = [i for i, m in enumerate(session.messages) if m.get("role") == "user"]
+        if not user_indices:
+            return []
+        start = user_indices[-1]
+        for idx in reversed(user_indices[:-1]):
+            if len(session.messages) - idx > HISTORY_LIMIT:
+                break
+            start = idx
+        return [_strip_private(m) for m in session.messages[start:]]
 
     def _execute(self, session: Session, call: dict) -> tuple[str, Result]:
         function = call.get("function") or {}

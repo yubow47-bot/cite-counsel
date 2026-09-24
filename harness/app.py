@@ -209,6 +209,17 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
         return StreamingResponse(frames(), media_type="text/event-stream",
                                  headers={"X-Accel-Buffering": "no"})
 
+    @app.post("/api/sessions/close")
+    def close_session(body: SessionRef):
+        # No chat-history feature exists yet, so "New chat" deletes the old
+        # session outright instead of leaving it to expire on its own --
+        # the token proves the caller actually owns it (session_for with
+        # create=False returns None for a wrong or already-gone one).
+        session, _ = session_for(body, create=False)
+        if session is not None:
+            harness.sessions.delete(session.id)
+        return {"ok": True}
+
     @app.post("/api/actions/{plugin}/{action}")
     async def action(plugin: str, action: str, body: Action):
         session, _ = session_for(body, create=False)

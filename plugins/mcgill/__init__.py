@@ -88,11 +88,12 @@ def missing(ctx, p: MissingParams) -> Result:
     missing_fields = mcgill_format.missing_required(record.source_type, values)
     if gap:
         return Result({"ref": p.ref, "missing": gap,
-                       "note": "write the values you have with record__add_field -- copy from a record on "
-                              "screen or ask the user; a copied database value keeps the record verified"},
+                       "note": "add the values you have with record__compose (base_ref=this record), quoting "
+                              "the record or the user's words each came from; if a value is not available, "
+                              "tell the user instead of inventing it"},
                       [{"type": "card", "title": "Fields still missing",
                         "rows": [["Record", p.ref], ["Missing", gap],
-                                 ["How to add them", "Copy from an existing record, or ask the user to type it in"]],
+                                 ["How to add them", "Quote them from a record on screen, or ask the user to type them in"]],
                         "note": "Fields are recorded with their true source; a citation with a non-database "
                                 "field is not marked verified."}])
     return Result({"ref": p.ref, "missing": [], "note": "the record has every required field; cite it"},
@@ -108,8 +109,10 @@ PLUGIN = Plugin(
                  "preferred: it is deterministic, stamps verified from the derivation, and the artifact "
                  "can join a bibliography. You may also write a citation yourself from a record's fields, "
                  "following the McGill rules -- say which record it came from. When fields are missing, "
-                 "write the values you have with record__add_field (copied from a record on screen, or "
-                 "the user's words); the citation then reports unverified, which is correct.",
+                 "add the values you have with record__compose (base_ref=the record), quoting where each "
+                 "came from; the citation then reports unverified, which is correct. A web page or file "
+                 "record is citable as it is -- cite it directly rather than rebuilding it. If a case has "
+                 "no reported citation yet, say so and offer to cite the news report instead.",
     tools=[Tool("cite", "Render a McGill citation from a stored record.", CiteParams, cite),
            Tool("missing", "List the fields a record still needs before it can be cited.", MissingParams, missing)],
     category="function",

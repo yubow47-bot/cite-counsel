@@ -124,10 +124,10 @@ def search(ctx, p: SearchParams) -> Result:
                                 "text": "Exa is selected but no API key is set. Add EXA_API_KEY=your-key to "
                                         ".env, or paste it under the \"Web search\" plugin in the settings "
                                         "bar."}], final=True)
-            ctx.session.web_search_used = True   # a real attempt: even a failed one counts (record__new)
+            ctx.session.web_search_used = True   # a real attempt: even a failed one counts (record__compose)
             results = exa_search(p.query, 6, api_key, p.latest_days)
         else:
-            ctx.session.web_search_used = True   # a real attempt: even a blocked one counts (record__new)
+            ctx.session.web_search_used = True   # a real attempt: even a blocked one counts (record__compose)
             results = duckduckgo_lite(p.query, 6)
     except ValueError:
         raise
