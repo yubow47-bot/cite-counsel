@@ -12,8 +12,10 @@ The loop is the whole of the harness's intelligence:
    in words, so the turn cannot spin into more tool calls.
 
 The one rule the harness itself enforces: what the user is shown as a result
-comes from tool blocks. The model's prose is a caption, and each loaded plugin
-may veto it (``reply_guard``).
+comes from tool blocks. The model's prose is a caption, and the harness does
+not veto it -- it stamps every fact in it with its source
+(``harness.grounding``): matched facts carry the record they came from,
+unmatched ones are reported as unsourced and still shown.
 """
 
 from __future__ import annotations
@@ -47,8 +49,8 @@ FOLLOW_UP = (
     "(they asked for a citation and you only have the record, say), take it with the tools. Otherwise "
     "reply to the user in one to three sentences: what you found or did, and what they can do next (e.g. which candidate is most likely what they "
     "meant, and that they can pick it). You may mention facts that appear in the tool results; do not "
-    "add any that do not. Never write out a full citation yourself: the card shows the exact text, so "
-    "refer to it by name and date only.")
+    "add any that do not. Render a citation with the cite tool when you can; you may also write one "
+    "yourself from a record's fields, following the McGill rules -- say which record it came from.")
 
 
 def _call_name(call: dict) -> str:
@@ -89,11 +91,12 @@ class _Builtin:
 # ── Harness-owned record tools (§4.2 of the blueprint) ────────────────
 
 
-class AddUserField(BaseModel):
+class AddField(BaseModel):
     ref: str = Field(description="The record to extend, e.g. rec_3")
     field: str = Field(min_length=1, max_length=40, description="The field name, e.g. place or pinpoint")
-    text: UserText = Field(min_length=1, max_length=500,
-                           description="What the user said, copied from their messages; they must have written it")
+    value: str = Field(min_length=1, max_length=500,
+                       description="The value, copied faithfully from where it comes from: another "
+                                   "record's fields on screen (best), or the user's own words")
 
 
 _RECORD_TYPES = tuple(sorted(mcgill_format.schemas().keys()))
@@ -105,42 +108,70 @@ class NewRecord(BaseModel):
                     "(jurisprudence for a case, journal_article for an article, website for a webpage)")
 
 
-def _add_user_field(ctx, p: AddUserField) -> Result:
+_FIELD_STATUS = {
+    "database": "已核验（字段可溯源到数据库）",
+    "extracted": "未核验（来自文件提取）",
+    "user": "未核验（用户补充）",
+    "model": "未核验（模型填写，未经核实）",
+}
+
+
+def _add_field(ctx, p: AddField) -> Result:
     record = ctx.records.get(p.ref, Record)
-    updated = ctx.records.add_user_field(record, p.field, p.text)
+    field, from_ref = ctx.provenance(p.value)
+    updated = ctx.records.add_field(record, p.field, field)
     ref = ctx.save(updated, supersedes=p.ref)
+    source = {"database": "数据库字段", "extracted": "文件提取", "user": "你的原话"}.get(field.origin, "模型填写")
+    origin_note = f"{from_ref}（{source}）" if from_ref and field.origin != "user" else source
     return Result(
-        {"ref": ref, "field": p.field, "value": p.text, "origin": "user",
-         "note": "from the user's own words; the record is not verified while it has user fields. "
-                "To add another field to this same record, use this ref -- not the one you just passed in."},
-        [{"type": "card", "title": f"已补充 {p.field}", "rows": [[p.field, p.text],
-         ["来源", "你的原话"], ["核验状态", "未核验（含用户补充字段）"]]}])
+        {"ref": ref, "field": p.field, "value": p.value, "origin": field.origin, "from_ref": from_ref,
+         "note": "the value is stored with its true origin; the citation is verified only while every "
+                "field traces to a database. To add another field, use this ref -- not the one you "
+                "passed in."},
+        [{"type": "card", "title": f"已写入 {p.field}",
+          "rows": [[p.field, p.value], ["来源", origin_note], ["核验状态", _FIELD_STATUS[field.origin]]],
+          "note": "字段来源照实记录：来自某条记录的会附上编号；模型自己填的会明确标出，引用不受影响，"
+                  "但含它的引文不会标记为已核验。"}])
 
 
 def _new_record(ctx, p: NewRecord) -> Result:
+    harness = ctx._harness
+    web_available = "web" in harness.config["enabled"] or "web" in ctx.session.loaded
+    if web_available and not ctx.session.web_search_used:
+        # Giving up on the databases is allowed only after the web was tried;
+        # a session that never searched would fabricate its way to a record.
+        return Result(
+            {"error": "数据库里没找到，但你还没有尝试网络搜索。先调用 web__search 找找看，"
+                      "找不到再回来建空记录。"},
+            [{"type": "notice", "level": "warning",
+              "text": "还没尝试过网络搜索，暂不新建空记录。请先 web__search。"}])
     record = ctx.records.new_record(p.record_type)
     ref = ctx.records.put(record)
     field_names = [f["name"] for f in mcgill_format.schema_fields(p.record_type)]
     return Result(
         {"ref": ref, "record_type": record.source_type, "fields": {},
          "fields_this_type_takes": field_names,
-         "note": "an empty record from the user; call record__add_user_field once per field above, "
-                "using these exact field names -- a name outside this list will not render"},
+         "note": "an empty record; write its fields with record__add_field -- copy each value from the "
+                "records already on screen (it keeps its database origin) or from the user's words"},
         [{"type": "card", "title": f"新建空白记录 · {p.record_type}", "rows": [["编号", ref]],
-         "note": "数据库里没有找到。请告诉我要写入的字段（" + "、".join(field_names) +
-                 "），我会逐项记录为你的补充。"}])
+          "note": "数据库里没有找到。这个记录可以直接由你填写（record__add_field）：优先从屏幕上已有的记录"
+                  "复制字段值，其次是用户原话；每个值都会照实标记来源。需要用户补的，让用户直接在输入框里"
+                  "写（" + "、".join(field_names) + "）。"}])
 
 
 BUILTIN_TOOLS = (
-    _Builtin("record__add_user_field",
-             "Write a field the user themselves supplied into a stored record. The text must be copied "
-             "from the user's messages; it is refused otherwise. Each call returns a NEW ref for the "
-             "updated record -- to add a second field, call this again with THAT ref, not the one you "
+    _Builtin("record__add_field",
+             "Write a value into a stored record. Copy it faithfully from where it comes from -- another "
+             "record's fields on screen (best: the copy keeps its database origin and the citation stays "
+             "verified), or the user's own words. The value is REFUSED when it is neither: the harness will "
+             "not record a value the model supplied from its own memory. Each call returns a NEW ref for "
+             "the updated record -- to add a second field, call this again with THAT ref, not the one you "
              "started with. Do not call this twice in the same turn against the same record: the second "
              "call would not see the first one's field.",
-             AddUserField, _add_user_field),
+             AddField, _add_field),
     _Builtin("record__new",
-             "Create an empty record for a source the databases do not have, for the user to fill in.",
+             "Create an empty record for a source the databases do not have, for you and the user to fill in. "
+             "When the web plugin is enabled, it is refused until you have called web__search once this session.",
              NewRecord, _new_record),
 )
 
@@ -285,10 +316,14 @@ class Harness:
             "Results the tools show the user are authoritative. Do not restate or alter their facts "
             "in your reply, and never invent facts, sources, citations, dates or numbers. If no "
             "plugin can do what is asked, say so plainly.",
-            "Tool arguments that stand for something the user wrote must be copied from the user's words.",
+            "When you write a value into a record, copy it faithfully from its source -- a record on "
+            "screen or the user's own words. A value that is neither is refused: never fill a field "
+            "from your own memory.",
             "When a lookup finds nothing, do not give up yet: search again in another form (the citation "
-            "alone, the name alone), or load another plugin that could plausibly hold it. Only after those "
-            "fail, start a record with record__new and ask the user for exactly the fields it still lacks.",
+            "alone, the name alone), or load another plugin that could plausibly hold it. If the web plugin "
+            "is enabled, you must call web__search at least once before record__new will open an empty "
+            "record. After searching in vain: start the record, copy what you can from the records on "
+            "screen, and ask the user for exactly the fields still missing.",
         ]
         latest = next((t for t in reversed(session.user_texts()) if t.strip()), "")
         # A bare case name ("gladue") says nothing about the user's language; the
@@ -340,24 +375,6 @@ class Harness:
         while messages and messages[0].get("role") != "user":
             messages = messages[1:]
         return [_strip_private(m) for m in messages]
-
-    def _ground(self, session: Session) -> str:
-        """Everything a fact in prose may be traced to: the user's words and
-        every tool result shown this session -- not the model's own prose,
-        which could otherwise launder an invented fact into 'already said'."""
-        return " ".join(session.user_texts()
-                        + [m.get("content") or "" for m in session.messages if m.get("role") == "tool"])
-
-    def _check_reply(self, session: Session, text: str) -> str:
-        """Prose that survives the harness grounding check (§5.4).
-
-        Shapes from every enabled plugin apply, loaded or not; a loaded
-        plugin's own ``reply_guard`` may then still veto what remains.
-        """
-        shapes: list[re.Pattern] = []
-        for plugin in self.enabled():
-            shapes.extend(grounding.fact_shapes(plugin))
-        return grounding.grounded_text(text, self._ground(session), tuple(shapes))
 
     def _execute(self, session: Session, call: dict) -> tuple[str, Result]:
         function = call.get("function") or {}
@@ -418,12 +435,14 @@ class Harness:
         return name, result
 
     def _prepare_params(self, ctx: Context, params: Any) -> Any:
-        """Verify the call before the plugin sees it (§3.4).
+        """Check the call before the plugin sees it (§3.4).
 
-        ``UserText`` parameters must be copied from the user's own words: the
-        harness finds the value in the session's user messages and substitutes
-        the exact slice, and both the slice and every plain parameter value
-        become the call's claimable user values for the provenance audit.
+        ``UserText`` parameters that really are the user's words are replaced
+        by the exact slice, and both the slice and every plain parameter value
+        become the call's claimable user values for the provenance audit. A
+        ``UserText`` value the user never wrote passes through untouched: the
+        handler records its true origin (``Context.provenance``) instead of
+        the harness refusing the call.
         """
         verified, plain = set(), set()
 
@@ -444,33 +463,47 @@ class Harness:
             collect(value)
             if isinstance(value, UserText):
                 said = ctx.user_said(str(value))
-                if not said:
-                    raise ValueError(f"参数 {name} 必须出自用户原话；请让用户直接在输入框里写。")
-                setattr(params, name, said)
-                verified.add(said)
-                plain.add(said)
+                if said:
+                    setattr(params, name, said)
+                    verified.add(said)
+                    plain.add(said)
         ctx.user_values, ctx.param_values = frozenset(verified), frozenset(plain)
         return params
 
-    def _caption(self, session: Session, text: str) -> str:
-        # Harness-level grounding first: hide every paragraph with an
-        # unsourced fact, whatever plugins are loaded. A loaded plugin's own
-        # guard may then still veto what is left.
-        text = self._check_reply(session, (text or "").strip())
+    def _fact_index(self, session: Session) -> list[dict]:
+        """What a fact in prose may be traced to, most linkable first: every
+        stored record field, then every tool result, then the user's own
+        words. The model's own prose is not here -- it could otherwise
+        launder an invented fact into "already said"."""
+        index = []
+        for ref, record in session.records.all(Record):
+            for name, field in record.fields.items():
+                index.append({"kind": "record", "ref": ref, "field": name, "origin": field.origin,
+                              "source_id": field.source_id, "text": field.value})
+        for message in session.messages:
+            role = message.get("role")
+            if role == "tool":
+                index.append({"kind": "tool", "text": message.get("content") or ""})
+            elif role == "user" and not message.get("_note") and isinstance(message.get("content"), str):
+                index.append({"kind": "user", "text": message["content"]})
+        return index
+
+    def _annotate_reply(self, session: Session, text: str) -> list[dict]:
+        """Per-fact provenance for the model's prose (§5.4). Shapes from every
+        enabled plugin apply, loaded or not; a fact found in the session's
+        evidence carries its source, one found nowhere is reported unsourced.
+        The prose itself is never removed."""
+        shapes: list[re.Pattern] = []
         for plugin in self.enabled():
-            if text and plugin.name in session.loaded and plugin.reply_guard:
-                text = plugin.reply_guard(text, self.context(session, plugin.name))
-        return text
+            shapes.extend(grounding.fact_shapes(plugin))
+        return grounding.annotate_facts(text, self._fact_index(session), tuple(shapes))
 
     def _add_caption(self, session: Session, raw: str, blocks: list[dict]) -> None:
         raw = raw.strip()
-        caption = self._caption(session, raw)
-        if caption:
-            blocks.append({"type": "text", "text": caption})
-        elif raw:
-            # Say so rather than go quiet: a plugin vetoed the prose.
-            blocks.append({"type": "notice", "level": "info",
-                           "text": "（模型的回复提到了无法核实的内容，已隐藏。）"})
+        if not raw:
+            return
+        facts = self._annotate_reply(session, raw)
+        blocks.append({"type": "text", "text": raw, **({"facts": facts} if facts else {})})
 
     def run_turn(self, session: Session, text: str, attachments: list[str] = ()) -> list[dict]:
         notes = [f"[附件 {aid}: {session.attachments[aid]['name']}]" for aid in attachments

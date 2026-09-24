@@ -10,11 +10,13 @@ entry-point group. It declares:
 - ``ui``: an optional directory with ``ui.js`` / ``ui.css`` that renders the
   plugin's own result blocks and, if it wants one, a panel;
 - ``settings``: options shown in the settings bar, owned by the plugin;
-- ``requires``: other plugins whose public ``api`` it uses;
-- ``reply_guard``: an optional, plugin-specific check on the model's prose
-  once the plugin is loaded. Unsourced facts are already hidden paragraph by
-  paragraph by the harness (``harness.grounding``) using every plugin's
-  ``fact_patterns``; a guard is only for something stricter than that.
+- ``requires``: other plugins whose public ``api`` it uses.
+
+The model's prose is not vetoed: the harness stamps every fact-shaped string
+in it with its source (``harness.grounding``) -- matched facts carry the
+record they came from, unmatched ones are reported as unsourced and still
+shown. Nothing needs to be stricter than that; a plugin that disagrees can
+say so in its ``instructions``.
 
 Plugins are trusted, installed code. Discovery happens at startup; nothing is
 hot-reloaded.
@@ -35,11 +37,14 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9_]{1,30}$")
 
 
 class UserText(str):
-    """A tool parameter that must be copied from the user's own words (§3.4).
+    """A tool parameter that should be the user's own words (§3.4).
 
-    The harness checks it against the session's user messages before the
-    handler runs and substitutes the exact slice it found, so the plugin
-    never sees the model's paraphrase of the user.
+    When the value really is in the user's messages, the harness substitutes
+    the exact slice before the handler runs, so the plugin never sees the
+    model's paraphrase. When it is not -- the model supplied it -- the value
+    passes through untouched and the handler records its true origin with
+    ``Context.provenance`` instead of refusing. An honest label beats a
+    refused call: the cost of a blocked turn used to land on the user.
     """
 
     @classmethod
@@ -95,7 +100,6 @@ class Plugin:
     requires: tuple[str, ...] = ()
     default_enabled: bool = False
     api: Any = None
-    reply_guard: Callable[[str, Any], str] | None = None
     category: str = "function"     # "source" | "extract" | "function": what origins it may produce
     fact_patterns: tuple = ()      # regexes for fact-shaped strings this domain uses (grounding)
 

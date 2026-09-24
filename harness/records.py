@@ -11,14 +11,18 @@ Two gates live here:
 - **Category vs. origins** (§3.2 of the blueprint): a data source may only
   produce ``database`` fields, an extraction plugin only ``extracted`` fields,
   a function plugin only Artifacts / Findings. The built-in ``record.*`` tools
-  are the only writers of ``user`` fields, and only from the user's own words.
+  are the only writers of ``user`` fields, and only from values this session
+  can source -- a copied record field or the user's own words; anything else
+  is refused before it reaches a record (``Context.provenance``).
 - **Leaf provenance**: every derivation chain of a saved Artifact or Finding
   is walked leaf by leaf and audited against the store's own evidence --
   what data sources and extraction plugins have actually put into *this*
   session, plus the parameter values the harness verified for this call.
   A ``database`` leaf that no source ever produced here is refused, so a
   function plugin cannot mint a fabricated value and have the artifact
-  counted as "verified".
+  counted as "verified". A ``model`` leaf is never refused: it is stamped
+  honestly (the model supplied it), and ``grounding_issues`` counts the
+  artifact as unverified -- shown, not trusted.
 
 Records themselves are not a sandbox: plugins are trusted, installed code.
 The checks are early, mechanical interception of category and provenance
@@ -27,6 +31,7 @@ misuse -- notably of anything that could fake the "verified" verdict.
 
 from __future__ import annotations
 
+import re
 import threading
 from typing import Any
 
@@ -35,6 +40,14 @@ from core.tool_contracts import Artifact, Field, Finding, Record, derivation_lea
 CATEGORY_ORIGIN = {"source": {"database"}, "extract": {"extracted"}}
 PREFIX = {Record: "rec", Artifact: "art", Finding: "fnd"}
 MAX_EVIDENCE = 20000
+# The origins a copied value may legitimately inherit from stored evidence.
+# ``model`` is deliberately absent: a value the model supplied is never
+# evidence, so a copy of a copy cannot launder itself into a source.
+BORROWED = {"database": 0, "extracted": 1, "user": 2}
+
+
+def _probe(value: str) -> str:
+    return re.sub(r"\s+", " ", value or "").strip().casefold()
 
 
 class ContractError(ValueError):
@@ -180,34 +193,63 @@ class Store:
                 if (leaf.origin, leaf.value, leaf.source_id) not in self._evidence:
                     raise ContractError(
                         f"extracted 叶子在本次会话里没有出处（{_clip(leaf.value, 60)}）。")
+            elif leaf.origin == "model":
+                # Honest provenance: the model supplied it, nothing here says
+                # it. Not refused -- ``grounding_issues`` already counts the
+                # artifact as unverified, which is the whole point.
+                pass
 
     def _register(self, obj: Any) -> None:
-        """Record what evidence this session now verifiably holds."""
+        """Record what evidence this session now verifiably holds. A ``model``
+        leaf is a confession, not evidence -- registering it would let the
+        next copy of the value resolve to a source it never had."""
         if len(self._evidence) >= MAX_EVIDENCE:
             return
         if isinstance(obj, Record):
             for field in obj.fields.values():
-                self._evidence.add((field.origin, field.value, field.source_id))
+                if field.origin != "model":
+                    self._evidence.add((field.origin, field.value, field.source_id))
         elif isinstance(obj, (Artifact, Finding)):
             for leaf in derivation_leaves(obj.derivation):
-                self._evidence.add((leaf.origin, leaf.value, leaf.source_id))
+                if leaf.origin != "model":
+                    self._evidence.add((leaf.origin, leaf.value, leaf.source_id))
 
     # ── Built-in user-field and blank-record tools ────────────────────
 
-    def add_user_field(self, record: Record, field: str, said: str) -> Record:
-        """A new record version with one field written from the user's words.
-
-        ``said`` is the verified slice of the user's message (``""`` when the
-        model passed something the user never wrote -- callers must treat
-        that as a refusal, not fall back to the model's text).
+    def resolve(self, value: str) -> tuple[Field, str]:
+        """Where a value anyone (model or user) supplied already exists here:
+        the best matching record field -- database before extracted before
+        user -- with that record's ref, or a ``model`` field when nothing in
+        this session says it. Model values are never evidence, so a copy of
+        a copy cannot launder itself into a source.
         """
-        if not said.strip():
-            raise ValueError("补充内容必须出自你自己的话，请直接在输入框里写。")
+        probe = _probe(value)
+        best = None
+        for ref, record in self.all(Record):
+            for field in record.fields.values():
+                if _probe(field.value) != probe:
+                    continue
+                rank = BORROWED.get(field.origin, len(BORROWED) + 1)
+                if rank < len(BORROWED) + 1 and (best is None or rank < best[0]):
+                    best = (rank, ref, field)
+        if best is None:
+            return Field(value, "model"), ""
+        _, ref, field = best
+        return Field(value, field.origin, source_id=field.source_id), ref
+
+    def add_field(self, record: Record, field: str, item: Field) -> Record:
+        """A new record version with one field written from outside.
+
+        The caller resolves the field's honest origin first
+        (``Context.provenance``): copied from a stored record, the user's own
+        words, or the model itself. Nothing is refused -- an honest origin is
+        what makes a fabricated value visible instead of fatal.
+        """
         name = str(field).strip()
         if not name:
             raise ValueError("需要字段名。")
-        fields = {**record.fields, name: Field(said, "user")}
-        return Record(record.source_type, fields, record.provider, record.record_id)
+        return Record(record.source_type, {**record.fields, name: item},
+                      record.provider, record.record_id)
 
     def new_record(self, source_type: str) -> Record:
         return Record(str(source_type).strip() or "unknown", {}, "user", "blank")

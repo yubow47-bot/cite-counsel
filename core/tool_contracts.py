@@ -11,7 +11,7 @@ from types import MappingProxyType
 from collections.abc import Mapping
 from typing import Literal
 
-Origin = Literal["database", "user", "extracted", "computed"]
+Origin = Literal["database", "user", "extracted", "computed", "model"]
 
 
 def _identifier(value: str) -> bool:
@@ -30,7 +30,7 @@ class Field:
     def __post_init__(self):
         if not isinstance(self.value, str):
             raise ValueError("Field value must be text")
-        if self.origin not in {"database", "user", "extracted", "computed"}:
+        if self.origin not in {"database", "user", "extracted", "computed", "model"}:
             raise ValueError("Unknown field origin")
         for value in (self.source_id, self.rule_id):
             if value is not None and not _identifier(value):
