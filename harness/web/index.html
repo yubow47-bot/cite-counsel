@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -9,48 +9,48 @@
   </head>
   <body>
     <div class="shell">
-      <aside class="settings" id="settings" aria-label="设置">
+      <aside class="settings" id="settings" aria-label="Settings">
         <div class="brand"><span class="mark">C</span><b>Cite Counsel</b></div>
-        <button id="new-chat" class="primary" type="button">＋ 新建对话</button>
+        <button id="new-chat" class="primary" type="button">＋ New chat</button>
 
         <section class="group">
-          <h2>模型</h2>
-          <p class="status"><span id="llm-dot" class="dot"></span><span id="llm-status">读取中…</span></p>
+          <h2>Model</h2>
+          <p class="status"><span id="llm-dot" class="dot"></span><span id="llm-status">Loading…</span></p>
           <form id="model-form" class="row-form">
-            <input id="model" maxlength="200" placeholder="模型 ID，如 qwen/qwen3.7-flash" aria-label="模型 ID" />
-            <button type="submit">保存</button>
+            <input id="model" maxlength="200" placeholder="Model ID, e.g. qwen/qwen3.7-flash" aria-label="Model ID" />
+            <button type="submit">Save</button>
           </form>
           <form id="key-form" class="row-form">
-            <input id="api-key" type="password" autocomplete="new-password" maxlength="400" placeholder="OpenRouter API Key（不回显）" aria-label="API Key" />
-            <button type="submit">保存</button>
+            <input id="api-key" type="password" autocomplete="new-password" maxlength="400" placeholder="OpenRouter API key (hidden)" aria-label="API key" />
+            <button type="submit">Save</button>
           </form>
         </section>
 
         <section class="group">
-          <h2>插件</h2>
-          <p class="hint">启用的插件不会自动运行；模型按你的输入决定加载哪个、调用哪个工具。</p>
+          <h2>Plugins</h2>
+          <p class="hint">Enabled plugins don't run on their own; the model loads and calls them based on your message.</p>
           <div id="plugins" class="plugins"></div>
         </section>
       </aside>
 
       <main class="chat">
         <div id="empty" class="empty">
-          <h1>有什么要查、要引、要核对的？</h1>
-          <p>直接说。模型会根据你的话选择要用的插件。</p>
+          <h1>What should I look up, cite, or check?</h1>
+          <p>Just ask — the model picks the plugins.</p>
         </div>
         <section id="transcript" class="transcript" aria-live="polite"></section>
         <div class="composer-wrap">
           <div id="chips" class="chips"></div>
           <form id="composer" class="composer">
             <input id="file" type="file" hidden accept=".pdf,.docx,.pptx,.xlsx,.jpg,.jpeg,.png,.webp" />
-            <button id="attach" type="button" class="icon" aria-label="添加附件" title="添加附件">＋</button>
-            <textarea id="input" rows="1" maxlength="4000" placeholder="输入消息，Enter 发送，Shift+Enter 换行" aria-label="消息"></textarea>
-            <button id="send" type="submit" class="send" aria-label="发送">↑</button>
+            <button id="attach" type="button" class="icon" aria-label="Attach a file" title="Attach a file">＋</button>
+            <textarea id="input" rows="1" maxlength="4000" placeholder="Type a message — Enter to send, Shift+Enter for a new line" aria-label="Message"></textarea>
+            <button id="send" type="submit" class="send" aria-label="Send">↑</button>
           </form>
         </div>
       </main>
 
-      <aside id="panels" class="panels" hidden aria-label="插件面板"></aside>
+      <aside id="panels" class="panels" hidden aria-label="Plugin panels"></aside>
     </div>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="/assets/harness.js"></script>

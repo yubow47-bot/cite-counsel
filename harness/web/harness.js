@@ -30,39 +30,108 @@
     const response = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
     const data = await response.json().catch(() => ({}));
     if (data.session) saveSession(data.session);
-    if (!response.ok || data.ok === false) throw new Error(data.message || '请求没有完成。');
+    if (!response.ok || data.ok === false) throw new Error(data.message || 'The request did not complete.');
     return data;
   }
 
   // ── Rendering ─────────────────────────────────────────────────────
+  // Inline text: **bold** and *italic*, as an array of nodes.
+  function inline(text) {
+    const out = [];
+    for (const part of String(text).split(/(\*\*[^*]+\*\*)/g)) {
+      if (/^\*\*[^*]+\*\*$/.test(part)) out.push(el('strong', '', part.slice(2, -2)));
+      else out.push(...api.italic(part));
+    }
+    return out;
+  }
+  // The small source line under a reply: where each grounded fact came from.
+  function sourceLine(sources) {
+    const line = el('div', 'fact-sources');
+    line.append(el('span', 'label', 'Sources'));
+    const seen = new Set();
+    let shown = 0;
+    for (const f of sources) {
+      const key = (f.ref || f.kind || '?') + ':' + (f.field || '');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (shown >= 6) { line.append(el('span', 'fact-source', `+${sources.length - shown} more`)); break; }
+      const chip = el('span', 'fact-source', f.ref ? `${f.ref} · ${f.field}` : (f.kind === 'user' ? 'your message' : 'tool result'));
+      if (f.excerpt) chip.title = f.excerpt;
+      line.append(chip);
+      shown += 1;
+    }
+    return line;
+  }
   function generic(block) {
     switch (block.type) {
       case 'text': {
         const node = el('div', 'bubble assistant');
-        for (const part of String(block.text).split(/(\*\*[^*]+\*\*)/g)) {
-          if (/^\*\*[^*]+\*\*$/.test(part)) node.append(el('strong', '', part.slice(2, -2)));
-          else node.append(...api.italic(part));
+        const text = String(block.text ?? '');
+        const facts = Array.isArray(block.facts) ? block.facts : [];
+        const marks = [], sources = [];
+        for (const f of facts) {
+          if (!f || typeof f !== 'object') continue;
+          if (f.verdict === 'unsourced') for (const span of f.spans || []) marks.push({start: span[0], end: span[1], fact: f.fact});
+          else sources.push(f);
         }
+        marks.sort((a, b) => a.start - b.start || b.end - a.end);
+        const merged = [];
+        for (const m of marks) {
+          const last = merged[merged.length - 1];
+          if (last && m.start < last.end) { last.end = Math.max(last.end, m.end); if (!last.facts.includes(m.fact)) last.facts.push(m.fact); }
+          else merged.push({start: m.start, end: m.end, facts: [m.fact]});
+        }
+        let at = 0;
+        for (const m of merged) {
+          if (m.start > at) node.append(...inline(text.slice(at, m.start)));
+          const mark = el('mark', 'unsourced', text.slice(m.start, m.end));
+          mark.title = 'No source found for: ' + m.facts.join(', ');
+          node.append(mark);
+          at = m.end;
+        }
+        if (at < text.length) node.append(...inline(text.slice(at)));
+        if (sources.length) node.append(sourceLine(sources));
         return node;
       }
       case 'notice': return el('div', 'bubble notice ' + (block.level || 'info'), block.text || block.message);
       case 'activity': {
-        const node = el('div', 'activity' + (block.error ? ' failed' : ''), (block.error ? '✕ ' : '⚙ ') + block.text + (block.tool ? ' · ' + block.tool : ''));
-        return node;
+        // The chip names the plugin and tool by id — short and stable.
+        return el('div', 'activity' + (block.error ? ' failed' : ''),
+                  (block.error ? '✕ ' : '⚙ ') + (block.plugin || '') + (block.tool ? ' · ' + block.tool : ''));
       }
       case 'card': {
         const card = el('section', 'bubble card');
         if (block.title) card.append(el('h3', '', block.title));
         if (Array.isArray(block.rows)) {
           const table = el('dl', 'rows');
-          for (const [k, v] of block.rows) table.append(el('dt', '', k), el('dd', '', v));
+          for (const [k, v] of block.rows) {
+            const dd = el('dd', '');
+            dd.append(...inline(v == null ? '' : String(v)));
+            table.append(el('dt', '', k), dd);
+          }
           card.append(table);
         }
         if (block.body) card.append(el('p', '', block.body));
         if (block.note) card.append(el('p', 'note', block.note));
         return card;
       }
-      default: return el('div', 'bubble notice warning', `这个结果来自插件 “${block.plugin || '?'}”，但它的界面没有加载。`);
+      case 'record_card': {
+        // A stored record: one row per field, plus the ref and its verdict.
+        const card = el('section', 'bubble card record');
+        const head = el('h3', 'record-head');
+        head.append(el('span', 'record-type', block.source_type || 'record'), el('span', 'record-ref', block.ref || ''));
+        if (typeof block.verified === 'boolean') head.append(el('span', 'badge ' + (block.verified ? 'ok' : 'warn'),
+                                                                 block.verified ? 'verified' : 'unverified'));
+        card.append(head);
+        const table = el('dl', 'rows');
+        for (const [k, v] of Object.entries(block.fields || {})) {
+          const value = String(v ?? '');
+          table.append(el('dt', '', k), el('dd', '', value.length > 280 ? value.slice(0, 280) + '…' : value));
+        }
+        card.append(table);
+        return card;
+      }
+      default: return el('div', 'bubble notice warning', `This result from “${block.plugin || '?'}” could not be rendered.`);
     }
   }
   function renderBlock(block) {
@@ -72,7 +141,7 @@
     const custom = renderers.get(key);
     let node = null;
     if (custom) {
-      try { node = custom(block, api); } catch (error) { console.error(error); node = generic({type: 'notice', level: 'error', text: '插件界面出错。'}); }
+      try { node = custom(block, api); } catch (error) { console.error(error); node = generic({type: 'notice', level: 'error', text: 'Plugin UI error.'}); }
     } else node = generic(block);
     if (!node) return null;   // a plugin may route a block to its panel only
     for (const fn of decorators.get(key) || []) { try { fn(block, node, api); } catch (error) { console.error(error); } }
@@ -108,7 +177,7 @@
     // A button in a plugin's UI: deterministic, no model. Returned blocks are
     // shown in the conversation unless {quiet: true}.
     async action(plugin, name, payload = {}, {quiet = false} = {}) {
-      if (!session) throw new Error('还没有开始对话。');
+      if (!session) throw new Error('No conversation yet.');
       const data = await post(`/api/actions/${plugin}/${name}`, {...sessionRef(), payload});
       if (quiet) (data.blocks || []).forEach(block => (listeners.get((block.plugin || '') + ':' + block.type) || []).forEach(fn => fn(block)));
       else show(data.blocks);
@@ -124,14 +193,15 @@
       return String(text).split(/(\*[^*]+\*)/g).map(part =>
         part.length > 2 && part.startsWith('*') && part.endsWith('*') ? '<i>' + esc(part.slice(1, -1)) + '</i>' : esc(part)).join('');
     },
-    async copyRich(html, plain, done = '已复制。') {
+    async copyRich(html, plain, done = 'Copied.') {
       try {
         if (window.ClipboardItem) await navigator.clipboard.write([new ClipboardItem({'text/html': new Blob([html], {type: 'text/html'}), 'text/plain': new Blob([plain], {type: 'text/plain'})})]);
         else await navigator.clipboard.writeText(plain);
         toast(done);
-      } catch { toast('复制未完成，请手动选中复制。'); }
+      } catch { toast('Copy failed — select the text and copy manually.'); }
     },
     busy: () => busy,
+    render: show,   // render a list of blocks into the transcript (also for tests)
   };
   window.Harness = api;
 
@@ -140,7 +210,7 @@
     $('empty').hidden = true;
     const turn = el('article', 'turn user-turn');
     const bubble = el('div', 'bubble user', text);
-    if (names.length) bubble.append(el('small', 'attached', '附件：' + names.join('、')));
+    if (names.length) bubble.append(el('small', 'attached', 'Attached: ' + names.join(', ')));
     turn.append(bubble); $('transcript').append(turn);
   }
   async function send() {
@@ -150,7 +220,7 @@
     $('input').value = ''; grow();
     userBubble(text, used.map(a => a.name));
     setBusy(true);
-    const typing = el('div', 'typing', '正在处理…'); $('transcript').append(typing);
+    const typing = el('div', 'typing', 'Working…'); $('transcript').append(typing);
     typing.scrollIntoView({block: 'end'});
     try {
       const data = await post('/api/turns', {...sessionRef(), input: text, attachments: used.map(a => a.id)});
@@ -167,7 +237,7 @@
       const response = await fetch('/api/files', {method: 'POST', body});
       const data = await response.json();
       if (data.session) saveSession(data.session);
-      if (!response.ok || data.ok === false) throw new Error(data.message || '上传失败。');
+      if (!response.ok || data.ok === false) throw new Error(data.message || 'Upload failed.');
       attachments.push(data.attachment); renderChips();
     } catch (error) { toast(error.message); }
   }
@@ -183,7 +253,7 @@
   // ── Settings bar ──────────────────────────────────────────────────
   function renderSettings() {
     $('llm-dot').className = 'dot ' + (config.llm_configured ? 'on' : 'off');
-    $('llm-status').textContent = config.llm_configured ? 'API Key 已配置' : '未配置 API Key';
+    $('llm-status').textContent = config.llm_configured ? 'API key configured' : 'No API key';
     $('model').value = config.model || '';
     $('plugins').replaceChildren(...config.plugins.map(plugin => {
       const card = el('div', 'plugin' + (plugin.enabled ? ' enabled' : ''));
@@ -195,9 +265,9 @@
       };
       head.append(toggle, el('b', '', plugin.title));
       card.append(head, el('p', 'desc', plugin.description));
-      if (plugin.requires.length) card.append(el('p', 'meta', '依赖：' + plugin.requires.join('、')));
+      if (plugin.requires.length) card.append(el('p', 'meta', 'Requires: ' + plugin.requires.join(', ')));
       const details = el('details', 'tools');
-      details.append(el('summary', '', `${plugin.tools.length} 个工具`));
+      details.append(el('summary', '', `${plugin.tools.length} tools`));
       for (const tool of plugin.tools) details.append(el('p', 'meta', tool.name + ' — ' + tool.description));
       card.append(details);
       for (const setting of plugin.settings) card.append(settingField(plugin, setting));
@@ -213,10 +283,10 @@
       input.value = setting.value ?? '';
     } else if (setting.kind === 'bool') { input = el('input'); input.type = 'checkbox'; input.checked = !!setting.value; }
     else { input = el('input'); input.type = setting.kind === 'secret' ? 'password' : 'text';
-      input.placeholder = setting.kind === 'secret' ? (setting.set ? '已设置（不回显）' : '未设置') : ''; if (setting.kind !== 'secret') input.value = setting.value ?? ''; }
+      input.placeholder = setting.kind === 'secret' ? (setting.set ? 'Set (hidden)' : 'Not set') : ''; if (setting.kind !== 'secret') input.value = setting.value ?? ''; }
     input.onchange = async () => {
       const value = setting.kind === 'bool' ? input.checked : input.value;
-      try { await post('/api/settings/plugins/' + plugin.name, {settings: {[setting.name]: value}}); toast('已保存。'); }
+      try { await post('/api/settings/plugins/' + plugin.name, {settings: {[setting.name]: value}}); toast('Saved.'); }
       catch (error) { toast(error.message); }
     };
     row.append(input);
@@ -235,7 +305,7 @@
       const response = await fetch('/api/config');
       config = await response.json();
       renderSettings(); loadPluginUi();
-    } catch { $('llm-status').textContent = '无法连接本地服务'; }
+    } catch { $('llm-status').textContent = 'Cannot reach the local server'; }
   }
 
   $('composer').onsubmit = event => { event.preventDefault(); send(); };
@@ -246,12 +316,12 @@
   $('new-chat').onclick = () => { saveSession(null); $('transcript').replaceChildren(); $('empty').hidden = false; document.dispatchEvent(new Event('harness:new-session')); };
   $('model-form').onsubmit = async event => {
     event.preventDefault();
-    try { config = {...config, ...(await post('/api/settings/model', {model: $('model').value.trim()}))}; renderSettings(); toast('模型已保存。'); }
+    try { config = {...config, ...(await post('/api/settings/model', {model: $('model').value.trim()}))}; renderSettings(); toast('Model saved.'); }
     catch (error) { toast(error.message); }
   };
   $('key-form').onsubmit = async event => {
     event.preventDefault();
-    try { config = {...config, ...(await post('/api/settings/keys', {openrouter_api_key: $('api-key').value}))}; $('api-key').value = ''; renderSettings(); toast('API Key 已保存到本机 .env。'); }
+    try { config = {...config, ...(await post('/api/settings/keys', {openrouter_api_key: $('api-key').value}))}; $('api-key').value = ''; renderSettings(); toast('API key saved to the local .env.'); }
     catch (error) { toast(error.message); }
   };
   document.addEventListener('dragover', event => event.preventDefault());
