@@ -140,9 +140,8 @@ def mcgill_clean(name: str, value: str) -> str:
         value = re.sub(r"^(RSO \d{4}, c [A-Z])(\d+)\b", r"\1.\2", value)
     elif name in {"session", "parliament"} and value.isdigit():
         # LEGISinfo gives 1 / 44; McGill writes 1st Sess, 44th Parl.
-        n = int(value)
-        suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-        value = f"{n}{suffix}"
+        from local_tools.legisinfo_api import ordinal_suffix
+        value = ordinal_suffix(int(value))
     elif name == "date":
         iso = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})(?:[T ].*)?", value)
         if iso and 1 <= int(iso[2]) <= 12:

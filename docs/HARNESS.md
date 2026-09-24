@@ -63,18 +63,16 @@
   - `extracted` 叶子必须对上已入库的提取记录；
   - `model` 叶子不拒绝：它就是"模型自己写的、本会话无处可查"的如实标记，
     `grounding_issues` 把含它的产物算作未核验——显示，不信任。
-- **证据库不含 model 值**（`Store._register`）：模型填的值不入证据，所以"复制一份再复制"
-  永远解析回 `model`，无法洗白成任何来源。
+- **证据库不含 model 值**（`Store._register`）：模型填的值不入证据，永远无法洗白成任何来源。
 - **UserText 参数**：工具把"应是用户原话"的参数声明为 `harness.plugin.UserText`。
   值真的出自用户消息时，harness 在执行前跑 `user_said`（§3.4），把**核验后的切片**替换进
-  参数——插件永远拿不到模型的转述版；不是用户的话时**直接放行**，由 handler 用
-  `Context.provenance` 打上真实来源，不再拒绝调用（拒绝的代价曾经全落在用户头上）。
-- **值→来源解析**（`Context.provenance` → `Store.resolve`）：一个模型想写进记录的值，
-  依次对：已在库记录字段的**精确匹配**（database 优先于 extracted 优先于 user，附来源
-  记录编号）→ **子串包含**（值出现在某记录的长字段里——比如从抓回的网页正文里读出的
-  事实，继承该记录的来源）→ 用户原话（`user_said` 切片）→ 都不中则**拒绝写入**：模型
-  要么从已有记录复制，要么引用用户原话，要么先向用户确认。`model` 仍是合法的
-  契约来源（推导叶子层保留），但不再能悄悄写进记录。
+  参数——插件永远拿不到模型的转述版。
+- **来源是标注，不是门槛**（`record__add_field` / `Context.provenance` → `Store.resolve`）：
+  模型写入的值按顺序对账：它指明的 `from_ref`/`from_field`（精确或子串——比如从网页正文
+  里读出的事实）→ 所有已在库记录（精确优先于子串，database 优先于 extracted 优先于 user）
+  → 用户原话（`user_said` 切片）。命中就继承那条来源；**都不中也照常写入**，标为 `model`，
+  显示为"未核验"。pinpoint、quote 等参数同理：无来源的值照常出引文，只是引文不算已核验。
+  唯一的拒绝是调用本身无效（比如既没给值、指明的字段也不存在）。
 - "已核验"不由任何人声明：由推导链计算（`core.tool_contracts.grounding_issues`）。
   推导链叶子全为 `database` 且带 `source_id` 才算核验；一个 `user`/`extracted`/`model`
   叶子就是未核验。
@@ -100,9 +98,8 @@
 3. 工具连续两步全部失败即停止；一步内所有结果都 `final` 时，模型不再带工具地回应一次。
 4. 内置工具始终可用，但各有门槛：`record__new`（空记录）在 web 插件启用时要求本会话先
    发起过 `web__search`（`Session.web_search_used`，随会话持久化；一次真实尝试即可，失败
-   也算——否则坏 key 会把用户锁死在门外）；`record__add_field` 只接受从已有记录复制或
-   用户原话的值，无来源的值拒绝写入（`Context.provenance` 抛 ValueError，走工具失败路径
-   返回给模型，并告知该复制哪条记录或去问用户）。
+   也算——否则坏 key 会把用户锁死在门外）；`record__add_field` 从不因为缺来源拒绝写入，
+   只把真实来源（或 `model`）记在字段上。
 
 ## 5. 回复检查（§5.4）：标注，不隐藏
 
@@ -156,9 +153,9 @@
 - **MCP（规格 §7）未做**：等契约与首批插件稳定。两个方向（外部 MCP 当插件、插件暴露为 MCP）
   都以契约为边界。
 - **契约测试**（规格 §9）：越权产出来源、跨会话/不存在编号、伪造 database 叶子、模型值
-  洗白（`Store.resolve` / `_register`）、**无来源值拒绝写入**、**record__new 的搜网门槛**、
-  来源标注、持久化往返——见 `tests/test_harness.py`、`tests/test_function_plugins.py`、
-  `tests/test_tool_contracts.py`、`tests/test_extract_plugins.py`、`tests/test_persistence.py`、
-  `tests/test_web_search.py`。
+  不入证据库（`Store._register`）、**无来源值照写并标 model**、正文子串算出处、
+  **record__new 的搜网门槛**、来源标注、持久化往返——见
+  `tests/test_harness.py`、`tests/test_function_plugins.py`、`tests/test_tool_contracts.py`、
+  `tests/test_extract_plugins.py`、`tests/test_persistence.py`、`tests/test_web_search.py`。
 - **前端展示（未做，等后端数据形态定稿）**：回复事实的 `facts` 标注（链接 + 片段 + 高亮、
   "无来源"醒目呈现）与来源插件的 `record_card` 渲染。

@@ -45,6 +45,9 @@ body.has-panels .shell { grid-template-columns: 290px minmax(0, 1fr) 320px; }
 .bubble.notice.error { background: #f6e1df; border-color: #e7c3bf; }
 .activity { align-self: flex-start; padding: 1px 8px; border-radius: 10px; background: #ece4d8; color: var(--muted); font-size: 11px; }
 .activity.failed { background: #f4dcd8; }
+.thinking { align-self: stretch; max-width: 100%; font-size: 13px; color: var(--muted); border-left: 3px solid var(--line); padding-left: 10px; }
+.thinking summary { cursor: pointer; user-select: none; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+.thinking-text { margin-top: 4px; max-height: 240px; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
 .card h3 { margin: 0 0 8px; font-size: 14px; }
 .card .rows { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; font-size: 14px; }
 .card dt { color: var(--muted); } .card dd { margin: 0; }

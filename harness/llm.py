@@ -14,28 +14,35 @@ class LLMError(RuntimeError):
     pass
 
 
-def _post(model: str, messages: list[dict], tools: list[dict], timeout: float, *, disable_reasoning: bool):
+def _post(model: str, messages: list[dict], tools: list[dict], timeout: float, *,
+          include_reasoning: bool, stream: bool = False):
     from llm_api.openrouter_api import post_chat_completion
     body = {"model": model, "messages": messages, "temperature": 0}
-    if disable_reasoning:
-        # Default-thinking models spend seconds reasoning before a tool call;
-        # some models (e.g. GLM flash tiers) reject this and require reasoning on.
-        body["reasoning"] = {"enabled": False}
+    # Reasoning is requested on every call so the user can see how the model
+    # decided to use a plugin, not just its final reply. A model that doesn't
+    # support the field ignores it; one that rejects it is retried below
+    # with the field left out.
+    if include_reasoning:
+        body["reasoning"] = {"enabled": True}
     if tools:
         body["tools"] = tools
-    return post_chat_completion(body, read_timeout=timeout)
+    if stream:
+        body["stream"] = True
+        body["stream_options"] = {"include_usage": True}
+    return post_chat_completion(body, read_timeout=timeout, stream=stream)
 
 
 def chat(model: str, messages: list[dict], tools: list[dict], *, timeout: float = 60) -> dict:
-    """Return the assistant message (may carry ``tool_calls``)."""
+    """Return the assistant message (may carry ``tool_calls`` and ``reasoning``)."""
     from core.spend_tracker import spend_tracker
     from llm_api.openrouter_api import track_usage
     if spend_tracker.is_over_cap():
         raise LLMError("今日模型费用已达上限。")
     try:
-        response = _post(model, messages, tools, timeout, disable_reasoning=True)
-        if response.status_code == 400 and "reasoning is mandatory" in response.text.lower():
-            response = _post(model, messages, tools, timeout, disable_reasoning=False)
+        response = _post(model, messages, tools, timeout, include_reasoning=True)
+        text = response.text.lower()
+        if response.status_code == 400 and "reasoning" in text and "mandatory" not in text:
+            response = _post(model, messages, tools, timeout, include_reasoning=False)
         response.raise_for_status()
         data = response.json()
     except ValueError as exc:
@@ -48,12 +55,97 @@ def chat(model: str, messages: list[dict], tools: list[dict], *, timeout: float 
         message = data["choices"][0]["message"]
     except (KeyError, IndexError, TypeError) as exc:
         raise LLMError("模型返回格式不正确。") from exc
+    return _finalize(message, tools)
+
+
+def _finalize(message: dict, tools: list[dict]) -> dict:
     if tools:
         return _recover_leaked_calls(message)
     # No tools were offered, so nothing to run -- just keep the markup off screen.
     if isinstance(message.get("content"), str) and "<tool_call>" in message["content"]:
         return {**message, "content": _LEAKED_CALL.sub("", message["content"]).strip()}
     return message
+
+
+def chat_stream(model: str, messages: list[dict], tools: list[dict], *, timeout: float = 60):
+    """Same call as ``chat``, but a generator: ``("reasoning" | "content", delta)``
+    events as tokens arrive, then one final ``("done", message)`` with the
+    same assembled message ``chat()`` would have returned (usable for the
+    tool-calling pipeline exactly as before). Lets the page show the model's
+    thinking as it happens instead of only once the whole turn is done."""
+    from core.spend_tracker import spend_tracker
+    from llm_api.openrouter_api import track_usage
+    if spend_tracker.is_over_cap():
+        raise LLMError("今日模型费用已达上限。")
+    try:
+        response = _post(model, messages, tools, timeout, include_reasoning=True, stream=True)
+        if response.status_code == 400:
+            text = response.text.lower()
+            if "reasoning" in text and "mandatory" not in text:
+                response.close()
+                response = _post(model, messages, tools, timeout, include_reasoning=False, stream=True)
+        response.raise_for_status()
+        # requests guesses the encoding from Content-Type; OpenRouter's SSE
+        # response carries no charset, so it falls back to Latin-1 and every
+        # multi-byte character (em dashes, curly quotes, Chinese text) comes
+        # out as mojibake. The body is UTF-8 -- say so explicitly.
+        response.encoding = "utf-8"
+        reasoning_parts: list[str] = []
+        content_parts: list[str] = []
+        tool_calls: dict[int, dict] = {}
+        usage = None
+        for line in response.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data:"):
+                continue
+            payload = line[len("data:"):].strip()
+            if payload == "[DONE]":
+                break
+            try:
+                chunk = json.loads(payload)
+            except ValueError:
+                continue
+            if isinstance(chunk.get("usage"), dict):
+                usage = chunk["usage"]
+            choices = chunk.get("choices") or []
+            if not choices:
+                continue
+            delta = choices[0].get("delta") or {}
+            reasoning = delta.get("reasoning")
+            if isinstance(reasoning, str) and reasoning:
+                reasoning_parts.append(reasoning)
+                yield "reasoning", reasoning
+            content = delta.get("content")
+            if isinstance(content, str) and content:
+                content_parts.append(content)
+                yield "content", content
+            for call in delta.get("tool_calls") or []:
+                index = call.get("index", 0)
+                slot = tool_calls.setdefault(index, {"id": "", "type": "function",
+                                                      "function": {"name": "", "arguments": ""}})
+                if call.get("id"):
+                    slot["id"] = call["id"]
+                function = call.get("function") or {}
+                if function.get("name"):
+                    slot["function"]["name"] += function["name"]
+                if function.get("arguments"):
+                    slot["function"]["arguments"] += function["arguments"]
+    except ValueError as exc:
+        raise LLMError("没有配置模型 API Key。") from exc
+    except LLMError:
+        raise
+    except Exception as exc:
+        logger.error("llm.chat_stream failed for model %s: %s", model, exc)
+        raise LLMError("模型服务暂时不可用。") from exc
+    if usage:
+        track_usage(model, {"usage": usage})
+    message = {"role": "assistant", "content": "".join(content_parts)}
+    if reasoning_parts:
+        message["reasoning"] = "".join(reasoning_parts)
+    ordered = [tool_calls[i] for i in sorted(tool_calls)]
+    if ordered:
+        message["tool_calls"] = [{"id": c["id"] or f"call_{n}", "type": "function", "function": c["function"]}
+                                 for n, c in enumerate(ordered)]
+    yield "done", _finalize(message, tools)
 
 
 # GLM sometimes writes a tool call in its own text format instead of the

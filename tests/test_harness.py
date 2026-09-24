@@ -56,6 +56,36 @@ class Script:
         return self.replies.pop(0)
 
 
+class StreamScript:
+    """The streaming counterpart to ``Script``: each queued reply becomes a
+    ("reasoning", ...) delta (if it has one), a ("content", ...) delta (if
+    it has one) -- both in one piece, exercising the same live-splitting
+    path a real chunked stream would -- then the same ("done", message)
+    ``chat_stream`` always ends with."""
+
+    def __init__(self, monkeypatch, replies):
+        self.replies, self.calls = list(replies), []
+        monkeypatch.setattr(llm, "chat_stream", self)
+
+    def __call__(self, model, messages, tools, **kwargs):
+        self.calls.append({"messages": messages, "tools": [t["function"]["name"] for t in tools]})
+        message = self.replies.pop(0)
+        if message.get("reasoning"):
+            yield "reasoning", message["reasoning"]
+        if message.get("content"):
+            yield "content", message["content"]
+        yield "done", message
+
+
+def _parse_sse(text: str) -> list[dict]:
+    events = []
+    for frame in text.split("\n\n"):
+        for line in frame.splitlines():
+            if line.startswith("data:"):
+                events.append(json.loads(line[len("data:"):].strip()))
+    return events
+
+
 def call(tool, **arguments):
     return {"role": "assistant", "content": None, "tool_calls": [
         {"id": "c" + tool, "type": "function", "function": {"name": tool, "arguments": json.dumps(arguments)}}]}
@@ -89,6 +119,41 @@ def test_nothing_is_loaded_until_the_model_asks(monkeypatch, harness):
     assert len(script.calls) == 3 and "alpha__echo" in script.calls[2]["tools"]
     assert "now on the user's screen" in script.calls[2]["messages"][0]["content"]
     assert harness.seen == [("echo", "hello there")]
+
+
+def test_reasoning_becomes_a_thinking_block_on_every_step(monkeypatch, harness):
+    Script(monkeypatch, [
+        {**call("load_plugin", name="alpha"), "reasoning": "Need alpha for this."},
+        {**call("alpha__echo", text="hi"), "reasoning": "Now call echo."},
+        {**say("done"), "reasoning": "Nothing more to do."},
+    ])
+    session, _ = harness.sessions.start()
+    blocks = harness.run_turn(session, "hi")
+    thinking = [b["text"] for b in blocks if b["type"] == "thinking"]
+    assert thinking == ["Need alpha for this.", "Now call echo.", "Nothing more to do."]
+    # A model reply without "reasoning" (the common case) adds no such block.
+    assert [b["type"] for b in blocks if b["type"] != "thinking"] == ["activity", "echo", "text"]
+
+
+def test_think_tags_in_content_become_thinking_blocks(monkeypatch, harness):
+    """GLM-style models put their chain of thought in think-tag sections
+    inside content instead of the structured reasoning field; the reply the
+    user reads must not carry the tags."""
+    open_tag, close_tag = "<" + "think" + ">", "</" + "think" + ">"
+    Script(monkeypatch, [
+        {**call("load_plugin", name="alpha"),
+         "content": open_tag + "Need alpha." + close_tag},
+        {**call("alpha__echo", text="hi"),
+         "content": open_tag + "Now echo." + close_tag + "Calling it."},
+        say(open_tag + "a" + close_tag + "plain" + open_tag + "cut off"),
+    ])
+    session, _ = harness.sessions.start()
+    blocks = harness.run_turn(session, "hi")
+    thinking = [b["text"] for b in blocks if b["type"] == "thinking"]
+    assert thinking == ["Need alpha.", "Now echo.", "a\n\ncut off"]
+    final = next(b for b in blocks if b["type"] == "text")
+    assert final["text"] == "plain"
+    assert "think" + ">" not in str(blocks)
 
 
 def test_loaded_plugins_stay_loaded_for_the_session(monkeypatch, harness):
@@ -251,6 +316,39 @@ def test_cross_site_posts_are_refused(client):
     assert client.post("/api/turns", json={"input": "x"}, headers={"origin": "https://evil.example"}).status_code == 403
 
 
+def test_http_turn_stream_sends_thinking_live_before_the_reply(monkeypatch, client):
+    """The point of streaming: a thinking_delta event arrives, in its own
+    frame, before the reply's text block -- not bundled into one response
+    only once the whole turn is done."""
+    StreamScript(monkeypatch, [{"role": "assistant", "content": "hi", "reasoning": "weighing how to greet them"}])
+    response = client.post("/api/turns/stream", json={"input": "hello"})
+    assert response.status_code == 200
+    events = _parse_sse(response.text)
+    assert [e["type"] for e in events] == ["session", "thinking_delta", "block", "done"]
+    assert events[1]["text"] == "weighing how to greet them"
+    assert events[2]["block"] == {"type": "text", "text": "hi"}
+    assert events[0]["session"]["id"]
+
+
+def test_http_turn_stream_splits_a_leading_think_tag_live(monkeypatch, client):
+    """A model with no structured reasoning field, only <think> tags in its
+    content, still streams its thinking live -- peeled off chunk by chunk,
+    not just recovered once the message is complete."""
+    StreamScript(monkeypatch, [{"role": "assistant", "content": "<think>weighing options</think>the answer"}])
+    events = _parse_sse(client.post("/api/turns/stream", json={"input": "hello"}).text)
+    assert "".join(e["text"] for e in events if e["type"] == "thinking_delta") == "weighing options"
+    assert [e["block"] for e in events if e["type"] == "block"] == [{"type": "text", "text": "the answer"}]
+
+
+def test_http_turn_stream_runs_tool_calls_like_the_json_endpoint(monkeypatch, client):
+    """The streamed turn takes the same steps as run_turn -- load a plugin,
+    call its tool, reply -- just handed to the caller one block at a time."""
+    StreamScript(monkeypatch, [call("load_plugin", name="alpha"), call("alpha__echo", text="hi"), say("done")])
+    events = _parse_sse(client.post("/api/turns/stream", json={"input": "echo hi"}).text)
+    block_types = [e["block"]["type"] for e in events if e["type"] == "block"]
+    assert block_types == ["activity", "echo", "text"]
+
+
 # 鈹€鈹€ The real plugins 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 
@@ -366,58 +464,83 @@ def test_record_new_and_add_field_stamp_the_true_origin(harness):
     assert session.records.get(ref, Record) is record
 
 
-def test_add_field_refuses_a_value_with_no_source(harness):
-    """A value that is neither a stored record's field nor the user's own
-    words is refused, not written as an honestly-labelled invention."""
+def test_add_field_copies_from_a_named_record_field(harness):
+    """The value is read directly off the named field -- no string matching,
+    so origin and source_id travel with the copy untouched."""
     from core.tool_contracts import Field, Record
 
     session, _ = harness.sessions.start()
-    session.messages.append({"role": "user", "content": "Edwards v Canada AG 1929，是判例，Privy Council，[1930] AC 124"})
     add_field, new_record = harness_core.BUILTIN_TOOLS
     ref = harness._run_builtin(session, new_record, {"record_type": "jurisprudence"}, "record__new")[1].content["ref"]
-    ok = harness._run_builtin(session, add_field,
-                              {"ref": ref, "field": "neutral_citation", "value": "[1930] AC 124"},
-                              "record__add_field")[1]
-    assert ok.content["origin"] == "user"                     # the user's own words still pass
-    refused = harness._run_builtin(session, add_field,
-                                   {"ref": ref, "field": "court", "value": "Supreme Court of Canada"},
-                                   "record__add_field")[1]
-    assert "error" in refused.content and "找不到来源" in refused.content["error"]
-    assert "rec_N" in refused.content["error"]                # the model is told what to do instead
-    record = session.records.get(ref, Record)
-    assert "court" not in record.fields                       # nothing was written
-    # A value copied from a stored record still passes, with its origin.
     session.records.put(Record("jurisprudence", {"court": Field("Supreme Court of Canada", "database",
                                                                 source_id="a2aj:c1")}, "a2aj", "c1"))
     copied = harness._run_builtin(session, add_field,
-                                  {"ref": ref, "field": "court", "value": "Supreme Court of Canada"},
+                                  {"ref": ref, "field": "court", "from_ref": "rec_2", "from_field": "court"},
                                   "record__add_field")[1]
-    assert copied.content["origin"] == "database" and copied.content["from_ref"] == "rec_3"
+    assert copied.content["origin"] == "database" and copied.content["from_ref"] == "rec_2"
+    record = session.records.get(ref, Record)
+    assert record.fields["court"].source_id == "a2aj:c1"
 
 
-def test_add_field_accepts_a_value_read_out_of_a_stored_page(harness):
-    """The Donoghue case: the model read the year out of a fetched page.
-    A value contained in a stored record's text is a copy from that source,
-    not an invention."""
+def test_add_field_labels_a_source_and_never_refuses_for_lack_of_one(harness):
+    """The source is a label, not a gate: a value read out of a page's text
+    inherits the page's origin, a value the user wrote is theirs, and a value
+    found nowhere is still written -- marked model-supplied, unverified."""
     from core.tool_contracts import Field, Record
 
     session, _ = harness.sessions.start()
     add_field, new_record = harness_core.BUILTIN_TOOLS
-    ref = harness._run_builtin(session, new_record, {"record_type": "foreign"}, "record__new")[1].content["ref"]
+    ref = harness._run_builtin(session, new_record, {"record_type": "jurisprudence"}, "record__new")[1].content["ref"]
     session.records.put(Record("website", {
-        "title": Field("Donoghue v Stevenson Case Resources", "extracted", source_id="https://case.report"),
-        "text": Field("Case report 1932 HL. Donoghue v. Stevenson. 26 May 1932. Lord Atkin.",
+        "title": Field("Donoghue v Stevenson", "extracted", source_id="https://case.report"),
+        "text": Field("The House of Lords decided the appeal on 26 May 1932, [1932] AC 562.",
                       "extracted", source_id="https://case.report"),
     }, "web", "https://case.report"))
+
+    def write(**params):
+        return harness._run_builtin(session, add_field, {"ref": ref, **params}, "record__add_field")[1]
+
+    # A fact read out of the page's text, with the page named.
+    court = write(field="court", value="House of Lords", from_ref="rec_2", from_field="text")
+    assert court.content["origin"] == "extracted" and court.content["from_ref"] == "rec_2"
+    # The same, without naming the page: the harness finds it anyway.
+    year = write(field="year", value="[1932] AC 562")
+    assert year.content["origin"] == "extracted" and year.content["from_ref"] == "rec_2"
+    # A value from nowhere is written, labelled model -- not refused.
+    judge = write(field="judge", value="Lord Atkin")
+    assert "error" not in judge.content and judge.content["origin"] == "model"
+    assert "unverified" in judge.content["note"]
+    # A wrong from_ref / from_field is a hint that missed, not an error.
+    missed = write(field="place", value="London", from_ref="rec_99", from_field="nope")
+    assert "error" not in missed.content and missed.content["origin"] == "model"
+    # The user's words are theirs.
+    session.messages.append({"role": "user", "content": "法院是 Court of Session"})
+    lower = write(field="lower_court", value="Court of Session")
+    assert lower.content["origin"] == "user"
+    record = session.records.get(ref, Record)
+    assert {name: f.origin for name, f in record.fields.items()} == {
+        "court": "extracted", "year": "extracted", "judge": "model", "place": "model", "lower_court": "user"}
+    # The only refusal: nothing to write at all.
+    empty = write(field="date", from_ref="rec_2", from_field="date")
+    assert "Nothing to write" in empty.content["error"]
+
+
+def test_copying_never_fails_on_formatting(harness):
+    """Copying is a field lookup, not a text match: a date stored as ISO and
+    rendered as words is still one value."""
+    from core.tool_contracts import Field, Record
+
+    session, _ = harness.sessions.start()
+    add_field, new_record = harness_core.BUILTIN_TOOLS
+    ref = harness._run_builtin(session, new_record, {"record_type": "website"}, "record__new")[1].content["ref"]
+    session.records.put(Record("website", {"date": Field("2026-09-05", "extracted", source_id="https://x"),
+                                           "title": Field("A Page", "extracted", source_id="https://x")},
+                              "web", "https://x"))
     copied = harness._run_builtin(session, add_field,
-                                  {"ref": ref, "field": "year", "value": "26 May 1932"},
+                                  {"ref": ref, "field": "date", "from_ref": "rec_2", "from_field": "date"},
                                   "record__add_field")[1]
-    assert copied.content["origin"] == "extracted" and copied.content["from_ref"] == "rec_2"
-    # A value the page never says is still refused.
-    refused = harness._run_builtin(session, add_field,
-                                   {"ref": ref, "field": "year", "value": "31 December 2099"},
-                                   "record__add_field")[1]
-    assert "找不到来源" in refused.content["error"]
+    assert copied.content["origin"] == "extracted"
+    assert copied.content["value"] == "2026-09-05"            # the stored value, not a retyped one
 
 
 def test_record_new_wants_a_web_search_first_when_web_is_enabled(tmp_path):
@@ -437,46 +560,51 @@ def test_record_new_wants_a_web_search_first_when_web_is_enabled(tmp_path):
     assert result.content["ref"] == "rec_1"
 
 
-def test_a_field_copied_from_a_stored_record_keeps_its_database_origin(tmp_path):
-    """The bill-on-the-card scenario: the value is already on screen in a
-    stored record; the model copies it into a new record and the copy keeps
-    the database origin -- nothing is lost, and nothing is faked."""
+def test_a_record_built_by_copying_from_a_page_cites_with_the_page_provenance(tmp_path):
+    """The fetched-page workflow end to end: web.fetch stores date/title/url
+    as named fields, so the model copies them by reference -- no free text,
+    no substring guessing."""
     from core.tool_contracts import Field, Record
     from harness.plugin import discover
 
     h = Harness(discover(), model="m", config_path=tmp_path / "h.json")
     session, _ = h.sessions.start()
     add_field, new_record = harness_core.BUILTIN_TOOLS
-    blank = h._run_builtin(session, new_record, {"record_type": "jurisprudence"}, "record__new")[1].content["ref"]
-    session.records.put(Record("jurisprudence", {
-        "style_of_cause": Field("R v Gladue", "database", source_id="a2aj:c1"),
-        "neutral_citation": Field("[1999] 1 SCR 688", "database", source_id="a2aj:c1"),
-    }, "a2aj", "c1"))
-    for field, value in (("style_of_cause", "R v Gladue"), ("neutral_citation", "[1999] 1 SCR 688")):
-        result = h._run_builtin(session, add_field,
-                                {"ref": blank, "field": field, "value": value},
-                                "record__add_field")[1]
-        assert result.content["origin"] == "database" and result.content["from_ref"] == "rec_2"
-    # And the assembled record cites as verified -- every field traces.
-    from plugins import mcgill
-    merged_ref = result.content["ref"]                        # the latest version's ref
-    citation = mcgill.cite(h.context(session, "mcgill"), mcgill.CiteParams(ref=merged_ref))
-    assert citation.content["verified"] is True
+    ref = h._run_builtin(session, new_record, {"record_type": "foreign"}, "record__new")[1].content["ref"]
+    session.records.put(Record("website", {
+        "title": Field("Donoghue v Stevenson Case Resources", "extracted", source_id="https://case.report"),
+        "date": Field("26 May 1932", "extracted", source_id="https://case.report"),
+        "url": Field("https://case.report", "extracted", source_id="https://case.report"),
+    }, "web", "https://case.report"))
+    last = None
+    for field in ("date", "title"):
+        last = h._run_builtin(session, add_field,
+                              {"ref": ref, "field": field, "from_ref": "rec_2", "from_field": field},
+                              "record__add_field")[1]
+        assert last.content["origin"] == "extracted" and last.content["from_ref"] == "rec_2"
+    assert last.content["value"] == "Donoghue v Stevenson Case Resources"
 
 
-def test_a_model_value_is_never_evidence_for_the_next_copy(harness):
-    """At the store level a model-origin value stays model however many
-    times it is stored -- a copy of a copy cannot launder itself into a
-    source. (record__add_field now refuses such values outright; this guard
-    keeps the resolver honest for anything that still stores one.)"""
+def test_a_model_value_is_never_evidence_for_the_next_copy(tmp_path):
+    """A model-origin field stored by a plugin (or an old session file) never
+    becomes a source: Store keeps it out of the evidence set entirely."""
     from core.tool_contracts import Field, Record
+    from harness.plugin import discover
 
-    session, _ = harness.sessions.start()
-    for _ in range(2):
-        session.records.put(Record("jurisprudence", {"court": Field("The Court of Fairy Tales", "model")},
-                                   "user", "blank"))
-        field, ref = session.records.resolve("The Court of Fairy Tales")
-        assert field.origin == "model" and ref == ""           # never promoted to a source
+    h = Harness(discover(), model="m", config_path=tmp_path / "h.json")
+    session, _ = h.sessions.start()
+    ctx = h.context(session, "mcgill")
+    with pytest.raises(Exception) as exc:
+        ctx.save(Record("jurisprudence", {"court": Field("The Court of Fairy Tales", "model")}, "user", "blank"))
+    assert "不能产出" in str(exc.value)                        # function plugins cannot mint records at all
+    # Even the harness-built-in path only stores what it can source.
+    add_field, new_record = harness_core.BUILTIN_TOOLS
+    ref = h._run_builtin(session, new_record, {"record_type": "jurisprudence"}, "record__new")[1].content["ref"]
+    refused = h._run_builtin(session, add_field,
+                             {"ref": ref, "field": "court", "user_said": "The Court of Fairy Tales"},
+                             "record__add_field")[1]
+    assert "error" in refused.content and refused.content.get("origin") is None
+    assert "court" not in session.records.get(ref, Record).fields
 
 
 def test_two_add_field_calls_batched_in_one_round_both_land(harness):

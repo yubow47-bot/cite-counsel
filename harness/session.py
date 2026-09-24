@@ -256,18 +256,12 @@ class Context:
 
     def provenance(self, value: str) -> tuple[Field, str]:
         """The honest origin of a value the model or the user supplied: the
-        stored record it was copied from (with that record's ref), or the
-        user's own words.
+        stored record it was copied from (with that record's ref, including a
+        value read out of a record's longer text), or the user's own words.
 
-        Anything else is refused. A value the model typed from its own memory
-        used to be written into the record as an honestly-labelled ``model``
-        field -- which still put invented text on the record and let it reach
-        the user inside a citation card. The model must copy a real source
-        (a record on screen, including one from a web search or page read) or
-        ask the user; it may no longer write what nobody in this session said.
-
-        Raises ValueError with model-facing guidance when neither source
-        holds the value.
+        Nothing is refused. A value no one in this session can be traced to
+        is kept as ``model`` -- written and shown, labelled unverified, so the
+        user still gets the output and can see exactly which part to check.
         """
         from core.tool_contracts import Field
         field, ref = self.records.resolve(value)
@@ -276,10 +270,7 @@ class Context:
         said = self.user_said(value)
         if said:
             return Field(said, "user"), ""
-        raise ValueError(
-            "这个值在当前会话里找不到来源（既不在已有记录里，也不是用户说的话）。"
-            "如果你已经用网络搜索或网页读取找到了它，把那条记录的编号（rec_N）作为来源复制过来；"
-            "如果没有，请向用户确认这个值，不要自己填。")
+        return Field(value, "model"), ""
 
     def attachment(self, attachment_id: str) -> dict | None:
         found = self.session.attachments.get(attachment_id)
