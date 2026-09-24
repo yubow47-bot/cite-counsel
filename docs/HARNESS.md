@@ -67,12 +67,17 @@
 - **UserText 参数**：工具把"应是用户原话"的参数声明为 `harness.plugin.UserText`。
   值真的出自用户消息时，harness 在执行前跑 `user_said`（§3.4），把**核验后的切片**替换进
   参数——插件永远拿不到模型的转述版。
-- **来源是标注，不是门槛**（`record__add_field` / `Context.provenance` → `Store.resolve`）：
-  模型写入的值按顺序对账：它指明的 `from_ref`/`from_field`（精确或子串——比如从网页正文
-  里读出的事实）→ 所有已在库记录（精确优先于子串，database 优先于 extracted 优先于 user）
-  → 用户原话（`user_said` 切片）。命中就继承那条来源；**都不中也照常写入**，标为 `model`，
-  显示为"未核验"。pinpoint、quote 等参数同理：无来源的值照常出引文，只是引文不算已核验。
-  唯一的拒绝是调用本身无效（比如既没给值、指明的字段也不存在）。
+- **组装记录：来源要给证据，格式要对**（`record__compose`）：一次调用写完整条记录，
+  每个字段是 `{value, source, quote}`。`source` 是读到这个值的那条记录（rec_N）或
+  `"user"`；`quote` 是那条来源里包含这个值的原话。harness 核对原话确实在那条记录里、
+  值确实在原话里，对上了就继承那条记录的来源；没给来源、或原话对不上，**照常写入**，
+  标 `model`（结果里写明原因）。**不再有全局模糊搜索**：值碰巧出现在别的记录里不算出处。
+  格式另查（`core.mcgill_format.field_problem` / `FIELD_FORMATS`）：字段名不属于该类型、
+  超长、或形状不对（`neutral_citation` 里写了一句话）的字段**不写入**，结果里当场说明
+  需要什么格式；其余字段照常写入。判例/法规类记录如果没有任何字段来自数据库或用户，
+  照常写入，但附警告：让模型改为直接引用那条新闻/网页记录。`base_ref` 在已有记录上
+  增改字段，新版本取代旧编号。pinpoint、quote 参数（`Context.provenance` →
+  `Store.resolve`）仍按旧规则对账，无来源的值照常出引文，只是不算已核验。
 - "已核验"不由任何人声明：由推导链计算（`core.tool_contracts.grounding_issues`）。
   推导链叶子全为 `database` 且带 `source_id` 才算核验；一个 `user`/`extracted`/`model`
   叶子就是未核验。
@@ -96,10 +101,10 @@
 2. 固定格式输入（DOI / ISBN / 中立引用号 / 议案编号）由 harness 识别后**作为提示**附在消息后；
    用哪个插件仍由模型决定，代码不做路由。
 3. 工具连续两步全部失败即停止；一步内所有结果都 `final` 时，模型不再带工具地回应一次。
-4. 内置工具始终可用，但各有门槛：`record__new`（空记录）在 web 插件启用时要求本会话先
-   发起过 `web__search`（`Session.web_search_used`，随会话持久化；一次真实尝试即可，失败
-   也算——否则坏 key 会把用户锁死在门外）；`record__add_field` 从不因为缺来源拒绝写入，
-   只把真实来源（或 `model`）记在字段上。
+4. 内置工具 `record__compose` 始终可用：新建记录（不带 `base_ref`）在 web 插件启用时要求
+   本会话先发起过 `web__search`（`Session.web_search_used`，随会话持久化；一次真实尝试即可，
+   失败也算——否则坏 key 会把用户锁死在门外）。已存的记录（数据库结果、抓到的网页、提取的
+   文件）本身就能引用，工具说明和系统提示都要求模型直接引用它，而不是另拼一条。
 
 ## 5. 回复检查（§5.4）：标注，不隐藏
 
@@ -153,8 +158,9 @@
 - **MCP（规格 §7）未做**：等契约与首批插件稳定。两个方向（外部 MCP 当插件、插件暴露为 MCP）
   都以契约为边界。
 - **契约测试**（规格 §9）：越权产出来源、跨会话/不存在编号、伪造 database 叶子、模型值
-  不入证据库（`Store._register`）、**无来源值照写并标 model**、正文子串算出处、
-  **record__new 的搜网门槛**、来源标注、持久化往返——见
+  不入证据库（`Store._register`）、**组装记录：证据核对、无来源照写标 model、格式不对的
+  字段不写入、判例仅凭新闻时的警告**、**record__compose 的搜网门槛**、来源标注、
+  持久化往返——见
   `tests/test_harness.py`、`tests/test_function_plugins.py`、`tests/test_tool_contracts.py`、
   `tests/test_extract_plugins.py`、`tests/test_persistence.py`、`tests/test_web_search.py`。
 - **前端展示（未做，等后端数据形态定稿）**：回复事实的 `facts` 标注（链接 + 片段 + 高亮、

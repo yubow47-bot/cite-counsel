@@ -67,6 +67,26 @@ def test_a_wrong_token_cannot_revive_a_session(tmp_path):
     assert other.sessions.get(session.id, token) is not None
 
 
+def test_deleting_a_session_removes_it_from_memory_and_disk(tmp_path):
+    """No chat-history feature exists yet: "New chat" deletes the old
+    session outright (SessionStore.delete) so nothing in it can resurface
+    in what the user sees as a fresh conversation."""
+    config = tmp_path / "harness.json"
+    h = Harness(discover(), model="m", config_path=config)
+    session, token = h.sessions.start()
+    session.messages.append({"role": "user", "content": "some prior research"})
+    h.sessions.save(session)
+    on_disk = h.sessions.store_dir / f"{session.id}.json"
+    assert on_disk.exists()
+
+    h.sessions.delete(session.id)
+
+    assert not on_disk.exists()
+    assert h.sessions.get(session.id, token) is None    # gone from memory
+    other = Harness(discover(), model="m", config_path=config)
+    assert other.sessions.get(session.id, token) is None   # and cannot be revived from disk either
+
+
 def test_expired_sessions_are_swept_from_disk(tmp_path):
     config = tmp_path / "harness.json"
     h = Harness(discover(), model="m", config_path=config)

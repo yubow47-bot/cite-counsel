@@ -119,9 +119,9 @@ def test_two_empty_searches_warn_the_model_to_stop_retrying(h, session):
     assert "fetch" in second.content["note"]
 
 
-def test_a_search_attempt_sets_the_flag_that_opens_record_new(h, session):
+def test_a_search_attempt_sets_the_flag_that_opens_record_compose(h, session):
     """Even a blocked search discharges the model's duty to try the web:
-    without this, a broken key would lock the model out of record__new
+    without this, a broken key would lock the model out of record__compose
     forever, and the user could not hand over values either."""
     from harness.core import BUILTIN_TOOLS
 
@@ -131,8 +131,10 @@ def test_a_search_attempt_sets_the_flag_that_opens_record_new(h, session):
         with pytest.raises(ValueError):
             web.search(h.context(session, "web"), web.SearchParams(query="Ottawa shooting"))
     assert session.web_search_used is True
-    new_record = BUILTIN_TOOLS[1]
-    result = h._run_builtin(session, new_record, {"record_type": "jurisprudence"}, "record__new")[1]
+    compose = BUILTIN_TOOLS[0]
+    result = h._run_builtin(session, compose, {"record_type": "jurisprudence",
+                                               "fields": {"style_of_cause": {"value": "R v X"}}},
+                            "record__compose")[1]
     assert result.content["ref"] == "rec_1"                   # the gate opened
 
 

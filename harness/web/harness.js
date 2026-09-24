@@ -377,7 +377,16 @@
   $('input').onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); send(); } };
   $('attach').onclick = () => $('file').click();
   $('file').onchange = () => { upload($('file').files[0]); $('file').value = ''; };
-  $('new-chat').onclick = () => { saveSession(null); $('transcript').replaceChildren(); $('empty').hidden = false; document.dispatchEvent(new Event('harness:new-session')); };
+  $('new-chat').onclick = () => {
+    // No chat-history feature exists yet: the old session is deleted on the
+    // server, not just abandoned in the browser, so nothing from it can
+    // resurface in a later "new" conversation. Best-effort -- the UI moves
+    // on to a fresh chat either way.
+    const old = session;
+    saveSession(null); $('transcript').replaceChildren(); $('empty').hidden = false;
+    document.dispatchEvent(new Event('harness:new-session'));
+    if (old) post('/api/sessions/close', {session_id: old.id, session_token: old.token}).catch(() => {});
+  };
   $('model-form').onsubmit = async event => {
     event.preventDefault();
     try { config = {...config, ...(await post('/api/settings/model', {model: $('model').value.trim()}))}; renderSettings(); toast('Model saved.'); }
