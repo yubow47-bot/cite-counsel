@@ -163,3 +163,15 @@ def test_fetch_still_works_when_the_page_has_no_metadata(h, session):
     assert result.content["title"] == "A bare page"
     record = session.records.get(result.content["record"]["ref"])
     assert set(record.fields) == {"title", "url", "text"}
+
+
+def test_a_bot_check_page_is_refused_not_stored(h, session):
+    """bailii's Anubis page extracts as readable text -- it must never land in
+    the session as a record that pretends to be evidence."""
+    page = {"page_title": "Making sure you're not a bot!",
+            "raw_text": "Making sure you're not a bot! Loading... This server is protected."}
+    with patch("llm_api.deepseek_api.extract_from_url", return_value=page):
+        with pytest.raises(ValueError) as exc:
+            web.fetch(h.context(session, "web"), web.FetchParams(url="http://www.bailii.org/uk/cases/UKHL/1932/100.html"))
+    assert "bot-check" in str(exc.value)
+    assert session.records.all() == []

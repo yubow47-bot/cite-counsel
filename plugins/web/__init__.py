@@ -149,6 +149,22 @@ class FetchParams(BaseModel):
     url: str = Field(min_length=8, max_length=2000, description="An http(s) URL")
 
 
+# Anti-scraping challenge pages (Anubis, Cloudflare and friends) extract as a
+# readable page -- a stored one would sit in the session as fake evidence.
+_CHALLENGE_MARKERS = (
+    "making sure you're not a bot",      # Anubis (bailii and friends)
+    "just a moment",                     # Cloudflare
+    "checking your browser",
+    "attention required",
+    "enable javascript and cookies",
+)
+
+
+def _is_challenge(title: str, text: str) -> bool:
+    head = (title + "\n" + text[:400]).casefold()
+    return any(marker in head for marker in _CHALLENGE_MARKERS)
+
+
 def fetch(ctx, p: FetchParams) -> Result:
     from core.tool_contracts import Field, Record
     from llm_api.deepseek_api import extract_from_url
@@ -156,6 +172,8 @@ def fetch(ctx, p: FetchParams) -> Result:
     if page.get("error") or not (page.get("raw_text") or "").strip():
         raise ValueError("the page could not be read (blocked, dynamic or empty)")
     text = page["raw_text"].strip()
+    if _is_challenge(str(page.get("page_title") or ""), text):
+        raise ValueError("the site answered with a bot-check page, not the content; try another source")
     site = str(page.get("site_name") or "").strip()
     title = str(page.get("page_title") or p.url).strip()
     if site and title.endswith(f" | {site}"):
