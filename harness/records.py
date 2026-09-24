@@ -63,6 +63,10 @@ class Store:
         self._objects: dict[str, Any] = {}
         self._meta: dict[str, dict] = {}
         self._evidence: set[tuple[str, str, str | None]] = set()
+        # (origin, source_id) -> whitespace-normalized stored values: lets a
+        # leaf count as sourced when its value appears inside a long stored
+        # text from the same source (a fact read out of a fetched page, say).
+        self._contained: dict[tuple[str, str], list[str]] = {}
         self._superseded_by: dict[str, str] = {}
         self._lock = threading.Lock()
 
@@ -168,6 +172,16 @@ class Store:
                 raise ContractError("只有功能插件可以产出成品或结论。")
             self._audit(obj.derivation, allowed_user)
 
+    def _sourced(self, origin: str, value: str, source_id: str | None) -> bool:
+        """Exact evidence first; then a value contained in a longer stored
+        text from the same source ("26 May 1932" inside a fetched page)."""
+        if (origin, value, source_id) in self._evidence:
+            return True
+        probe = _probe(value)
+        if not probe:
+            return False
+        return any(probe in candidate for candidate in self._contained.get((origin, source_id), ()))
+
     def _audit(self, derivation, allowed_user: frozenset[str]) -> None:
         """Every leaf must trace to evidence this session actually holds."""
         try:
@@ -181,7 +195,7 @@ class Store:
             elif leaf.origin == "database":
                 if not leaf.source_id:
                     raise ContractError("database 叶子必须带来源标识。")
-                if (leaf.origin, leaf.value, leaf.source_id) not in self._evidence:
+                if not self._sourced(leaf.origin, leaf.value, leaf.source_id):
                     raise ContractError(
                         "推导链里的 database 叶子在本次会话里没有出处"
                         f"（{_clip(leaf.value, 60)} / {leaf.source_id}）。")
@@ -190,7 +204,7 @@ class Store:
                     raise ContractError(
                         f"user 叶子既不来自本调用已核验的用户参数，也不在会话证据里（{_clip(leaf.value, 60)}）。")
             elif leaf.origin == "extracted":
-                if (leaf.origin, leaf.value, leaf.source_id) not in self._evidence:
+                if not self._sourced(leaf.origin, leaf.value, leaf.source_id):
                     raise ContractError(
                         f"extracted 叶子在本次会话里没有出处（{_clip(leaf.value, 60)}）。")
             elif leaf.origin == "model":
@@ -209,6 +223,8 @@ class Store:
             for field in obj.fields.values():
                 if field.origin != "model":
                     self._evidence.add((field.origin, field.value, field.source_id))
+                    if field.source_id and field.origin in BORROWED and field.origin != "user":
+                        self._contained.setdefault((field.origin, field.source_id), []).append(_probe(field.value))
         elif isinstance(obj, (Artifact, Finding)):
             for leaf in derivation_leaves(obj.derivation):
                 if leaf.origin != "model":
@@ -217,21 +233,29 @@ class Store:
     # ── Built-in user-field and blank-record tools ────────────────────
 
     def resolve(self, value: str) -> tuple[Field, str]:
-        """Where a value anyone (model or user) supplied already exists here:
-        the best matching record field -- database before extracted before
-        user -- with that record's ref, or a ``model`` field when nothing in
-        this session says it. Model values are never evidence, so a copy of
-        a copy cannot launder itself into a source.
+        """Where a value anyone (model or user) supplied already exists here.
+
+        Exact record-field matches first -- database before extracted before
+        user -- then a value contained inside a record's longer field: a fact
+        the model read out of a fetched page or a judgment's full text is
+        copied from that source, and inherits its origin and source id. Model
+        values are never evidence, so a copy of a copy cannot launder itself
+        into a source.
         """
         probe = _probe(value)
         best = None
-        for ref, record in self.all(Record):
-            for field in record.fields.values():
-                if _probe(field.value) != probe:
-                    continue
-                rank = BORROWED.get(field.origin, len(BORROWED) + 1)
-                if rank < len(BORROWED) + 1 and (best is None or rank < best[0]):
-                    best = (rank, ref, field)
+        for exact in (True, False):
+            for ref, record in self.all(Record):
+                for field in record.fields.values():
+                    candidate = _probe(field.value)
+                    hit = candidate == probe if exact else bool(probe) and probe in candidate
+                    if not hit:
+                        continue
+                    rank = BORROWED.get(field.origin, len(BORROWED) + 1)
+                    if rank < len(BORROWED) + 1 and (best is None or rank < best[0]):
+                        best = (rank, ref, field)
+            if best is not None:
+                break
         if best is None:
             return Field(value, "model"), ""
         _, ref, field = best
