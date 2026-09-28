@@ -2,17 +2,11 @@
 
 import sys
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 sys.path.insert(0, ".")
 
-from fastapi.testclient import TestClient
-
 from llm_api.deepseek_api import URL_EXTRACT_FETCH_TIMEOUT, extract_from_url
-from api.main import app
-
-
-client = TestClient(app)
 
 
 def test_url_extract_fetch_uses_tight_timeout():
@@ -51,23 +45,3 @@ def test_supported_static_url_still_extracts_content():
     assert "error" not in result
     assert "Static Test Page" in (result.get("page_title") or result.get("raw_text") or "")
     assert len(result.get("raw_text", "").strip()) >= 50
-
-
-def test_short_extracted_body_returns_existing_unsupported_guidance():
-    """Below-threshold URL content should not fall through to slow LLM steps."""
-    with (
-        patch("api.main.extract_from_url") as mock_extract,
-        patch("api.main.classify_document_type") as mock_classify,
-        patch("api.main.format_citation") as mock_format,
-    ):
-        mock_extract.return_value = {"url": "https://www.ourcommons.ca/test", "raw_text": "short"}
-
-        response = client.post("/api/extract/url", json={"url": "https://www.ourcommons.ca/test"})
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["route"] == "url"
-    assert body["status"] == "unsupported"
-    assert "Try uploading a screenshot of the page instead" in body["error"]["reason"]
-    mock_classify.assert_not_called()
-    mock_format.assert_not_called()

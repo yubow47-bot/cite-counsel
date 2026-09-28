@@ -27,14 +27,6 @@ _A2AJ_TIMING_PATCHES = (
 )
 
 
-@pytest.fixture(autouse=True)
-def _no_rate_limit():
-    """The whole suite shares one in-process per-IP limiter bucket; keep these
-    requests out of that budget."""
-    with patch("api.main.rate_limiter.check", return_value=True):
-        yield
-
-
 def _http_response(json_data):
     resp = MagicMock()
     resp.raise_for_status = MagicMock()
@@ -149,22 +141,3 @@ def test_map_fields_null_dataset_no_crash():
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  H3 — concept scaffold prefill follows the query
-# ═════════════════════════════════════════════════════════════════════════════
-
-@pytest.fixture
-def api_client():
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from fastapi.testclient import TestClient
-    from api.main import app
-    return TestClient(app)
-
-
-def test_concept_scaffold_unsupported_no_hardcoded_prefill_leak(api_client):
-    with patch("api.main.classify_and_normalize",
-               return_value={"type": "concept", "normalized": "right to housing", "original": "right to housing"}), \
-         patch("api.main.search_citation", return_value=[]):
-        resp = api_client.post("/api/citation", json={"input": "right to housing"})
-
-    raw = resp.text
-    assert "duty to consult" not in raw

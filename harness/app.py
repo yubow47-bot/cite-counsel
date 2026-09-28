@@ -21,10 +21,29 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from harness.core import Harness
 from harness.llm import LLMError
+from harness.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
 WEB = Path(__file__).resolve().parent / "web"
 UPLOAD_SUFFIXES = {".pdf", ".docx", ".pptx", ".xlsx", ".jpg", ".jpeg", ".png", ".webp"}
+
+
+def _magic_byte_ok(head: bytes, suffix: str) -> bool:
+    """Loose content sniff: leading bytes must look like the declared type."""
+    if not head:
+        return False
+    if suffix == ".pdf":
+        return head.startswith(b"%PDF")
+    if suffix in (".docx", ".pptx", ".xlsx"):
+        # OOXML containers are zip archives (spanning/empty markers tolerated)
+        return head[:4] in (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
+    if suffix in (".jpg", ".jpeg"):
+        return head.startswith(b"\xff\xd8\xff")
+    if suffix == ".png":
+        return head.startswith(b"\x89PNG\r\n\x1a\n")
+    if suffix == ".webp":
+        return head[:4] == b"RIFF" and head[8:12] == b"WEBP"
+    return False
 
 
 class SessionRef(BaseModel):
@@ -72,7 +91,6 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
     app.state.harness = harness
     max_bytes = max_upload_mb * 1024 * 1024
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "testserver"])
-    from api.rate_limiter import RateLimiter
     limiter = RateLimiter()
     slots = asyncio.Semaphore(2)
 
@@ -245,7 +263,6 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
         contents = await file.read(max_bytes + 1)
         if len(contents) > max_bytes:
             return fail(f"The file limit is {max_upload_mb} MB.", 413)
-        from api.main import _magic_byte_ok
         if not _magic_byte_ok(contents[:16], suffix):
             return fail("The file content does not match its extension.")
         session, token = session_for(SessionRef(session_id=session_id or None, session_token=session_token or None))

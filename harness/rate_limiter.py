@@ -4,13 +4,12 @@ Env:
   RATE_LIMIT_PER_MIN  (int, default 30)  — max requests/IP/minute.
   RATE_LIMIT_PER_HOUR (int, default 200) — max requests/IP/hour.
 
-IP source: leftmost entry of X-Forwarded-For (real client behind HF proxy).
-Rate limiting is best-effort (XFF is client-spoofable); the global spend cap
-is the real backstop.
+The chatbox binds to 127.0.0.1, so the IP is always the local client; the
+limiter exists to keep a runaway page from hammering the process. Rate
+limiting is best-effort; the daily spend cap is the real backstop.
 
-Memory: the IP table is bounded.  Spoofed XFF values would otherwise create a
-permanent dict entry per fake IP (the limiter itself never blocks a first-time
-IP), so the table is swept whenever it grows past _MAX_TRACKED_IPS.
+Memory: the IP table is bounded. The table is swept whenever it grows past
+_MAX_TRACKED_IPS.
 """
 
 import os
@@ -38,18 +37,6 @@ _WINDOW_HOUR = 3600
 # RATE_PER_HOUR timestamps (in-window pruning), so worst-case memory is
 # _MAX_TRACKED_IPS * RATE_PER_HOUR floats.
 _MAX_TRACKED_IPS = 10_000
-
-
-def extract_client_ip(request) -> str:
-    """Extract real client IP from X-Forwarded-For (HF Spaces reverse proxy).
-
-    Leftmost entry is the original client. Falls back to request.client.host
-    when no XFF header is present (local dev).
-    """
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 class RateLimiter:
@@ -86,8 +73,8 @@ class RateLimiter:
     def _sweep(self, cutoff_hour: float) -> None:
         """Drop expired and empty buckets to bound the IP table.
 
-        Called only when the table exceeds _MAX_TRACKED_IPS (spoofed-XFF
-        flood), so the O(n) walk is amortized over many requests.
+        Called only when the table exceeds _MAX_TRACKED_IPS, so the O(n) walk
+        is amortized over many requests.
         """
         empty: list[str] = []
         for key, bucket in self._buckets.items():
