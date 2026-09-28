@@ -27,7 +27,7 @@ def find_case(ctx, p: CaseParams) -> Result:
     blocks = [{"type": "record_card", "ref": ref, "source_type": r.source_type,
                "fields": {k: f.value for k, f in r.fields.items()},
                "verified": True} for ref, r in zip(refs, records)]
-    return Result({"found": len(records), "records": [{"ref": ref} for ref in refs],
+    return Result({"found": len(records), "records": [ctx.records.summary(ref) for ref in refs],
                    "note": ("records are stored; refer to them by ref" if records else
                             "no match in the Canadian databases searched; this does not mean it does not exist")},
                   blocks + ([{"type": "notice", "level": "info",
@@ -46,7 +46,7 @@ def find_legislation(ctx, p: LegislationParams) -> Result:
     blocks = [{"type": "record_card", "ref": ref, "source_type": r.source_type,
                "fields": {k: f.value for k, f in r.fields.items()},
                "verified": True} for ref, r in zip(refs, records)]
-    return Result({"found": len(records), "records": [{"ref": ref} for ref in refs],
+    return Result({"found": len(records), "records": [ctx.records.summary(ref) for ref in refs],
                    "note": "records are stored; refer to them by ref" if records else "no match"},
                   blocks, final=bool(records))
 

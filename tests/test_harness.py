@@ -797,3 +797,67 @@ def test_a_long_clean_reply_is_shown_in_full(monkeypatch, harness):
     blocks = harness.run_turn(session, "你 brainstorm 一下")
     assert len(long_reply) > 600
     assert [b["type"] for b in blocks] == ["text"] and blocks[0]["text"].count("citator") == 20
+
+
+def test_an_input_hint_does_not_change_the_reply_language(monkeypatch, harness):
+    """Seen in review: the hint is labelled in Chinese, and kept inside the
+    user's message it made an English question about 2022 SCC 39 read as
+    Chinese -- the model was told to reply in Simplified Chinese."""
+    script = Script(monkeypatch, [say("Here it is.")])
+    session, _ = harness.sessions.start()
+    harness.run_turn(session, "Can you cite 2022 SCC 39 for me?")
+    system = script.calls[0]["messages"][0]["content"]
+    assert system.rstrip().endswith("Reply in the language of the user's latest message.")
+    # The hint still reaches the model, as a harness note, not the user's words.
+    assert session.user_texts() == ["Can you cite 2022 SCC 39 for me?"]
+    assert any(m["role"] == "user" and "neutral citation" in (m["content"] or "")
+               for m in script.calls[0]["messages"])
+
+
+def test_a_long_turn_keeps_the_request_ahead_of_its_notes(harness):
+    """The notes after the user's message (an input hint, an attachment
+    list) are not the start of the turn: anchored on them, a turn longer
+    than HISTORY_LIMIT dropped the request it was serving."""
+    from harness.core import HISTORY_LIMIT
+
+    session, _ = harness.sessions.start()
+    session.messages.append({"role": "user", "content": "cite the attached article"})
+    session.messages.append({"role": "user", "_note": True, "content": "[附件 att_1: a.pdf]"})
+    for n in range(HISTORY_LIMIT):
+        session.messages.append({"role": "assistant", "content": None,
+                                 "tool_calls": [{"id": f"c{n}", "type": "function",
+                                                 "function": {"name": "x", "arguments": "{}"}}]})
+        session.messages.append({"role": "tool", "tool_call_id": f"c{n}", "content": "{}"})
+    history = harness._history(session)
+    assert history[0] == {"role": "user", "content": "cite the attached article"}
+
+
+def test_compose_from_a_stored_record_needs_no_web_search(tmp_path):
+    """The file plugin says to compose from an uploaded file before any
+    lookup; with web enabled the gate used to force a pointless search
+    first. A field quoting a stored record means the source is in hand."""
+    from harness.plugin import discover
+
+    h = Harness(discover(), model="m", config_path=tmp_path / "h.json")
+    h.set_enabled("web", True)
+    session, _ = h.sessions.start()
+    page = _page(session)
+    composed = _compose(h, session, record_type="jurisprudence", fields={
+        "style_of_cause": {"value": "Donoghue v Stevenson", "source": page}})
+    assert composed.content["ref"]
+    # A made-up ref is not a stored record: still gated.
+    refused = _compose(h, session, record_type="jurisprudence", fields={
+        "style_of_cause": {"value": "R v X", "source": "rec_99"}})
+    assert "web__search" in refused.content["error"]
+
+
+def test_compose_is_not_gated_by_a_web_plugin_the_user_switched_off(tmp_path):
+    """Loaded once, then disabled: web__search can no longer run, so the
+    gate must not wait for it."""
+    from harness.plugin import discover
+
+    h = Harness(discover(), model="m", config_path=tmp_path / "h.json")
+    session, _ = h.sessions.start()
+    session.loaded.append("web")
+    assert _compose(h, session, record_type="jurisprudence",
+                    fields={"style_of_cause": {"value": "R v X"}}).content["ref"] == "rec_1"

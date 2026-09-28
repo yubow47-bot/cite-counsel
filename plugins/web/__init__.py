@@ -105,6 +105,10 @@ class SearchParams(BaseModel):
 
 def search(ctx, p: SearchParams) -> Result:
     provider = ctx.settings.get("provider") or ""
+    # Asked and unable is still an attempt: a search that cannot run (no
+    # service chosen, no key) must not leave record__compose waiting on a
+    # search that will never happen.
+    ctx.session.web_search_used = True
     if provider not in {name for name in PROVIDERS if name}:
         return Result({"error": "No search service is selected. Tell the user to choose one in the settings "
                                 "bar under this plugin."},
@@ -124,10 +128,8 @@ def search(ctx, p: SearchParams) -> Result:
                                 "text": "Exa is selected but no API key is set. Add EXA_API_KEY=your-key to "
                                         ".env, or paste it under the \"Web search\" plugin in the settings "
                                         "bar."}], final=True)
-            ctx.session.web_search_used = True   # a real attempt: even a failed one counts (record__compose)
             results = exa_search(p.query, 6, api_key, p.latest_days)
         else:
-            ctx.session.web_search_used = True   # a real attempt: even a blocked one counts (record__compose)
             results = duckduckgo_lite(p.query, 6)
     except ValueError:
         raise

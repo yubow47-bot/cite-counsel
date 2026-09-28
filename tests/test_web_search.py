@@ -191,3 +191,14 @@ def test_a_bot_check_page_is_refused_not_stored(h, session):
             web.fetch(h.context(session, "web"), web.FetchParams(url="http://www.bailii.org/uk/cases/UKHL/1932/100.html"))
     assert "bot-check" in str(exc.value)
     assert session.records.all() == []
+
+
+@pytest.mark.parametrize("settings", [{"provider": ""}, {"provider": "exa", "exa_api_key": ""}])
+def test_a_search_that_cannot_run_still_opens_record_compose(h, session, settings, monkeypatch):
+    """No service chosen, or Exa with no key: the search cannot run, and
+    record__compose must not wait forever for one that will never happen."""
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    h.set_plugin_settings("web", settings)
+    result = web.search(h.context(session, "web"), web.SearchParams(query="Ottawa shooting"))
+    assert "error" in result.content
+    assert session.web_search_used is True

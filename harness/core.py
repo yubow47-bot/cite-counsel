@@ -35,7 +35,7 @@ from harness.plugin import Plugin, Result, UserText, discover
 from harness.records import ContractError, _probe
 from harness.session import HISTORY_LIMIT, Context, Session, SessionStore
 from core.tool_contracts import Artifact, Field as EvidenceField, Finding, Record
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Literal
 
 logger = logging.getLogger(__name__)
@@ -212,6 +212,7 @@ _AUTHORITY_TYPES = {"jurisprudence", "legislation", "bill", "treaty", "foreign",
 
 
 class ComposeField(BaseModel):
+    name: str = Field(min_length=1, max_length=40, description="The field name, e.g. author, title, year")
     value: str = Field(min_length=1, max_length=500, description="What goes in the field")
     source: str | None = Field(default=None, max_length=20,
                                description="Where you read it: a record ref (rec_N), or \"user\" for the user's "
@@ -228,7 +229,18 @@ class Compose(BaseModel):
     base_ref: str | None = Field(default=None, max_length=20,
                                  description="An existing record to add fields to or correct; its other fields "
                                              "are kept")
-    fields: dict[str, ComposeField] = Field(description="Every field to write, in this one call")
+    fields: list[ComposeField] = Field(min_length=1, description="Every field to write, in this one call")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fields_by_name(cls, data):
+        # Seen live: a model sent a list of fields with no names and the
+        # whole call was rejected. The list with an explicit name is the
+        # shape; an object keyed by field name is accepted too.
+        if isinstance(data, dict) and isinstance(data.get("fields"), dict):
+            data = {**data, "fields": [{"name": name, **(item if isinstance(item, dict) else {"value": item})}
+                                       for name, item in data["fields"].items()]}
+        return data
 
 
 _FIELD_STATUS = {
@@ -263,14 +275,27 @@ def _evidence(ctx, value: str, source: str | None, quote: str | None) -> tuple[E
     return EvidenceField(value, "model"), "", f"the quote is not in {source}"
 
 
+def _stored_record(ctx, ref: str) -> bool:
+    try:
+        ctx.records.get(ref, Record)
+    except ValueError:
+        return False
+    return True
+
+
 def _compose(ctx, p: Compose) -> Result:
     if not p.fields:
         raise ValueError("Give at least one field.")
     base = ctx.records.get(p.base_ref, Record) if p.base_ref else None
     if base is None:
-        harness = ctx._harness
-        web_available = "web" in harness.config["enabled"] or "web" in ctx.session.loaded
-        if web_available and not ctx.session.web_search_used:
+        # Enabled now, not loaded once: a plugin the user has since switched
+        # off cannot run web__search, and the gate would never open.
+        web_available = "web" in ctx._harness.config["enabled"]
+        # A field quoting a stored record (an uploaded file, a fetched page, a
+        # database hit) means the source is already in hand -- there is
+        # nothing for a web search to find first.
+        from_stored = any(item.source and _stored_record(ctx, item.source) for item in p.fields)
+        if web_available and not from_stored and not ctx.session.web_search_used:
             # A new record is for a source the databases lack; the web is tried first.
             return Result(
                 {"error": "Not found in the databases, and you have not tried a web search yet. Call "
@@ -284,7 +309,8 @@ def _compose(ctx, p: Compose) -> Result:
         raise ValueError(f"{p.base_ref} is a {base.source_type} record, not {p.record_type}.")
     fields = dict(base.fields) if base else {}
     written, rejected = {}, {}
-    for name, item in p.fields.items():
+    for item in p.fields:
+        name = item.name
         problem = mcgill_format.field_problem(record_type, name, item.value)
         if problem:
             rejected[name] = problem
@@ -335,14 +361,15 @@ BUILTIN_TOOLS = (
              "Build a citation record in one call, for a source no stored record already covers. First: if a "
              "stored record already IS the source (a fetched page, an extracted file, a database hit), cite that "
              "record directly -- do not rebuild it. Pass record_type and every field at once, each as "
-             "{value, source, quote}: source is the record you read the value from (rec_N) or \"user\" for the "
+             "{name, value, source, quote} in a list: source is the record you read the value from (rec_N) or \"user\" for the "
              "user's own words; quote is the exact words in that source containing the value. A field whose "
              "quote checks out keeps that source's origin; one without a source is written as model-supplied, "
              "unverified. A value in the wrong shape for its field (a sentence where a citation number goes, a "
              "year that is not four digits) is not written and the result says why -- fix it or leave it out. "
              "Never write a citation number (neutral_citation, reporter) you do not actually have. Pass base_ref "
              "to add or correct fields on an existing record; the new version replaces it. When the web plugin "
-             "is enabled, a new record is refused until web__search has run once this session.",
+             "is enabled, a new record that quotes no stored record is refused until web__search has run once "
+             "this session.",
              Compose, _compose),
 )
 
@@ -490,7 +517,12 @@ class Harness:
             "plugin can do what is asked, say so plainly.",
             "Cite what you actually found. A stored record -- a database hit, a fetched page, an extracted "
             "file -- is citable as it is: cite it directly. Build a record with record__compose only when "
-            "no stored record is the source, and then quote, for each field, the words you read it from.",
+            "no stored record is the source, and then quote, for each field, the words you read it from. "
+            "An extracted file often already states its own citation (a cover page's \"Citation:\" line, "
+            "the title and author on its first page): build the record from that text directly.",
+            "A lookup elsewhere is a check, not the answer: compare what it returns -- author, title, year -- "
+            "with what you are verifying. A result that does not match is a different work: do not cite it; "
+            "say it did not match and use what you already have.",
             "When a lookup finds nothing, do not give up yet: search again in another form (the citation "
             "alone, the name alone), or load another plugin that could plausibly hold it. If what you find "
             "is only a report about a source (a news story about a decision), say that the source itself "
@@ -554,11 +586,17 @@ class Harness:
         the turn actually in progress simply gone. HISTORY_LIMIT is now a
         soft budget: earlier whole turns are added while there is room,
         oldest first to drop, but the current turn is always kept whole.
+
+        The current turn starts at the person's own message, not at the
+        harness notes that follow it (an input hint, an attachment list):
+        anchored on a note, a long turn dropped the request it was serving.
         """
         user_indices = [i for i, m in enumerate(session.messages) if m.get("role") == "user"]
+        typed = [i for i in user_indices if not session.messages[i].get("_note")]
         if not user_indices:
             return []
-        start = user_indices[-1]
+        start = typed[-1] if typed else user_indices[-1]
+        user_indices = [i for i in user_indices if i < start] + [start]
         for idx in reversed(user_indices[:-1]):
             if len(session.messages) - idx > HISTORY_LIMIT:
                 break
@@ -695,14 +733,22 @@ class Harness:
         blocks.append({"type": "text", "text": raw, **({"facts": facts} if facts else {})})
 
     def run_turn(self, session: Session, text: str, attachments: list[str] = ()) -> list[dict]:
-        hints = _input_hints(text)
-        session.messages.append({"role": "user", "content": text.strip()
-                                 + (("\n\n" + hints) if hints else "")})
-        self._note_attachments(session, attachments)
+        self._open_turn(session, text, attachments)
         try:
             return self._turn(session)
         finally:
             self.sessions.save(session)
+
+    def _open_turn(self, session: Session, text: str, attachments: list[str]) -> None:
+        """The user's words, then the harness's own notes about them. The
+        input hint is the harness talking, not the user: kept inside the
+        user's message, its Chinese label made an English question with a
+        citation in it read as Chinese to the reply-language check."""
+        session.messages.append({"role": "user", "content": text.strip()})
+        hints = _input_hints(text)
+        if hints:
+            session.messages.append({"role": "user", "_note": True, "content": hints})
+        self._note_attachments(session, attachments)
 
     def _note_attachments(self, session: Session, attachments: list[str]) -> None:
         # A filename is not the user's words -- an uploaded file's own name
@@ -776,10 +822,7 @@ class Harness:
         would have returned, in the same order. The reply text itself still
         lands as one whole ``text`` block, same as before -- only the
         thinking is meant to be watched as it happens."""
-        hints = _input_hints(text)
-        session.messages.append({"role": "user", "content": text.strip()
-                                 + (("\n\n" + hints) if hints else "")})
-        self._note_attachments(session, attachments)
+        self._open_turn(session, text, attachments)
         try:
             yield from self._turn_events(session)
         finally:

@@ -32,6 +32,25 @@ class Response:
     ("The Concept of Law", "Hart The Concept of Law", True),
     ("Upanisads for Beginners", "The Early Upanisads Olivelle", False),
     ("Law", "", False),
+    # Seen live: a long, specific title matched two short generic ones that
+    # only share its topic words -- the other direction was never checked.
+    ("Indigenous Peoples, Self-determination and International Law",
+     "Columbus's Legacy: Law as an Instrument of Racial Discrimination against Indigenous Peoples' "
+     "Rights of Self-Determination", False),
+    ("Columbus's Legacy: Law as an Instrument of Racial Discrimination against Indigenous Peoples' "
+     "Rights of Self-Determination",
+     "Williams Columbus's Legacy: Law as an Instrument of Racial Discrimination against Indigenous "
+     "Peoples' Rights of Self-Determination 1991", True),
+    # A pasted full citation around a short title is still that work...
+    ("The Concept of Law", "H.L.A. Hart, The Concept of Law, 3rd ed (Oxford: Oxford University Press, 2012)",
+     True),
+    ("Columbus's Legacy", "Robert A Williams, Columbus's Legacy (1991) 8 Ariz J Intl & Comp L 51", True),
+    # ...but only where the title stands as its own part of the citation,
+    ("International Law", "H Smith, Indigenous Peoples, Self-determination and International Law (Oxford: "
+                          "Oxford University Press, 2012)", False),
+    # and a bare title with a comma in it is not split into generic pieces.
+    ("Indigenous Peoples", "Indigenous Peoples, Self-determination and International Law in the Modern Era",
+     False),
 ])
 def test_record_title_must_be_what_the_user_typed(title, query, expected):
     assert bibliographic.title_matches(title, query) is expected
@@ -96,3 +115,11 @@ def test_statute_chapters(raw, expected):
 ])
 def test_style_of_cause_follows_mcgill_not_the_database_print(raw, expected):
     assert mcgill_format.mcgill_clean("style_of_cause", raw) == expected
+
+
+def test_an_author_with_a_suffix_is_not_inverted():
+    """Seen live: "Robert A. Williams, Jr" was read as "Last, First" and
+    rendered "Jr Robert A. Williams"."""
+    from core.mcgill_format import mcgill_clean
+    assert mcgill_clean("author", "Robert A. Williams, Jr") == "Robert A. Williams, Jr"
+    assert mcgill_clean("author", "Olivelle, Patrick") == "Patrick Olivelle"

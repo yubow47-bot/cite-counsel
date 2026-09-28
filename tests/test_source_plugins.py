@@ -104,3 +104,21 @@ def test_openlibrary_title_search_uses_olid_ids():
     assert record.record_id == "OL123M"
     assert record.fields["publisher"].value == "Oxford University Press"
     assert all(f.origin == "database" for f in record.fields.values())
+
+
+def test_search_results_show_the_model_each_candidates_fields():
+    """The model is told to compare each candidate's author, title and year
+    with what it is verifying, and to say which candidate is likely -- it
+    can only do that if the result carries the fields, not just the refs."""
+    h, session = make()
+    from plugins import crossref
+    from core.tool_contracts import Field, Record
+    record = Record("journal_article", {"title": Field("Columbus's Legacy", "database", source_id="crossref:DOI:10.1/x"),
+                                        "author": Field("Robert A Williams", "database", source_id="crossref:DOI:10.1/x"),
+                                        "year": Field("1991", "database", source_id="crossref:DOI:10.1/x")},
+                    "crossref", "10.1/x")
+    with patch("plugins.crossref.source_article_title", return_value=[record]):
+        result = crossref.find_article(ctx_for(h, session, "crossref"), crossref.ArticleParams(title="Columbus's Legacy"))
+    candidate = result.content["records"][0]
+    assert candidate["ref"] == "rec_1"
+    assert candidate["fields"] == {"title": "Columbus's Legacy", "author": "Robert A Williams", "year": "1991"}
