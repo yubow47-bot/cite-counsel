@@ -93,7 +93,6 @@ def configure() -> dict:
         "LLM_COMPLETIONS_URL": "https://openrouter.ai/api/v1/chat/completions",
         "LLM_DEFAULT_MODEL": settings["llm_model"],
         "OPENROUTER_VISION_MODEL": settings["vision_model"],
-        "DAILY_SPEND_CAP_USD": str(cap), "DEBUG_RESPONSES": "false",
-        "DISCORD_WEBHOOK_URL": "", "SCAFFOLD_ENABLED": "true",
+        "DAILY_SPEND_CAP_USD": str(cap),
     })
     return settings

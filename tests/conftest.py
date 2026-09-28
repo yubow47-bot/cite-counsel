@@ -26,13 +26,3 @@ def _clear_canlii_legislation_cache():
     clear_legislation_cache()
     yield
     clear_legislation_cache()
-
-
-@pytest.fixture(autouse=True)
-def _clear_api_rate_limiter():
-    """Keep endpoint tests independent while exercising the real limiter."""
-    from api.main import rate_limiter
-
-    rate_limiter._buckets.clear()
-    yield
-    rate_limiter._buckets.clear()
