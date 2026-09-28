@@ -1,4 +1,4 @@
-"""Global daily spend cap tracker — thread-safe, HF Dataset persistence.
+"""Global daily spend cap tracker — thread-safe, in-memory.
 
 Tracks cumulative USD spend across ALL paid LLM providers for the current
 UTC day. When DAILY_SPEND_CAP_USD is reached, is_over_cap() returns True
@@ -17,7 +17,6 @@ import os
 import threading
 import time
 
-from core.hf_store import read_dataset, append_record
 
 logger = logging.getLogger(__name__)
 
@@ -64,24 +63,18 @@ def normalize_model_key(model: str) -> str:
 
 _DAILY_CAP = float(os.getenv("DAILY_SPEND_CAP_USD", "10"))
 
-# Flush throttle
-_FLUSH_INTERVAL_CALLS = 20
-_FLUSH_INTERVAL_SEC = 60
-
 
 class SpendTracker:
-    """Thread-safe global spend counter with optional HF Dataset persistence."""
+    """Thread-safe in-memory global spend counter.
+
+    Persistence was intentionally removed together with the Hugging Face
+    integration: the daily cap now resets on process restart.
+    """
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._utc_date: str = ""
+        self._utc_date: str = time.strftime("%Y-%m-%d", time.gmtime())
         self._total_spend: float = 0.0
-        self._calls_since_flush: int = 0
-        self._last_flush_ts: float = 0.0
-        self._persistence_ok: bool = True  # starts optimistic
-
-        # Cold start: read today's spend from HF Dataset
-        self._cold_start()
 
     # ── public API ──
 
@@ -91,11 +84,6 @@ class SpendTracker:
         with self._lock:
             self._check_day_rollover()
             self._total_spend += cost
-            self._calls_since_flush += 1
-        # Flush OUTSIDE the lock: the HF download-append-upload round-trip can
-        # take seconds and must never stall every in-flight LLM call that
-        # shares this tracker.
-        self._maybe_flush()
 
     def is_over_cap(self) -> bool:
         """Return True if cumulative spend has reached the daily cap."""
@@ -144,73 +132,6 @@ class SpendTracker:
         if self._utc_date != today:
             self._utc_date = today
             self._total_spend = 0.0
-            self._calls_since_flush = 0
-
-    def _maybe_flush(self):
-        """Throttled HF flush — every N calls or N seconds, whichever first.
-
-        Called WITHOUT the lock held (record_cost releases it first).  The
-        flush decision and state snapshot are taken under the lock; the
-        network write happens after releasing it.
-        """
-        if not self._persistence_ok:
-            return
-        now = time.time()
-        with self._lock:
-            due = (
-                self._calls_since_flush >= _FLUSH_INTERVAL_CALLS
-                or (self._calls_since_flush > 0 and now - self._last_flush_ts >= _FLUSH_INTERVAL_SEC)
-            )
-            if not due:
-                return
-            self._calls_since_flush = 0
-            self._last_flush_ts = now
-            # Consistent snapshot for the record (state may move while we write)
-            record = {
-                "date": self._utc_date,
-                "total_spend_usd": round(self._total_spend, 6),
-                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            }
-        self._do_flush(record)
-
-    def _do_flush(self, record: dict):
-        """Write the given state snapshot to HF Dataset (no lock held)."""
-        ok = append_record(record)
-        if not ok:
-            with self._lock:
-                self._persistence_ok = False
-            logger.warning(
-                "Spend tracker persistence failed — continuing in-memory. "
-                "Cap will reset on restart."
-            )
-
-    def _cold_start(self):
-        """Read today's accumulated spend from HF Dataset on startup."""
-        today = time.strftime("%Y-%m-%d", time.gmtime())
-        self._utc_date = today
-
-        records = read_dataset()
-        if not records:
-            # Degrade gracefully
-            if not os.getenv("HF_SPEND_DATASET") or not os.getenv("HF_TOKEN"):
-                logger.warning(
-                    "HF_SPEND_DATASET/HF_TOKEN not configured — "
-                    "spend cap running in-memory only. Cap will reset on restart."
-                )
-            self._persistence_ok = bool(os.getenv("HF_SPEND_DATASET") and os.getenv("HF_TOKEN"))
-            return
-
-        # Find the most recent record for today
-        today_records = [r for r in records if r.get("date") == today]
-        if today_records:
-            # Use the most recent today record
-            latest = max(today_records, key=lambda r: r.get("updated_at", ""))
-            self._total_spend = float(latest.get("total_spend_usd", 0.0))
-            logger.info(
-                "Spend tracker cold start: loaded $%.4f for %s from HF Dataset",
-                self._total_spend, today,
-            )
-        self._persistence_ok = True
 
 
 # Module-level singleton — import this from anywhere

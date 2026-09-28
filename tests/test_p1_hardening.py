@@ -202,29 +202,6 @@ def test_discord_sanitizes_and_disables_mentions():
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  spend_tracker — HF flush outside the lock
-# ═════════════════════════════════════════════════════════════════════════════
-
-def test_flush_runs_without_holding_the_lock():
-    from core import spend_tracker as st
-    tracker = st.spend_tracker
-
-    lock_held_during_flush = []
-
-    def fake_append(record, *args, **kwargs):
-        lock_held_during_flush.append(tracker._lock.locked())
-        return True
-
-    with patch.object(st, "append_record", fake_append):
-        # Force the flush threshold on the next record_cost
-        tracker._calls_since_flush = st._FLUSH_INTERVAL_CALLS - 1
-        tracker._persistence_ok = True
-        tracker.record_cost("deepseek", "deepseek-v4-flash", 100, 100)
-
-    assert lock_held_during_flush == [False]
-
-
-# ═════════════════════════════════════════════════════════════════════════════
 #  legisinfo find_bills — cached fetch + id-less matches kept
 # ═════════════════════════════════════════════════════════════════════════════
 

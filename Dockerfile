@@ -2,8 +2,8 @@
 
 FROM python:3.11-slim
 
-# --- bust HF Spaces build cache ---
-# Previous build cached a stale BuildKit ref for profiling/; this comment
+# --- build-cache buster ---
+# Previous builds cached a stale BuildKit ref for profiling/; this comment
 # invalidates the COPY layer chain without changing any actual instruction.
 
 # System deps for pdfplumber (pdfminer.six), pymupdf, trafilatura
@@ -30,7 +30,7 @@ COPY utils/ ./utils/
 COPY data/ ./data/
 COPY mcgill_rules.json .
 
-# HF Spaces expects the app on port 7860
+# The API listens on 7860
 EXPOSE 7860
 
 # uvicorn serves api.main:app on 0.0.0.0:7860
