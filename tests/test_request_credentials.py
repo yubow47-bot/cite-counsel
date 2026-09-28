@@ -9,19 +9,15 @@ from llm_api import request_credentials as creds
 
 
 def test_absent_by_default_falls_back_to_environment(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY", "env-key")
-    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
-    assert creds.openrouter_key() == "env-key"
-    assert creds.typesafe_key() == ""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    assert creds.openrouter_key() == ""
 
 
 def test_per_request_key_wins_over_environment(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "env-key")
-    monkeypatch.setenv("TYPESAFE_API_KEY", "env-jev-key")
     with creds.use_credentials(creds.RequestCredentials(openrouter_api_key="request-key")):
         assert creds.openrouter_key() == "request-key"
-        # Only the field that was set is overridden; the other still falls through.
-        assert creds.typesafe_key() == "env-jev-key"
     # The environment key is back in control once the block exits.
     assert creds.openrouter_key() == "env-key"
 
@@ -53,7 +49,7 @@ def test_a_blank_or_oversized_key_is_rejected():
     with pytest.raises(ValueError):
         creds.RequestCredentials(openrouter_api_key="   ")
     with pytest.raises(ValueError):
-        creds.RequestCredentials(typesafe_api_key="x" * 401)
+        creds.RequestCredentials(openrouter_api_key="x" * 401)
 
 
 def test_nesting_restores_the_outer_value(monkeypatch):
