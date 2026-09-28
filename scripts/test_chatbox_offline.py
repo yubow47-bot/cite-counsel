@@ -6,7 +6,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-os.environ.update({"MCGILL_SKIP_DOTENV": "1", "HF_TOKEN": "", "HF_SPEND_DATASET": "",
+os.environ.update({"MCGILL_SKIP_DOTENV": "1",
                    "DISCORD_WEBHOOK_URL": "", "OPENROUTER_API_KEY": "offline-test",
                    "DEEPSEEK_API_KEY": "offline-test", "GEMINI_API_KEY": "offline-test"})
 

@@ -999,27 +999,15 @@ def feedback(body: FeedbackInput, background_tasks: BackgroundTasks):
             error={"reason": _USER_FACING_ERROR},
         )
 
-    # ── Background delivery (HF Dataset + Discord) ──
+    # ── Background delivery (Discord) ──
     background_tasks.add_task(_deliver_feedback, record)
 
     return _envelope(True, body.route or "", "done", {})
 
 
 def _deliver_feedback(record: dict) -> None:
-    """Fire-and-forget both delivery paths. Never raises."""
-    _persist_feedback_hf(record)
+    """Fire-and-forget delivery. Never raises."""
     _notify_discord(record)
-
-
-def _persist_feedback_hf(record: dict) -> None:
-    """Write feedback to HF Dataset in background thread. Never raises."""
-    try:
-        from core.hf_store import append_record
-        ok = append_record(record, filename="feedback.jsonl")
-        if not ok:
-            _logging.getLogger(__name__).warning("Feedback HF Dataset write returned False")
-    except Exception:
-        _logging.getLogger(__name__).warning("Feedback HF Dataset write failed", exc_info=True)
 
 
 def _notify_discord(record: dict) -> None:

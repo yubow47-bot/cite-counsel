@@ -52,7 +52,7 @@ Key directories:
 ```text
 frontend/       Next.js application and component tests
 api/            FastAPI routes, request guards, and manual scaffold
-core/           citation formatting, spend tracking, and persistence helpers
+core/           citation formatting and spend tracking
 local_tools/    database adapters, URL guards, and file extraction
 llm_api/        Gemini and compatible-completions clients
 tests/          backend unit and contract tests
@@ -121,7 +121,6 @@ Put backend secrets in a root `.env` file or in the deployment platform's secret
 | `DEBUG_RESPONSES` | `false` | Includes internal debug data in API responses when enabled; keep off publicly. |
 | `SCAFFOLD_ENABLED` | `false` | Enables the API manual-assembly route. |
 | `NEXT_PUBLIC_SCAFFOLD_ENABLED` | unset | Shows the manual form in the frontend when set to `true`; this is a public build-time flag. |
-| `HF_SPEND_DATASET` / `HF_TOKEN` | unset | Optional Hugging Face Dataset persistence for spend and feedback records. |
 | `DISCORD_FEEDBACK_WEBHOOK` | unset | Optional feedback notification destination. |
 | `NEXT_PUBLIC_GA_MEASUREMENT_ID` | unset | Optional public Google Analytics measurement ID. |
 
@@ -156,7 +155,7 @@ Before a public deployment, review these implementation details:
 - API routes are unauthenticated. The included rate limiter is per-process memory, so it is not a distributed abuse-control system.
 - `api/main.py` allows configured origins and also contains a `https://*.vercel.app` CORS regex. Narrow or remove that regex if previews from arbitrary Vercel subdomains should not reach the API.
 - Keep `DEBUG_RESPONSES=false`. Treat uploaded documents, URLs, citation queries, and feedback as potentially sensitive user data.
-- Feedback is written to `data/feedback.jsonl` and may also be sent to Hugging Face and Discord when configured. Establish retention and disclosure policies before enabling public traffic.
+- Feedback is written to `data/feedback.jsonl` and may also be sent to Discord when configured. Establish retention and disclosure policies before enabling public traffic.
 - Uploads are restricted by extension, size, and file signature, and temporary files are deleted after processing. Continue to isolate parsers and keep dependencies patched.
 - URL fetching uses an SSRF guard, but it should still run with restricted network permissions in production.
 - Use HTTPS and a stable, random `CANDIDATE_SIGNING_KEY`; never place provider keys in frontend variables or commit `.env` files.
@@ -182,4 +181,4 @@ Application routes return a common JSON envelope:
 
 This code does not include or replace the McGill Guide. The Guide is a separate copyrighted publication and remains the authoritative source for its rules.
 
-No open-source license file is currently included. Until one is added, public visibility does not grant permission to copy, modify, or redistribute the code.
+The code is released under the [MIT License](LICENSE).
