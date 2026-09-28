@@ -1,9 +1,8 @@
 """Per-request LLM credentials, for a caller who brings their own API key.
 
 Every provider call in this codebase resolves its key at the last possible
-moment from a small set of choke points: ``deepseek_api._get_api_key`` and
-``JevConfig.from_environment``. Historically that meant one key per process,
-read once from the environment at startup.
+moment from the ``deepseek_api._get_api_key`` choke point. Historically that
+meant one key per process, read once from the environment at startup.
 
 This module adds a second source those choke points check *first*: a
 ``contextvars.ContextVar`` set only for the duration of one request. A key
@@ -30,22 +29,20 @@ _MAX_KEY_LENGTH = 400
 
 @dataclass(frozen=True)
 class RequestCredentials:
-    """Keys one request brought with it. Either field may be left unset."""
+    """The key one request brought with it."""
 
     openrouter_api_key: str | None = None
-    typesafe_api_key: str | None = None
 
     def __post_init__(self) -> None:
-        for name in ("openrouter_api_key", "typesafe_api_key"):
-            value = getattr(self, name)
-            if value is None:
-                continue
-            if not isinstance(value, str) or not value.strip() or len(value) > _MAX_KEY_LENGTH:
-                raise ValueError(f"{name} must be a non-empty string of at most {_MAX_KEY_LENGTH} characters")
+        value = self.openrouter_api_key
+        if value is None:
+            return
+        if not isinstance(value, str) or not value.strip() or len(value) > _MAX_KEY_LENGTH:
+            raise ValueError(f"openrouter_api_key must be a non-empty string of at most {_MAX_KEY_LENGTH} characters")
 
     @property
     def empty(self) -> bool:
-        return self.openrouter_api_key is None and self.typesafe_api_key is None
+        return self.openrouter_api_key is None
 
 
 _current: ContextVar[RequestCredentials | None] = ContextVar("chatbox_request_credentials", default=None)
@@ -76,11 +73,3 @@ def openrouter_key() -> str:
     if active and active.openrouter_api_key:
         return active.openrouter_api_key
     return os.environ.get("OPENROUTER_API_KEY") or os.environ.get("LLM_API_KEY") or ""
-
-
-def typesafe_key() -> str:
-    """The active per-request TypeSafe (JEV) key, else the process configuration."""
-    active = _current.get()
-    if active and active.typesafe_api_key:
-        return active.typesafe_api_key
-    return os.environ.get("TYPESAFE_API_KEY", "")

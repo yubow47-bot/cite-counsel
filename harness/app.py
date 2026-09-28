@@ -147,7 +147,7 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
         if not key:
             return fail("Please enter an API key.")
         try:
-            save_api_keys(key, None)
+            save_api_keys(key)
         except (ValueError, OSError) as exc:
             return fail(str(exc) if isinstance(exc, ValueError) else "Could not write to the local .env file.", 500)
         return {"ok": True, **harness.describe()}

@@ -5,12 +5,11 @@ import math
 import os
 import threading
 from pathlib import Path
-from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV_PATH = ROOT / ".env"
 _ENV_LOCK = threading.Lock()
-_SECRET_NAMES = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "EXA_API_KEY")
+_SECRET_NAMES = ("OPENROUTER_API_KEY", "EXA_API_KEY")
 
 
 def _load_api_keys_from_env_file() -> None:
@@ -32,9 +31,9 @@ def _load_api_keys_from_env_file() -> None:
                     os.environ[name] = value
 
 
-def save_api_keys(openrouter_api_key: str | None, typesafe_api_key: str | None) -> dict[str, bool]:
-    """Atomically update only the two allowlisted secrets in the ignored .env."""
-    updates = {"OPENROUTER_API_KEY": openrouter_api_key, "TYPESAFE_API_KEY": typesafe_api_key}
+def save_api_keys(openrouter_api_key: str | None) -> dict[str, bool]:
+    """Atomically update only the allowlisted secret in the ignored .env."""
+    updates = {"OPENROUTER_API_KEY": openrouter_api_key}
     updates = {name: value.strip() for name, value in updates.items() if value is not None and value.strip()}
     for value in updates.values():
         if not 8 <= len(value) <= 512 or any(char.isspace() for char in value):
@@ -60,8 +59,7 @@ def save_api_keys(openrouter_api_key: str | None, typesafe_api_key: str | None) 
         os.replace(temporary, ENV_PATH)
         for name, value in updates.items():
             os.environ[name] = value
-    return {"llm_configured": bool(os.getenv("OPENROUTER_API_KEY", "").strip()),
-            "jev_configured": bool(os.getenv("TYPESAFE_API_KEY", "").strip())}
+    return {"llm_configured": bool(os.getenv("OPENROUTER_API_KEY", "").strip())}
 
 
 def configure() -> dict:
@@ -75,16 +73,11 @@ def configure() -> dict:
         if not isinstance(overrides, dict) or set(overrides) - set(settings):
             raise ValueError("chatbox.local.json contains invalid configuration keys")
         settings.update(overrides)
-    for key in ("llm_model", "vision_model", "jev_model", "jev_endpoint"):
+    for key in ("llm_model", "vision_model"):
         if not isinstance(settings[key], str):
             raise ValueError(f"{key} must be a string")
-    for key in ("llm_model", "vision_model", "jev_model"):
         if not settings[key].strip():
             raise ValueError(f"{key} cannot be empty")
-    endpoint = urlsplit(settings["jev_endpoint"])
-    if (endpoint.scheme != "https" or endpoint.netloc != "api.typesafe.ai"
-            or endpoint.path.rstrip("/") != "/v1/systemone" or endpoint.query or endpoint.fragment):
-        raise ValueError("JEV endpoint must be the HTTPS TypeSafe System One URL")
     cap = settings["daily_spend_cap_usd"]
     if type(cap) not in (int, float) or not math.isfinite(cap) or cap <= 0:
         raise ValueError("daily_spend_cap_usd must be positive")
@@ -92,21 +85,14 @@ def configure() -> dict:
         raise ValueError("port must be an integer between 1024 and 65535")
     if type(settings["max_upload_mb"]) is not int or not 1 <= settings["max_upload_mb"] <= 200:
         raise ValueError("max_upload_mb must be an integer between 1 and 200")
-    if type(settings["jev_shadow"]) is not bool:
-        raise ValueError("jev_shadow must be a boolean")
-    settings["openrouter_api_key"] = os.getenv("OPENROUTER_API_KEY", "").strip()
-    settings["typesafe_api_key"] = os.getenv("TYPESAFE_API_KEY", "").strip()
     # Set before importing ANY legacy pipeline. No production .env, persistence
     # or notification credentials are inherited by this dedicated entrypoint.
     os.environ.update({
         "MCGILL_SKIP_DOTENV": "1", "CHATBOX_OPENROUTER_ONLY": "1",
-        "OPENROUTER_API_KEY": settings["openrouter_api_key"],
-        "TYPESAFE_API_KEY": settings["typesafe_api_key"],
+        "OPENROUTER_API_KEY": os.getenv("OPENROUTER_API_KEY", "").strip(),
         "LLM_COMPLETIONS_URL": "https://openrouter.ai/api/v1/chat/completions",
         "LLM_DEFAULT_MODEL": settings["llm_model"],
         "OPENROUTER_VISION_MODEL": settings["vision_model"],
-        "JEV_PROVIDER": "typesafe", "JEV_MODEL": settings["jev_model"],
-        "JEV_API_URL": settings["jev_endpoint"],
         "DAILY_SPEND_CAP_USD": str(cap), "DEBUG_RESPONSES": "false",
         "HF_SPEND_DATASET": "", "HF_TOKEN": "",
         "DISCORD_WEBHOOK_URL": "", "SCAFFOLD_ENABLED": "true",

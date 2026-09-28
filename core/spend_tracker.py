@@ -40,11 +40,6 @@ _PRICING: dict[str, dict[str, float]] = {
     "openai/gpt-oss-20b":     {"input": 0.03, "output": 0.13},
     "z-ai/glm-4.7-flash":     {"input": 0.0605, "output": 0.40},
     "z-ai/glm-5.3-flash":     {"input": 0.15, "output": 0.50},  # OpenRouter, checked 2026-09-23
-    # TypeSafe Jev is a decision-only model.  Keep a canonical key here and
-    # normalize all provider aliases below so a known Jev request never falls
-    # through to the deliberately expensive unknown-model fallback.
-    # Source: https://docs.typesafe.ai/models (checked 2026-09-18).
-    "jev":                     {"input": 0.042, "output": 0.0},
 }
 
 # Models priced in CNY (need FX conversion at spend time).
@@ -65,23 +60,6 @@ def normalize_model_key(model: str) -> str:
     and retain the conservative fallback behaviour in ``_compute_cost``.
     """
     normalized = (model or "").strip().lower()
-    jev_aliases = {
-        "jev",
-        "jev-latest",
-        "jev-preview",
-        "jev-1.13",
-        "jev-1.13.0",
-        "typesafe/jev-latest",
-        "typesafe/jev-preview",
-        "typesafe/jev-1.13",
-        "typesafe/jev-1.13.0",
-        "~typesafe/jev-latest",
-        "~typesafe/jev-preview",
-        "~typesafe/jev-1.13",
-        "~typesafe/jev-1.13.0",
-    }
-    if normalized in jev_aliases:
-        return "jev"
     return normalized
 
 _DAILY_CAP = float(os.getenv("DAILY_SPEND_CAP_USD", "10"))
