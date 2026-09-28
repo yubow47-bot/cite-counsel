@@ -29,6 +29,8 @@ _OL_FIELDS = ("key,title,subtitle,author_name,editions,editions.key,editions.tit
               "editions.publisher,editions.publish_date")
 _CROSSREF_HEADERS = {"User-Agent": "CiteCounsel/0.1 (local research tool)"}
 MIN_TITLE_OVERLAP = 0.75
+MIN_QUERY_COVERAGE = 0.6
+MAX_EXTRA_QUERY_WORDS = 2      # an author's name, a year
 
 
 def _tokens(text: str) -> set[str]:
@@ -39,15 +41,45 @@ def _tokens(text: str) -> set[str]:
 
 
 def title_matches(title: str, query: str) -> bool:
-    """The record's own title must be (almost) all present in the user's words.
+    """The record and the query must name the same work -- checked both ways.
 
-    Direction matters: the query may add an author or a year, but a record whose
-    title the user did not type is a different work.
+    The record's own title must be (almost) all present in the user's words: a
+    record whose title the user did not type is a different work. And the
+    query must be (mostly) covered by the record: a long, specific title is
+    not matched by a short generic one that merely shares its topic words
+    ("Indigenous Peoples, Self-determination and International Law" is 5/6
+    inside "Columbus's Legacy: Law as an Instrument of Racial Discrimination
+    against Indigenous Peoples' Rights of Self-Determination", but covers only
+    5 of its 12 words). The query may still add an author or a year: up to
+    MAX_EXTRA_QUERY_WORDS uncovered words are allowed whatever the ratio.
+
+    A pasted full citation ("H.L.A. Hart, The Concept of Law, 3rd ed (Oxford:
+    Oxford University Press, 2012)") carries far more than two extra words.
+    When the query has a year in it, one of its parts -- split at commas,
+    brackets and quotation marks -- that is essentially the record's title
+    is a match too. A bare title with no year never takes that path, so a
+    title with a comma in it is not split into short generic ones.
     """
-    wanted = _tokens(title)
-    if not wanted:
+    wanted, typed = _tokens(title), _tokens(query)
+    if not wanted or not typed:
         return False
-    return len(wanted & _tokens(query)) / len(wanted) >= MIN_TITLE_OVERLAP
+    shared = len(wanted & typed)
+    if shared / len(wanted) < MIN_TITLE_OVERLAP:
+        return False
+    if len(typed) - shared <= MAX_EXTRA_QUERY_WORDS or shared / len(typed) >= MIN_QUERY_COVERAGE:
+        return True
+    if not _YEAR_IN_CITATION.search(query):
+        return False
+    return any(_same_words(wanted, _tokens(part)) for part in _CITATION_PARTS.split(query))
+
+
+_YEAR_IN_CITATION = re.compile(r"\b(1[5-9]\d\d|20\d\d)\b")
+_CITATION_PARTS = re.compile(r"[,;()\[\]\"“”]")
+
+
+def _same_words(wanted: set[str], part: set[str]) -> bool:
+    shared = len(wanted & part)
+    return bool(part) and shared / len(wanted) >= MIN_TITLE_OVERLAP and shared / len(part) >= MIN_TITLE_OVERLAP
 
 
 def _first(values: Any) -> str:

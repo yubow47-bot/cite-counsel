@@ -172,7 +172,9 @@ def mcgill_clean(name: str, value: str) -> str:
     if name == "author":
         # Bibliography order "Olivelle, Patrick" -> McGill "Patrick Olivelle" (single author only).
         parts = [part.strip() for part in value.split(",")]
-        if len(parts) == 2 and all(parts) and not re.search(r"&|\band\b|\bet al\b", value, re.I):
+        # "Robert A. Williams, Jr" is a name with a suffix, not "Last, First".
+        suffix = len(parts) == 2 and re.fullmatch(r"(Jr|Sr|II|III|IV)\.?", parts[1], re.I)
+        if len(parts) == 2 and all(parts) and not suffix and not re.search(r"&|\band\b|\bet al\b", value, re.I):
             value = f"{parts[1]} {parts[0]}"
     if name == "style_of_cause":
         value = re.sub(r"\b(R|v|c)\.(?=\s)", r"\1", value)

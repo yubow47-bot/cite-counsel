@@ -23,6 +23,7 @@ debug_prompt.txt
 diag_result.json
 
 # 会话数据
+sessions/
 data/current_session.json
 data/test.docx
 data/*.jsonl
