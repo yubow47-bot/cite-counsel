@@ -1,154 +1,154 @@
 # Cite Counsel Harness
 
-一个本机运行的法律引用 agent harness。你和它对话，模型自己决定加载哪些插件、调用哪些工具；harness 保证模型写出的每个事实都能追溯到来源。首个应用领域是按 *Canadian Guide to Uniform Legal Citation*（McGill Guide，第 10 版）生成引文。
+A local agent harness for Canadian legal citation. You talk to it, and the model decides which plugins to load and which tools to call. The harness makes sure every fact the model states can be traced to a source. The first use case is producing citations in the style of the *Canadian Guide to Uniform Legal Citation* (McGill Guide, 10th edition).
 
-> 实验性研究辅助，不是引文正确的保证。使用前请对照原始来源和官方 McGill Guide 逐条核对。
+> Experimental research aid. A citation it produces is not guaranteed to be correct. Check each one against the original source and the official McGill Guide.
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe run_chatbox.py      # 打开 http://127.0.0.1:8001
+.\.venv\Scripts\python.exe run_chatbox.py      # opens http://127.0.0.1:8001
 ```
 
-一个 Python 进程同时提供页面和接口。
+One Python process serves both the page and the API.
 
-## 它解决什么问题
+## The problem it addresses
 
-“LLM + 搜索”类工具通常把来源当作软提示：模型读了资料，再用自己的话写出引文，用户无从知道哪个字段是查到的、哪个是编的。harness 用三条规则约束这件事：
+Most "LLM plus search" tools treat sources as a soft hint. The model reads some material, writes a citation in its own words, and the user cannot tell which fields were looked up and which were invented. The harness constrains this with three rules:
 
-1. 模型不经手事实。数据源返回带来源的记录（`rec_N`），模型只看到编号和摘要；对象留在会话存储里，工具凭编号取回原件，模型无法改写后再传入。
-2. “已核验”由推导链计算，不由任何人声明。引文从记录字段渲染，每个字段是推导链上的一片叶子。所有叶子都来自数据库（`database`）且带 `source_id` 才算已核验；只要有一个 `user` / `extracted` / `model` 叶子，就如实标为未核验。
-3. 回复检查只标注，不隐藏。模型每段文字里的年份、判例引用、DOI、定位引用等，都对着会话证据逐条匹配：匹配到附来源和原文片段，匹配不到标 `unsourced`，文字照常显示。
+1. The model never handles facts. A data source returns a record with provenance (`rec_N`). The model sees only the number and a short summary. The object stays in the session store, tools fetch it by number, and the model cannot rewrite it and pass it back in.
+2. "Verified" comes from the derivation chain. A citation is rendered from record fields, and each field it uses is a leaf in a derivation chain. It counts as verified only if every leaf comes from a database (`database`) and carries a `source_id`. A single `user`, `extracted`, or `model` leaf marks it unverified.
+3. The reply check annotates the text and hides nothing. Years, case citations, DOIs, and pinpoints in each paragraph of model text are matched against the session's evidence. A match gets its source and the quoted passage. A miss is tagged `unsourced`. The text is shown either way.
 
-来源分五种：`database`（数据库返回）、`extracted`（从文件/网页提取）、`user`（用户原话）、`computed`（推导计算）、`model`（模型自己写的，本会话无处可查）。
+There are five origins: `database` (returned by a database), `extracted` (read from a file or web page), `user` (the user's own words), `computed` (derived by code), and `model` (written by the model, with nothing in the session to check it against).
 
-合同审查和法律问答这类判断无法核验，项目不做。范围限于有对错、能由代码验证的工作：引文格式、来源核验、引语对原文、期限计算。
+The project skips work that cannot be verified, such as contract review and legal Q&A. It covers work with a right answer that code can check: citation format, source verification, quotations against the original, and deadline calculation.
 
-## 架构
+## Architecture
 
 ```text
-用户消息 + 附件
+user message + attachments
       │
       ▼
- run_turn：系统提示（插件目录 + 已关闭清单 + 输入提示）
+ run_turn: system prompt (plugin catalogue + disabled plugins + input hints)
       │
       ▼
- 模型决定 load_plugin / 调工具（每轮最多 20 步）
+ model chooses load_plugin / tool calls (up to 20 steps per turn)
       │
       ▼
- _execute：参数校验 ──► handler(ctx, params)
-                          ├─ ctx.records.get(ref)   按编号取记录
-                          ├─ ctx.save(obj, meta)    入库（先过类别契约）
-                          └─ Result(content=编号+摘要, blocks=界面卡片)
+ _execute: validate params ──► handler(ctx, params)
+                                 ├─ ctx.records.get(ref)   fetch a record by number
+                                 ├─ ctx.save(obj, meta)    store it (category contract first)
+                                 └─ Result(content=refs + summary, blocks=UI cards)
       │
       ▼
- content 进消息历史；blocks 交给界面
+ content goes into the message history; blocks go to the UI
       │
       ▼
- 回复检查：逐事实标注来源
+ reply check: annotate each fact with its source
 ```
 
-| 模块 | 职责 |
+| Module | Role |
 | --- | --- |
-| `harness/core.py` | agent 循环、工具执行、参数核验、内置 `record__compose` |
-| `harness/plugin.py` | 插件接口与发现：`Plugin` / `Tool` / `Result` / `Setting` / `UserText` |
-| `harness/records.py` | 会话记录存储：编号、类别契约检查、叶子来源对账 |
-| `harness/session.py` | 会话、消息史、附件、本地持久化 |
-| `harness/grounding.py` | 回复事实提取与来源标注 |
-| `harness/llm.py` | OpenRouter 兼容调用，原生工具调用，支持流式 |
-| `harness/app.py` | 本机 HTTP 面、上传检查、设置接口；`harness/rate_limiter.py` 限流 |
-| `harness/web/` | 单页界面：对话框、设置栏、插件 UI 加载器 |
-| `core/tool_contracts.py` | 契约数据结构：`Field` / `Record` / `Artifact` / `Finding` / `Derivation` |
+| `harness/core.py` | Agent loop, tool execution, parameter checks, built-in `record__compose` |
+| `harness/plugin.py` | Plugin interface and discovery: `Plugin`, `Tool`, `Result`, `Setting`, `UserText` |
+| `harness/records.py` | Session record store: numbering, category contract checks, leaf reconciliation |
+| `harness/session.py` | Sessions, message history, attachments, local persistence |
+| `harness/grounding.py` | Fact extraction and source annotation for replies |
+| `harness/llm.py` | OpenRouter-compatible calls with native tool calling and streaming |
+| `harness/app.py` | Local HTTP surface, upload checks, settings API; `harness/rate_limiter.py` limits requests |
+| `harness/web/` | Single-page UI: chat box, settings bar, plugin UI loader |
+| `core/tool_contracts.py` | Contract types: `Field`, `Record`, `Artifact`, `Finding`, `Derivation` |
 
-### 插件类别与契约
+### Plugin categories and the contract
 
-插件分三类，`Store.check_output` 在每次入库时检查，越权即抛 `ContractError`：
+Plugins fall into three categories. `Store.check_output` checks every save and raises `ContractError` on a violation.
 
-| 类别 | 只能产出 | 例子 |
+| Category | May produce | Examples |
 | --- | --- | --- |
-| `source` | 全部字段为 `database` 的 Record（须带真实 `source_id`） | a2aj、legisinfo、crossref、openlibrary |
-| `extract` | 全部字段为 `extracted` 的 Record | file、web |
-| `function` | Artifact / Finding（核验状态由推导链算出） | mcgill、quote、bibliography、deadlines |
+| `source` | Records whose fields are all `database` and carry a real `source_id` | a2aj, legisinfo, crossref, openlibrary |
+| `extract` | Records whose fields are all `extracted` | file, web |
+| `function` | Artifacts and Findings, with verification computed from the derivation chain | mcgill, quote, bibliography, deadlines |
 
-保存 Artifact 时做叶子来源对账：`database` 叶子必须对上本会话证据库里同 `(value, source_id)` 的条目，功能插件伪造不了“已核验”。模型自己填的值不入证据库，洗不成有来源。
+When an Artifact is saved, each `database` leaf must match an entry with the same `(value, source_id)` in the session's evidence store. A function plugin therefore cannot forge a verified leaf. Values the model fills in never enter the evidence store, so they cannot pick up a source later.
 
-模型自行组装记录用内置工具 `record__compose`：每个字段给出 `{value, source, quote}`，harness 核对原话确实在那条来源里、值确实在原话里，对上才继承来源；对不上照常写入但标 `model`。格式不对（超长、字段名不属于该类型、形状不对）的字段不写入并当场说明。
+To assemble a record itself, the model uses the built-in `record__compose`. Each field is given as `{value, source, quote}`. The harness checks that the quote appears in the cited source and the value appears in the quote. If both hold, the field inherits that source's origin. If not, it is written anyway and tagged `model`. A field with a bad format (too long, a name that does not belong to the type, the wrong shape) is not written, and the reason is reported at once.
 
-边界：插件是已安装的可信代码，不在沙箱里运行，契约只拦截类别误用和伪造出处。详见 [docs/HARNESS.md](docs/HARNESS.md)。
+Plugins are installed, trusted code and do not run in a sandbox. The contract catches category misuse and forged provenance. See [docs/HARNESS.md](docs/HARNESS.md) for details.
 
-### 内置插件
+### Built-in plugins
 
-| 插件 | 类别 | 默认 | 工具 | 数据源 / 实现 |
+| Plugin | Category | Default | Tools | Source or implementation |
 | --- | --- | --- | --- | --- |
-| `a2aj` | source | 开 | `find_case` `find_legislation` `full_text` | A2AJ 判例与法规 |
-| `legisinfo` | source | 开 | `bill` `bills` | 联邦议案（LEGISinfo） |
-| `crossref` | source | 开 | `doi` `article` | Crossref |
-| `openlibrary` | source | 开 | `isbn` `book` | Open Library |
-| `file` | extract | 开 | `extract` | PDF / DOCX / PPTX / XLSX / 图片 |
-| `web` | extract | 关 | `search` `fetch` | Exa 搜索（或 DuckDuckGo Lite）；页面抓取带 SSRF 防护 |
-| `mcgill` | function | 开 | `cite` `missing` | 按 `mcgill_rules.json` 渲染引文，列出缺失字段 |
-| `quote` | function | 开 | `check` | 对已存判决全文核对引语并定位段落 |
-| `bibliography` | function | 开 | `build` | 由已存引文生成参考文献，重新推导核验状态 |
-| `deadlines` | function | 关 | `compute` | 期限日期计算，输入全部回显 |
+| `a2aj` | source | on | `find_case`, `find_legislation`, `full_text` | A2AJ cases and legislation |
+| `legisinfo` | source | on | `bill`, `bills` | Federal bills (LEGISinfo) |
+| `crossref` | source | on | `doi`, `article` | Crossref |
+| `openlibrary` | source | on | `isbn`, `book` | Open Library |
+| `file` | extract | on | `extract` | PDF, DOCX, PPTX, XLSX, images |
+| `web` | extract | off | `search`, `fetch` | Exa search (or DuckDuckGo Lite); page fetching with SSRF protection |
+| `mcgill` | function | on | `cite`, `missing` | Renders citations from `mcgill_rules.json` and lists missing fields |
+| `quote` | function | on | `check` | Checks a quotation against a stored judgment's full text and finds the paragraph |
+| `bibliography` | function | on | `build` | Builds a bibliography from stored citations and recomputes verification |
+| `deadlines` | function | off | `compute` | Deadline date arithmetic, with every input echoed back |
 
-### 写一个插件
+### Writing a plugin
 
-在 `plugins/<name>/__init__.py` 导出 `PLUGIN`（`harness.plugin.Plugin`），或通过 `citecounsel.plugins` entry point 发布。插件声明：
+Export `PLUGIN` (a `harness.plugin.Plugin`) from `plugins/<name>/__init__.py`, or publish it through the `citecounsel.plugins` entry point. A plugin declares:
 
-- `tools`：模型加载插件后可调用的工具（pydantic 参数模型 + `handler(ctx, params) -> Result`）；
-- `actions`：插件自己界面上的按钮直接触发的确定性操作，不经过模型；
-- `ui`：可选目录，含 `ui.js` / `ui.css`，渲染自己的结果卡片或面板；
-- `settings`：显示在设置栏的选项；
-- `category`：`source` / `extract` / `function`，决定它能产出什么来源；
-- `fact_patterns`：本领域“事实形状”的正则，供回复检查使用。
+- `tools`: what the model can call after loading the plugin, each with a pydantic parameter model and a `handler(ctx, params) -> Result`.
+- `actions`: deterministic operations triggered by buttons in the plugin's own UI, without going through the model.
+- `ui`: an optional directory with `ui.js` and `ui.css` that renders the plugin's result cards or panel.
+- `settings`: options shown in the settings bar.
+- `category`: `source`, `extract`, or `function`, which decides the origins it may produce.
+- `fact_patterns`: regexes for the fact shapes in the plugin's domain, used by the reply check.
 
-参数若应是用户原话，声明为 `UserText`，harness 会在执行前换成核验过的原文切片。启动时发现插件，不热加载。
+A parameter that should be the user's own words is declared as `UserText`. The harness replaces it with the verified slice of the user's message before the handler runs. Plugins are discovered at startup and are not hot-reloaded.
 
-### 会话与持久化
+### Sessions and persistence
 
-每个会话一个文件 `sessions/<id>.json`（附件在 `sessions/<id>/attachments/`），原子写盘；重启后编号续排、引用仍有效；`token` 只存哈希；空闲 4 小时过期，启动时清扫过期文件并限制总量。
+Each session is one file, `sessions/<id>.json`, with attachments under `sessions/<id>/attachments/`. Writes are atomic. After a restart, record numbers continue and old references still resolve. Only a hash of the token is stored. Sessions expire after 4 hours idle, and startup sweeps expired files and caps the total.
 
-## 使用与配置
+## Usage and configuration
 
-- 设置栏：模型 ID、OpenRouter API Key（写入根目录 `.env`，立即生效、不回显）、插件开关及各插件的设置项。启用只表示模型“可以选用”，不会自动运行。
-- 配置文件：复制 `config/chatbox.example.json` 为 `config/chatbox.local.json`，可改端口、模型、视觉模型、上传上限（默认 50 MB）、每日花费阈值。密钥只放 `.env`（参考 `.env.example`）。
-- 网络搜索：在设置栏选择搜索服务；Exa 需要 `EXA_API_KEY`（设置栏的值优先于 `.env`）。启用 web 插件后，新建记录要求本会话先发起过一次 `web__search`。
-- 启动脚本：`./start-chatbox.ps1`；`-Restart` 重启，只会停止命令行匹配本项目 `run_chatbox.py` 的进程。
+- Settings bar: model ID, OpenRouter API key (written to `.env` in the project root, effective immediately, never shown again), plugin switches, and each plugin's own settings. Enabling a plugin only makes it available to the model. It does not run on its own.
+- Config file: copy `config/chatbox.example.json` to `config/chatbox.local.json` to change the port, the model, the vision model, the upload limit (50 MB by default), and the daily spend threshold. Keep secrets in `.env` only (see `.env.example`).
+- Web search: pick a search service in the settings bar. Exa needs `EXA_API_KEY`, and a value entered in the settings bar takes precedence over `.env`. While the web plugin is enabled, creating a new record requires a `web__search` call earlier in the session.
+- Launcher: `./start-chatbox.ps1`. With `-Restart` it stops only a process whose command line matches this project's `run_chatbox.py`.
 
-### 边界与隐私
+### Limits and privacy
 
-- 只监听 `127.0.0.1`，带 TrustedHost、同源检查、限流和 CSP；上传按扩展名、大小和文件头检查。
-- 配置 Key 后，对话内容会发送给 OpenRouter 及其模型服务商；插件会访问外部数据库和网站。请勿提交不允许外发的材料。
-- `daily_spend_cap_usd` 是进程内估算阈值，重启清零，不是账单硬上限；严格控制请在 OpenRouter 给 Key 设额度。
-- 数据库命中只核验来源元数据，不核验最终格式；覆盖范围取决于上游服务。
+- The server listens on `127.0.0.1` only. It applies a TrustedHost check, a same-origin check, rate limiting, and a CSP. Uploads are checked by extension, size, and file header.
+- Once a key is configured, conversation content is sent to OpenRouter and its model providers. Plugins also contact external databases and websites. Do not submit material that must not leave your machine.
+- `daily_spend_cap_usd` is an in-process estimate that resets on restart. It is not a hard billing limit. For a strict limit, set one on the key in OpenRouter.
+- A database hit verifies the source metadata. It does not verify the final formatting, and coverage depends on the upstream service.
 
-## 目录
+## Layout
 
 ```text
-harness/        agent 循环、插件接口、记录存储、会话、回复检查、HTTP 面与页面
-plugins/        内置插件
-core/           契约数据结构、McGill 格式化与规则、引语核对、参考文献、花费统计
-local_tools/    数据库适配器、URL 防护、网页读取（web_extract）、文件提取
-llm_api/        OpenRouter 客户端与图片视觉提取
-mcgill_rules.json   McGill 规则与模板（格式化的唯一来源）
-docs/           HARNESS.md（工程架构）、LEGAL_TOOL_PLATFORM_BLUEPRINT.md（设计规格）、CHATBOX_QUICKSTART.md
-tests/          单元与契约测试
-profiling/      HTTP 调用计时工具
+harness/        agent loop, plugin interface, record store, sessions, reply check, HTTP surface and page
+plugins/        built-in plugins
+core/           contract types, McGill formatting and rules, quote checking, bibliography, spend tracking
+local_tools/    database adapters, URL guard, page reading (web_extract), file extraction
+llm_api/        OpenRouter client and image extraction
+mcgill_rules.json   McGill rules and templates (the single source for formatting)
+docs/           HARNESS.md (engineering), LEGAL_TOOL_PLATFORM_BLUEPRINT.md (design spec), CHATBOX_QUICKSTART.md
+tests/          unit and contract tests
+profiling/      HTTP call timing helper
 ```
 
-## 测试
+## Tests
 
 ```powershell
-python -m pytest        # 仅收集 tests/
+python -m pytest        # collects tests/ only
 ```
 
-契约测试覆盖：越权产出来源、跨会话或不存在的编号、伪造 database 叶子、模型值不入证据库、`record__compose` 的证据核对与格式检查、持久化往返（`tests/test_harness.py`、`tests/test_tool_contracts.py`、`tests/test_persistence.py` 等）。多数测试 mock 了外部服务，通过不代表上游 API、凭据或模型此刻可用。
+The contract tests cover out-of-category origins, unknown or cross-session record numbers, forged `database` leaves, model values staying out of the evidence store, the evidence and format checks in `record__compose`, and persistence round trips (`tests/test_harness.py`, `tests/test_tool_contracts.py`, `tests/test_persistence.py`, and others). Most tests mock external services, so a pass does not show that an upstream API, credential, or model is available right now.
 
-## 路线
+## Roadmap
 
-- MCP 集成（外部 MCP 当插件、插件暴露为 MCP）。
-- 界面完整展示回复事实标注（来源链接、片段、高亮、“无来源”醒目呈现）。
+- MCP integration: external MCP servers as plugins, and plugins exposed as MCP servers.
+- A fuller UI for reply annotations: source links, excerpts, highlighting, and a prominent "unsourced" marker.
 
-## 许可与声明
+## License and notices
 
-本项目不包含也不替代 McGill Guide；该指南是独立的受版权保护出版物，是其规则的权威来源。代码以 [MIT License](LICENSE) 发布。
+This project does not include or replace the McGill Guide. The Guide is a separate, copyrighted publication and the authority for its own rules. The code is released under the [MIT License](LICENSE).
