@@ -1,7 +1,6 @@
 """CrossRef API: DOI extraction, metadata fetch, McGill citation assembly (no LLM)."""
 
 import re
-import requests
 from local_tools.utils import crossref_session, request_with_retry
 from profiling import timing as prof
 
@@ -40,65 +39,3 @@ def fetch_crossref(doi: str) -> dict | None:
     except Exception:
         return None
 
-
-def build_journal_citation(cr_data: dict) -> str:
-    """Assemble a McGill-format journal citation from CrossRef data (no LLM).
-
-    Format: Author et al, "Title", *Journal* (Year) Volume:Issue FirstPage.
-    """
-    # ── Authors ──
-    authors = cr_data.get("author", [])
-    if not authors:
-        author_str = ""
-    elif len(authors) == 1:
-        a = authors[0]
-        author_str = _format_author(a) + ", "
-    elif len(authors) == 2:
-        author_str = _format_author(authors[0]) + " & " + _format_author(authors[1]) + ", "
-    elif len(authors) > 3:
-        author_str = _format_author(authors[0]) + " et al, "
-    else:
-        # exactly 3 authors: "A, B & C"
-        author_str = _format_author(authors[0]) + ", " + _format_author(authors[1]) \
-                     + " & " + _format_author(authors[2]) + ", "
-
-    # ── Title ──
-    title_raw = cr_data.get("title", [""])[0]
-    title_str = f'"{title_raw}"' if title_raw else ""
-
-    # ── Journal (italic, per 2026-09-08 ruling — matches the LLM path and
-    #    mcgill_rules.json rule[0]; was Roman before) ──
-    journal_raw = cr_data.get("container-title", [""])
-    if isinstance(journal_raw, list):
-        journal_raw = journal_raw[0] if journal_raw else ""
-    journal_str = f" *{journal_raw}*" if journal_raw else ""
-
-    # ── Year ──
-    date_parts = cr_data.get("published", {}).get("date-parts", [[None]])
-    year = date_parts[0][0] if date_parts and date_parts[0] else ""
-
-    # ── Volume:Issue ──
-    volume = cr_data.get("volume", "") or ""
-    issue = cr_data.get("issue", "") or ""
-    if volume and issue:
-        vol_iss = f" {volume}:{issue}"
-    elif volume:
-        vol_iss = f" {volume}"
-    else:
-        vol_iss = ""
-
-    # ── First page ──
-    page = cr_data.get("page", "")
-    first_page = page.split("-")[0].strip() if page else ""
-    page_str = f" {first_page}" if first_page else ""
-
-    return f"{author_str}{title_str} ({year}){vol_iss}{journal_str}{page_str}."
-
-
-def _format_author(author: dict) -> str:
-    """Format a single author as 'Given Family'."""
-    given = author.get("given", "") or ""
-    family = author.get("family", "") or ""
-    if given and family:
-        return f"{given} {family}"
-    return family or given or "Unknown"

@@ -46,8 +46,8 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt pytest httpx
 ```
 
-离线回归（虚拟凭据，禁止外部网络连接）：
+运行测试：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts/test_chatbox_offline.py
+.\.venv\Scripts\python.exe -m pytest
 ```

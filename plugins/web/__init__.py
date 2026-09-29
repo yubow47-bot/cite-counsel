@@ -176,7 +176,7 @@ def _is_challenge(title: str, text: str) -> bool:
 
 def fetch(ctx, p: FetchParams) -> Result:
     from core.tool_contracts import Field, Record
-    from llm_api.deepseek_api import extract_from_url
+    from local_tools.web_extract import extract_from_url
     page = extract_from_url(p.url)
     if page.get("error") or not (page.get("raw_text") or "").strip():
         raise ValueError("the page could not be read (blocked, dynamic or empty)")

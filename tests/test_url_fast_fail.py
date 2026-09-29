@@ -6,13 +6,13 @@ from unittest.mock import patch
 
 sys.path.insert(0, ".")
 
-from llm_api.deepseek_api import URL_EXTRACT_FETCH_TIMEOUT, extract_from_url
+from local_tools.web_extract import URL_EXTRACT_FETCH_TIMEOUT, extract_from_url
 
 
 def test_url_extract_fetch_uses_tight_timeout():
     """JS-rendered/blocked pages should not wait on the old 15s timeout."""
     with patch("curl_cffi.requests.get") as mock_get, \
-         patch("llm_api.deepseek_api.request_with_retry", side_effect=TimeoutError("fallback also fails")):
+         patch("local_tools.web_extract.request_with_retry", side_effect=TimeoutError("fallback also fails")):
         mock_get.side_effect = TimeoutError("simulated timeout")
 
         start = time.perf_counter()
@@ -39,7 +39,7 @@ def test_supported_static_url_still_extracts_content():
       </body>
     </html>
     """
-    with patch("llm_api.deepseek_api.fetch_html", return_value=html):
+    with patch("local_tools.web_extract.fetch_html", return_value=html):
         result = extract_from_url("https://example.com/static")
 
     assert "error" not in result

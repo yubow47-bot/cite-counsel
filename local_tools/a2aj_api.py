@@ -10,6 +10,33 @@ from profiling import timing as prof
 
 logger = logging.getLogger(__name__)
 
+
+# Case citation shapes, for pulling the citation out of a "name + citation" query:
+#   "[1959] SCR 121" · "[1999] 1 SCR 688" · "[1930] AC 124"   bracketed year
+#   "(1993), 83 CCC (3d) 346"                                  parenthesised year
+#   "2012 SCC 13" · "2012 CanLII 27167"                        neutral
+_CASE_CITATION_RE = re.compile(
+    r"\[(?:1[89]|20)\d{2}\]\s*(?:\d+\s+)?[A-Za-z][A-Za-z.]*(?:\s+[A-Za-z][A-Za-z.]*)*\s+\d+"
+    r"|\((?:1[89]|20)\d{2}\)\s*,?\s*(?:\d+\s+)?[A-Za-z][A-Za-z.]*"
+    r"(?:\s*\(\d+[a-z]{0,2}\))?\s+\d+"
+    r"|\b(?:1[89]|20)\d{2}\s+[A-Za-z]{2,10}\s+\d+\b"
+)
+
+
+def _extract_case_citation(text: str) -> str:
+    """Pull a case citation out of a free-text query, or "" if there is none.
+
+    "Roncarelli v Duplessis [1959] SCR 121" → "[1959] SCR 121"
+    "R v Gladue [1999] 1 SCR 688"           → "[1999] 1 SCR 688"
+    "2012 SCC 13"                           → "2012 SCC 13"
+    "Roncarelli v Duplessis"                → ""
+    """
+    if not text:
+        return ""
+    m = _CASE_CITATION_RE.search(text)
+    return m.group(0).strip() if m else ""
+
+
 A2AJ_BASE = "https://api.a2aj.ca"
 
 # ── Track first HTTP call to A2AJ ──
@@ -109,7 +136,7 @@ def _is_neutral_citation(citation: str) -> bool:
 
 
 def _map_fields(result: dict) -> dict:
-    """将 A2AJ 返回字段映射到 detect_type 能识别的格式。"""
+    """将 A2AJ 返回字段映射到引文字段格式。"""
     citation = result.get("citation_en", "")
     name = result.get("name_en", "")
     date = result.get("document_date_en", "")
@@ -224,8 +251,7 @@ def search_laws_by_name(name: str, size: int = 6) -> list:
     lookup that answers a title-only query with no jurisdiction to go on
     ("Rules of Civil Procedure" → RRO 1990, Reg 194).  Nothing used this endpoint
     before: the legislation route only ever searched by citation, and with no
-    citation it fell through to a per-jurisdiction CanLII browse that needs the
-    jurisdiction guessed up front.
+    citation it had nothing to search with.
     """
     if not name or not name.strip():
         return []
@@ -262,7 +288,6 @@ def search_cases_multi(query: str, size: int = 45,
     citation out and resolve it directly first; /search runs only if that
     lookup comes up empty.
     """
-    from local_tools.citation_search import _extract_case_citation
     embedded = _extract_case_citation(query)
     if embedded and embedded != query.strip():
         direct = fetch_by_citation(embedded)

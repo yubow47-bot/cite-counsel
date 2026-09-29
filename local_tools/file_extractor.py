@@ -7,8 +7,8 @@ SCANNED_THRESHOLD = 50
 def extract_from_file(file_path: str) -> dict:
     """根据文件扩展名自动选择提取方式，返回结构化字段。
 
-    图片（.jpg/.jpeg/.png/.webp）→ Gemini 视觉提取。
-    PDF 文字不足 {SCANNED_THRESHOLD} 字 → 降级为 Gemini 视觉提取（前 3 页渲染）。
+    图片（.jpg/.jpeg/.png/.webp）→ 视觉模型提取。
+    PDF 文字不足 {SCANNED_THRESHOLD} 字 → 降级为视觉模型提取（前 3 页渲染）。
     PDF 文字足够 → 现有文本管线。
     """
     ext = os.path.splitext(file_path)[1].lower()
@@ -22,7 +22,7 @@ def extract_from_file(file_path: str) -> dict:
     elif ext in (".xlsx", ".xls"):
         return _extract_xlsx(file_path)
     elif ext in (".jpg", ".jpeg", ".png", ".webp"):
-        from llm_api.gemini_api import extract_from_image
+        from llm_api.vision import extract_from_image
         return extract_from_image(file_path)
     else:
         return {"raw_input": f"Unsupported file type: {ext}"}
@@ -76,7 +76,7 @@ def _extract_pdf(file_path: str) -> dict:
 
 
 def _extract_pdf_scanned(file_path: str) -> dict:
-    """Render first 3 pages of a scanned PDF as images and run Gemini vision."""
+    """Render first 3 pages of a scanned PDF as images and run vision extraction."""
     import fitz
 
     image_paths = []
@@ -100,7 +100,7 @@ def _extract_pdf_scanned(file_path: str) -> dict:
         finally:
             doc.close()
 
-        from llm_api.gemini_api import extract_from_images
+        from llm_api.vision import extract_from_images
         result = extract_from_images(image_paths)
         return result
     finally:
@@ -165,87 +165,3 @@ def _guess_title(text: str) -> str:
             return line[:100]
     return ""
 
-
-def classify_document_type(raw_text: str) -> str:
-    """Use LLM to classify the document type from its raw text.
-
-    Returns one of: journal_article, book, book_chapter, thesis, report,
-    newspaper, case, legislation, government_document, website, other.
-    """
-    if not raw_text or not raw_text.strip():
-        return "other"
-
-    text_sample = raw_text[:800].strip()
-    prompt = f"""You are a document type classifier for legal citations.
-Analyze the following text and return ONE type that best describes the document.
-Only return the type string, nothing else.
-
-Types:
-- journal_article: academic journal article
-- book: full book or monograph
-- book_chapter: a chapter within a book
-- thesis: thesis or dissertation
-- report: report from an organization, NGO, or government
-- newspaper: newspaper or news article
-- case: court decision or judgment
-- legislation: statute, act, or regulation
-- government_document: official government publication (not legislation)
-- website: web page, blog post, or online article
-- other: none of the above
-
-Text:
-{text_sample}"""
-
-    from llm_api.deepseek_api import ask_deepseek
-    try:
-        result = ask_deepseek(prompt, disable_thinking=True).strip().lower()
-        valid = {"journal_article", "book", "book_chapter", "thesis", "report",
-                 "newspaper", "case", "legislation", "government_document", "website", "other"}
-        if result in valid:
-            return result
-    except Exception:
-        pass
-    return "other"
-
-
-def classify_gov_doc_subtype(raw_text: str) -> str | None:
-    """Classify a government_document into a subtype via keyword matching.
-
-    Deterministic — no LLM call. Returns one of:
-      - "parliamentary_documents"  (Hansard debates, parliamentary records)
-      - "committee_reports"        (standing/select committee reports)
-      - "inquiry_reports"          (royal commissions, commissions of inquiry)
-      - None                       (no subtype detected)
-
-    Only call this when classify_document_type already returned
-    "government_document".  Non-government text will return None.
-    """
-    if not raw_text:
-        return None
-
-    text = raw_text.lower()
-
-    # ── Parliamentary debates (Hansard) — check FIRST (strong signal) ──
-    if any(phrase in text for phrase in [
-        "hansard", "parliamentary debates", "house of commons",
-        "official report of debates", "debates of the",
-        "senate debates", "legislative assembly debates",
-    ]):
-        return "parliamentary_documents"
-
-    # ── Inquiry / Royal Commission ──
-    if any(phrase in text for phrase in [
-        "royal commission", "commission of inquiry", "inquiry into",
-        "commission on", "public inquiry",
-    ]):
-        return "inquiry_reports"
-
-    # ── Committee reports (check LAST — word "committee" appears in Hansard too) ──
-    if any(phrase in text for phrase in [
-        "standing committee", "select committee", "committee on",
-        "report of the committee", "committee report",
-        "special committee",
-    ]):
-        return "committee_reports"
-
-    return None

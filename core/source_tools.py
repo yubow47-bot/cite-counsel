@@ -96,7 +96,7 @@ def _legislation_record(item: Mapping[str, Any]) -> Record:
 
 def source_cases(query: str) -> list[Record]:
     """Search cases directly and return traceable database records."""
-    from local_tools.citation_search import _CASE_CITATION_RE
+    from local_tools.a2aj_api import _CASE_CITATION_RE
     if _CASE_CITATION_RE.fullmatch(query.strip()):
         found = fetch_by_citation(query)
         results = _database_results([found]) if found.get("style_of_cause") else []

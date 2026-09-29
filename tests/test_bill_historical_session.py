@@ -17,14 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from local_tools.legisinfo_api import (
     BILLS_URL,
     _year_to_sessions,
-    _session_end_year,
     _get_current_session,
-    find_bill,
     find_bills,
-    build_bill_citation,
-    fetch_legisinfo_bills,
-    _normalize_bill_number,
-    _fetch_json,
     SESSION_MAP,
 )
 
@@ -86,12 +80,6 @@ class TestYearToSession:
         sessions = _year_to_sessions(1990)
         assert sessions == []
 
-    def test_session_end_year(self):
-        assert _session_end_year("35-2") == 1997
-        assert _session_end_year("36-1") == 1999
-        assert _session_end_year("44-1") == 2025
-        assert _session_end_year("45-1") is None
-
     def test_get_current_session(self):
         cur = _get_current_session()
         assert cur is not None
@@ -146,40 +134,6 @@ class TestFindBillHistorical:
             assert r.get("ParlSessionCode") in ("35-2", "36-1")
             assert r.get("ParliamentNumber", 0) > 0
             assert r.get("SessionNumber", 0) > 0
-
-
-class TestSingleResultContract:
-
-    @_skip_live
-    def test_single_result_carries_bill_session(self):
-        """Single-match via citation_search bill branch carries bill_session."""
-        from local_tools.citation_search import search_citation
-        from local_tools.citation_search import classify_and_normalize
-        from local_tools.a2aj_api import _extract_year
-
-        # Force single-match: year=1994 maps only to 35-1
-        results = search_citation("Bill C-32, 1994",
-                                  classification={"type": "bill", "normalized": "C-32",
-                                                   "original": "Bill C-32, 1994"})
-        assert len(results) == 1
-        item = results[0]
-        assert item.get("verified") is True
-        assert item.get("_bill_citation") is not None
-        assert item.get("bill_session") == "35-1"
-        assert item.get("bill_title", "").startswith("An Act")
-        assert "*" in item["_bill_citation"]
-
-    @_skip_live
-    def test_single_result_no_year_carries_bill_session(self):
-        """Single-match without year also carries bill_session + bill_title."""
-        from local_tools.citation_search import search_citation
-        results = search_citation("Bill C-32",
-                                  classification={"type": "bill", "normalized": "C-32",
-                                                   "original": "Bill C-32"})
-        if len(results) == 1 and results[0].get("verified"):
-            item = results[0]
-            assert item.get("bill_session") is not None
-            assert item.get("bill_title") is not None
 
 
 class TestFindBillsDedup:
@@ -247,45 +201,3 @@ class TestCrossSessionBoundary:
         sessions = _year_to_sessions(2000)
         assert sessions == ["36-2"]
 
-
-class TestBuildBillCitation:
-
-    @_skip_live
-    def test_title_italicised(self):
-        rec = find_bill("C-32", year=1994)
-        assert rec is not None
-        cit = build_bill_citation(rec)
-        assert "*" in cit
-        assert "*An Act" in cit
-        assert cit.endswith(".")
-
-    @_skip_live
-    def test_current_session_citation(self):
-        rec = find_bill("C-32")
-        if rec:
-            cit = build_bill_citation(rec)
-            assert cit.endswith(".")
-            assert "*" in cit
-
-    @_skip_live
-    def test_year_present_in_citation(self):
-        rec = find_bill("C-32", year=1994)
-        assert rec is not None
-        cit = build_bill_citation(rec)
-        assert "1994" in cit
-
-    def test_all_json_bill_examples_are_italic(self):
-        """Every Bill example in mcgill_rules.json wraps title in *italic*."""
-        import json
-        rules_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcgill_rules.json")
-        with open(rules_path, encoding="utf-8") as f:
-            rules = json.load(f)
-        bill_examples = []
-        for t in rules.get("legislation", {}).get("topics", []):
-            if t.get("topic") == "Bills":
-                bill_examples = t.get("examples", [])
-                break
-        assert len(bill_examples) >= 1
-        for ex in bill_examples:
-            assert ", *" in ex
-            assert "*," in ex

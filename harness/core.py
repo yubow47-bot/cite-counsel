@@ -34,7 +34,7 @@ from harness import grounding, llm
 from harness.plugin import Plugin, Result, UserText, discover
 from harness.records import ContractError, _probe
 from harness.session import HISTORY_LIMIT, Context, Session, SessionStore
-from core.tool_contracts import Artifact, Field as EvidenceField, Finding, Record
+from core.tool_contracts import Field as EvidenceField, Record
 from pydantic import BaseModel, Field, model_validator
 from typing import Literal
 

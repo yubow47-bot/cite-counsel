@@ -24,9 +24,8 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
-from core.tool_contracts import decode, encode
+from core.tool_contracts import Field, decode, encode
 from harness.records import Store
 
 logger = logging.getLogger(__name__)

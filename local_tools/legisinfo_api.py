@@ -4,14 +4,9 @@ Endpoint: https://www.parl.ca/legisinfo/en/bills/json  (?parlsession=XX-X for hi
 """
 
 import re
-import json
-import os
 import time
 import logging
-import requests
-from datetime import datetime
 
-from local_tools.format_util import _wrap_italic
 from local_tools.utils import legisinfo_session, request_with_retry
 
 logger = logging.getLogger(__name__)
@@ -78,14 +73,6 @@ def _year_to_sessions(year: int) -> list[str]:
             elif end is not None and year <= end:
                 candidates.append(code)
     return candidates
-
-
-def _session_end_year(session_code: str) -> int | None:
-    """Return the end year for a session code, or None if current/unknown."""
-    info = SESSION_MAP.get(session_code)
-    if not info:
-        return None
-    return info[1]
 
 
 def _restore_legacy_fields(records: list) -> list:
@@ -268,50 +255,3 @@ def find_bills(bill_number: str, year: int | None = None) -> list[dict]:
         logger.warning("[LEGISinfo] failed sessions for bill %s: %s", bill_number, failed_sessions)
 
     return results
-
-def build_bill_citation(record: dict, pinpoint: str | None = None) -> str:
-    """Assemble a McGill-format bill citation from LEGISinfo data (no LLM).
-
-    Format: Bill {number}, *{title}*, {session_ordinal} Sess,
-            {parl_ordinal} Parl, {year}{, cl {pinpoint}}.
-
-    Title is wrapped in Markdown *italic* (frontend renderCitation converts *x* → <em>).
-    Year is derived from structured date fields first, falling back to
-    the session's end year from SESSION_MAP if no date field is available.
-    """
-    number = record.get("BillNumberFormatted", "?")
-
-    title = record.get("LongTitleEn", "").strip() or record.get("ShortTitleEn", "").strip() or "?"
-    if title != "?":
-        title = _wrap_italic(title)
-
-    parl = record.get("ParliamentNumber", 0) or 0
-    sess = record.get("SessionNumber", 0) or 0
-
-    year = ""
-    for date_field in [
-        "PassedHouseFirstReadingDateTime", "PassedSenateFirstReadingDateTime",
-        "LatestActivityDateTime", "IntroducedDateTime",
-    ]:
-        val = record.get(date_field) or ""
-        if val:
-            m = re.search(r"\b(19\d{2}|20\d{2})\b", val)
-            if m:
-                year = m.group(1)
-                break
-    if not year:
-        ps_code = record.get("ParlSessionCode", "")
-        end_yr = _session_end_year(ps_code)
-        if end_yr is not None:
-            year = str(end_yr)
-        elif ps_code:
-            year = str(datetime.now().year)
-
-    citation = f"Bill {number}, {title}, {ordinal_suffix(sess)} Sess, {ordinal_suffix(parl)} Parl"
-    if year:
-        citation += f", {year}"
-    if pinpoint:
-        citation += f", cl {pinpoint}"
-    citation += "."
-
-    return citation

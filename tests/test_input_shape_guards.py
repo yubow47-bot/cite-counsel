@@ -15,10 +15,8 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pytest
 
 from local_tools.a2aj_api import _map_fields, fetch_by_citation, search_cases_multi
-from local_tools.citation_search import classify_and_normalize
 
 _TIMING_PATCH = patch("profiling.timing.ENABLED", False)
 _A2AJ_TIMING_PATCHES = (
@@ -37,54 +35,6 @@ def _http_response(json_data):
 # ═════════════════════════════════════════════════════════════════════════════
 #  M2 — classify result shape validation
 # ═════════════════════════════════════════════════════════════════════════════
-
-def test_classify_missing_normalized_falls_back_to_deepseek():
-    """Gemini says the type but omits normalized/original — must fall back
-    instead of crashing downstream with KeyError."""
-    good = '{"type": "case_name", "normalized": "R v Gladue", "original": "R v Gladue"}'
-    with patch("local_tools.citation_search.call_gemini_text", return_value='{"type": "case_name"}'), \
-         patch("local_tools.citation_search.ask_deepseek", return_value=good), \
-         _TIMING_PATCH:
-        result = classify_and_normalize("R v Gladue")
-
-    assert result == {"type": "case_name", "normalized": "R v Gladue", "original": "R v Gladue"}
-
-
-def test_classify_null_normalized_falls_back():
-    with patch("local_tools.citation_search.call_gemini_text", return_value=(
-        '{"type": "bill", "normalized": null, "original": "bill c-22"}'
-    )), \
-         patch("local_tools.citation_search.ask_deepseek", return_value=(
-             '{"type": "bill", "normalized": "C-22", "original": "bill c-22"}'
-         )), \
-         _TIMING_PATCH:
-        result = classify_and_normalize("bill c-22")
-
-    assert result["normalized"] == "C-22"
-
-
-def test_classify_empty_normalized_falls_back():
-    with patch("local_tools.citation_search.call_gemini_text", return_value=(
-        '{"type": "legislation", "normalized": "  ", "original": "Criminal Code"}'
-    )), \
-         patch("local_tools.citation_search.ask_deepseek", return_value=(
-             '{"type": "legislation", "normalized": "Criminal Code", "original": "Criminal Code"}'
-         )), \
-         _TIMING_PATCH:
-        result = classify_and_normalize("Criminal Code")
-
-    assert result["normalized"] == "Criminal Code"
-
-
-def test_classify_both_shapes_bad_returns_default():
-    """Both LLMs return type-only dicts → final case_name fallback (no crash)."""
-    with patch("local_tools.citation_search.call_gemini_text", return_value='{"type": "concept"}'), \
-         patch("local_tools.citation_search.ask_deepseek", return_value='{"type": "concept"}'), \
-         _TIMING_PATCH:
-        result = classify_and_normalize("gladue principle")
-
-    assert result == {"type": "case_name", "normalized": "gladue principle", "original": "gladue principle"}
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  M1 — a2aj payload shape tolerance

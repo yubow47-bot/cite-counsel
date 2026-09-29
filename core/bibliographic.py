@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from local_tools.utils import crossref_session, openlibrary_session, request_with_retry
@@ -246,28 +245,5 @@ def article_values(record: dict) -> dict[str, str]:
     }
 
 
-def crossref_book_values(record: dict) -> dict[str, str]:
-    """A DOI that names a whole book (Crossref type book/monograph)."""
-    return {
-        "author": join_authors([author_name(a) for a in record.get("author") or []]),
-        "title": _full_title(_first(record.get("title")), _first(record.get("subtitle"))),
-        "place": _first(record.get("publisher-location")),
-        "publisher": str(record.get("publisher") or "").strip(),
-        "year": published_year(record),
-    }
-
-
 # ── Both catalogues at once ───────────────────────────────────────────
 
-
-def search_secondary(query: str) -> list[dict]:
-    """Books then articles; a catalogue that is down contributes nothing."""
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [pool.submit(search_books, query), pool.submit(search_articles, query)]
-        found = []
-        for future in futures:
-            try:
-                found.extend(future.result())
-            except Exception:
-                continue
-    return found

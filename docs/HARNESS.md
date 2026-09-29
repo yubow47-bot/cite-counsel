@@ -128,7 +128,7 @@
 | `crossref` | source | doi / article | `core/source_tools.py`、`core/bibliographic.py` |
 | `openlibrary` | source | isbn / book | 同上 |
 | `file` | extract | extract | `local_tools/file_extractor.py`（无模型分类调用） |
-| `web` | extract | search / fetch | Exa `/search`（API Key 在插件设置或 `.env` 的 `EXA_API_KEY`，设置栏值优先；支持最近 N 天过滤）；备选 DuckDuckGo Lite（拦截页现在会显式报错，连续空结果会告警）；页面读取走 `llm_api.deepseek_api.extract_from_url`（SSRF 防护 + trafilatura，确定性），抓到的页面连 `date` / `author` / `site_name` 一起存为 extracted 记录；反爬挑战页（Anubis / Cloudflare 等）直接报错拒绝，不入库 |
+| `web` | extract | search / fetch | Exa `/search`（API Key 在插件设置或 `.env` 的 `EXA_API_KEY`，设置栏值优先；支持最近 N 天过滤）；备选 DuckDuckGo Lite（拦截页现在会显式报错，连续空结果会告警）；页面读取走 `local_tools.web_extract.extract_from_url`（SSRF 防护 + trafilatura，确定性），抓到的页面连 `date` / `author` / `site_name` 一起存为 extracted 记录；反爬挑战页（Anubis / Cloudflare 等）直接报错拒绝，不入库 |
 | `mcgill` | function | cite / missing | `core/mcgill_format.py`、`mcgill_rules.json` |
 | `quote` | function | check | `core/quote_check.py` |
 | `bibliography` | function | build | `core/bibliography.py` |
@@ -154,8 +154,6 @@
 
 ## 8. 已知边界与后续
 
-- **canlii 插件未做**（规格 §4.2 列出，需 key、默认关）：连接器在 `local_tools/canlii_api.py`，
-  等 source_tools 适配后按同一模式包装。
 - **MCP（规格 §7）未做**：等契约与首批插件稳定。两个方向（外部 MCP 当插件、插件暴露为 MCP）
   都以契约为边界。
 - **契约测试**（规格 §9）：越权产出来源、跨会话/不存在编号、伪造 database 叶子、模型值

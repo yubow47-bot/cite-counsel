@@ -22,12 +22,8 @@ import requests as _requests
 # never shared across different hosts / auth domains.
 legisinfo_session = _requests.Session()
 a2aj_session = _requests.Session()
-canlii_session = _requests.Session()
 crossref_session = _requests.Session()
 openlibrary_session = _requests.Session()
-deepseek_session = _requests.Session()
-gemini_session = _requests.Session()
-discord_session = _requests.Session()
 generic_session = _requests.Session()
 
 
@@ -155,58 +151,3 @@ _CITATION_ALTERNATIVES = [
 # "CQLR c C-25.01", "SOR/2000-111", "RRO 1990, Reg 194", "O Reg 194/90".
 _CITATION_REGEX = re.compile("|".join(f"(?:{a})" for a in _CITATION_ALTERNATIVES))
 
-
-def extract_case_pinpoint(raw_input: str) -> str:
-    """Extract a pinpoint from a case-name (case_route) query string.
-
-    Recognizes trailing patterns at the END of the input:
-      "at para N"       e.g. "at para 2"
-      "at paras N-M"    e.g. "at paras 10-15"
-      "at paras N"      e.g. "at paras 10"
-      "at N"            e.g. "at 47"
-      "at p N"          e.g. "at p 5"
-      "at pp N-M"       e.g. "at pp 10-15"
-
-    Returns the matched string, or ``""`` if none found.
-    """
-    if not raw_input:
-        return ""
-    s = raw_input.strip()
-    # Order matters: longer patterns first to avoid partial matches
-    patterns = [
-        r'at\s+paras\s+\d+(?:-\d+)$',
-        r'at\s+paras\s+\d+$',
-        r'at\s+para\s+\d+(?:-\d+)?$',
-        r'at\s+pp\s+\d+(?:-\d+)$',
-        r'at\s+p\s+\d+(?:-\d+)?$',
-        r'\bat\s+\d+$',
-    ]
-    for pat in patterns:
-        m = re.search(pat, s, re.IGNORECASE)
-        if m:
-            return m.group(0).strip()
-    return ""
-
-
-def extract_pinpoint(full_citation: str) -> str:
-    """Extract the pinpoint portion after the base citation.
-
-    Primary extraction: match the base citation via ``_CITATION_REGEX``,
-    return everything after it (stripped of leading comma/space).
-
-    Examples:
-        "Criminal Code, RSC 1985, c C-46, s 718.2(e)"  →  "s 718.2(e)"
-        "Criminal Code, RSC 1985, c C-46."             →  ""
-        "RSC 1985, c C-46"                              →  ""
-        ""                                              →  ""
-
-    Returns:
-        The pinpoint string, or ``""`` if none found.
-    """
-    if not full_citation:
-        return ""
-    m = _CITATION_REGEX.search(full_citation)
-    if not m:
-        return ""
-    remainder = full_citation[m.end():].strip().lstrip(",").strip()
-    return remainder

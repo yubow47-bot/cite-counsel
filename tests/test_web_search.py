@@ -142,7 +142,7 @@ def test_fetch_keeps_the_page_date_and_strips_the_site_suffix(h, session):
     page = {"page_title": "Suspect, officer wounded outside Belleville synagogue | CBC News",
             "site_name": "CBC News", "date": "2026-09-21", "author": "Amy van den Berg",
             "raw_text": "Exchange of gunfire came as members gathered for Yom Kippur."}
-    with patch("llm_api.deepseek_api.extract_from_url", return_value=page):
+    with patch("local_tools.web_extract.extract_from_url", return_value=page):
         result = web.fetch(h.context(session, "web"),
                            web.FetchParams(url="https://www.cbc.ca/news/canada/belleville-9.7351776"))
     assert result.content["title"] == "Suspect, officer wounded outside Belleville synagogue"
@@ -166,7 +166,7 @@ def test_fetch_strips_the_site_suffix_even_when_site_name_is_shorter(h, session)
     page = {"page_title": "Man who murdered 7-week-old baby can't apply for parole for 15 years | CBC News",
             "site_name": "CBC", "date": "2026-07-02", "author": "Kristy Nease",
             "raw_text": "For murder in the second degree of a baby who was seven weeks old..."}
-    with patch("llm_api.deepseek_api.extract_from_url", return_value=page):
+    with patch("local_tools.web_extract.extract_from_url", return_value=page):
         result = web.fetch(h.context(session, "web"),
                            web.FetchParams(url="https://www.cbc.ca/news/canada/ottawa/x-9.7254177"))
     assert result.content["title"] == "Man who murdered 7-week-old baby can't apply for parole for 15 years"
@@ -174,7 +174,7 @@ def test_fetch_strips_the_site_suffix_even_when_site_name_is_shorter(h, session)
 
 def test_fetch_still_works_when_the_page_has_no_metadata(h, session):
     page = {"page_title": "A bare page", "raw_text": "Some text only."}
-    with patch("llm_api.deepseek_api.extract_from_url", return_value=page):
+    with patch("local_tools.web_extract.extract_from_url", return_value=page):
         result = web.fetch(h.context(session, "web"), web.FetchParams(url="https://example.com/page"))
     assert result.content["title"] == "A bare page"
     record = session.records.get(result.content["record"]["ref"])
@@ -186,7 +186,7 @@ def test_a_bot_check_page_is_refused_not_stored(h, session):
     the session as a record that pretends to be evidence."""
     page = {"page_title": "Making sure you're not a bot!",
             "raw_text": "Making sure you're not a bot! Loading... This server is protected."}
-    with patch("llm_api.deepseek_api.extract_from_url", return_value=page):
+    with patch("local_tools.web_extract.extract_from_url", return_value=page):
         with pytest.raises(ValueError) as exc:
             web.fetch(h.context(session, "web"), web.FetchParams(url="http://www.bailii.org/uk/cases/UKHL/1932/100.html"))
     assert "bot-check" in str(exc.value)
