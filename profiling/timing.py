@@ -1,8 +1,8 @@
 """Thread-safe lightweight profiler for the citation pipeline.
 
 Usage — context manager:
-    with timing.measure("llm.classify", model="deepseek-v4-flash"):
-        result = ask_deepseek(prompt)
+    with timing.measure("llm.chat", model="qwen/qwen3.7-flash"):
+        result = call_model(prompt)
 
 Usage — decorator:
     @timing.profile("a2aj.fetch", endpoint="/fetch")

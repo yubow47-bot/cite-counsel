@@ -1,158 +1,18 @@
-import os
-import json
-import time
+"""Fetch and parse one public web page into citation fields (deterministic, no LLM).
+
+The fetch is guarded against SSRF (``local_tools.url_guard``) and the page is
+parsed with trafilatura plus meta tags.
+"""
+
 import logging
 import requests
-from profiling import timing
 from utils.json_util import parse_llm_json
 
-from local_tools.utils import deepseek_session, generic_session, request_with_retry
+from local_tools.utils import generic_session, request_with_retry
 
 logger = logging.getLogger(__name__)
 
-
-def _load_env():
-    """Load .env file for API key."""
-    # The local Chatbox launcher owns environment configuration.  Do this
-    # before even looking for .env so desktop requests never touch it.
-    if os.getenv("MCGILL_SKIP_DOTENV") == "1":
-        return
-    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
-    if os.path.exists(env_path):
-        with open(env_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                os.environ.setdefault(key.strip(), value.strip())
-
-
-# Must run BEFORE the constants below read os.getenv — this ordering bug
-# silently ignored .env-provided LLM_* values at import time.
-_load_env()
-
-
-# ── Provider selection ──────────────────────────────────────────────────────
-# Default: DeepSeek direct.  Set LLM_COMPLETIONS_URL to any OpenAI-compatible
-# chat/completions endpoint (e.g. https://openrouter.ai/api/v1/chat/completions)
-# and provide OPENROUTER_API_KEY (or LLM_API_KEY) to route the SAME pipeline
-# through it; LLM_DEFAULT_MODEL then names the provider's model id.
-DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
-COMPLETIONS_URL = os.getenv("LLM_COMPLETIONS_URL", DEEPSEEK_API_URL)
-DEEPSEEK_MODEL = os.getenv("LLM_DEFAULT_MODEL", "deepseek-v4-flash")
 URL_EXTRACT_FETCH_TIMEOUT = 8
-
-# ── Track first call (DNS + TLS setup on new connection) ──
-_first_deepseek_http = True
-
-
-def _mark_first_deepseek_http() -> bool:
-    global _first_deepseek_http
-    if _first_deepseek_http:
-        _first_deepseek_http = False
-        return True
-    return False
-
-
-def _get_api_key() -> str:
-    """Resolve the API key for the configured completions endpoint.
-
-    DeepSeek direct -> DEEPSEEK_API_KEY.  Any custom endpoint (OpenRouter,
-    etc.) -> a per-request key set via request_credentials.use_credentials
-    for the duration of this call, falling back to OPENROUTER_API_KEY / LLM_API_KEY.
-    """
-    if COMPLETIONS_URL != DEEPSEEK_API_URL:
-        from llm_api.request_credentials import openrouter_key
-        key = openrouter_key()
-        if not key:
-            raise ValueError(
-                "LLM_COMPLETIONS_URL is set but no key found. "
-                "Set OPENROUTER_API_KEY (or LLM_API_KEY) in the environment."
-            )
-        return key
-    key = os.environ.get("DEEPSEEK_API_KEY", "")
-    if not key:
-        raise ValueError(
-            "DEEPSEEK_API_KEY not configured. "
-            "Set it in the .env file: DEEPSEEK_API_KEY=sk-your-key-here"
-        )
-    return key
-
-
-def _call_deepseek(messages: list, temperature: float = 0, model: str | None = None, disable_thinking: bool = False) -> str:
-    """Internal: call DeepSeek API with messages, return response text."""
-    from llm_api.openrouter_api import chatbox_mode, check_budget
-    if chatbox_mode() and not check_budget():
-        raise RuntimeError("Daily LLM spend cap reached.")
-    _http_t0 = time.perf_counter()
-    _is_first = _mark_first_deepseek_http()
-
-    api_key = _get_api_key()  # raises a clean ValueError when unconfigured
-    actual_model = model or DEEPSEEK_MODEL
-
-    if _is_first:
-        logger.debug("[DUR] DeepSeek HTTP — FIRST request (cold DNS + TCP + TLS)")
-
-    body: dict = {
-        "model": actual_model,
-        "messages": messages,
-        "temperature": temperature,
-    }
-    if disable_thinking:
-        if COMPLETIONS_URL == DEEPSEEK_API_URL:
-            # DeepSeek-specific extension.
-            body["thinking"] = {"type": "disabled"}
-        else:
-            # OpenRouter upstreams reject DeepSeek's "thinking" param; their
-            # cross-provider equivalent is reasoning.enabled=false.  Without
-            # it, default-thinking models (qwen3.7-flash) burn ~1400 reasoning
-            # tokens per call (~10x latency) on tiny formatting prompts.
-            body["reasoning"] = {"enabled": False}
-
-    with timing.measure("http.deepseek", model=actual_model):
-        response = request_with_retry(
-            deepseek_session, "POST",
-            COMPLETIONS_URL,
-            # retries=0: POST is not idempotent — a read-timeout retry could
-            # duplicate a completed LLM call and double-charge.
-            retries=0,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=body,
-            read_timeout=30,
-        )
-    _http_elapsed = time.perf_counter() - _http_t0
-    logger.debug("[DUR] DeepSeek _call_deepseek HTTP — %.1fms  first=%s", _http_elapsed * 1000, _is_first)
-    response.raise_for_status()
-    data = response.json()
-
-    # ── Track token spend ──
-    try:
-        usage = data.get("usage", {})
-        in_tokens = usage.get("prompt_tokens", 0)
-        out_tokens = usage.get("completion_tokens", 0)
-        if in_tokens or out_tokens:
-            from core.spend_tracker import spend_tracker
-            provider = "openrouter" if COMPLETIONS_URL != DEEPSEEK_API_URL else "deepseek"
-            spend_tracker.record_cost(provider, actual_model, in_tokens, out_tokens)
-    except Exception as e:
-        logger.warning("DeepSeek spend tracking failed: %s", e)
-
-    return data["choices"][0]["message"]["content"]
-
-
-def ask_deepseek(prompt: str, model: str | None = None, disable_thinking: bool = False) -> str:
-    """Single-turn prompt."""
-    return _call_deepseek([{"role": "user", "content": prompt}], model=model, disable_thinking=disable_thinking)
-
-
-def chat_deepseek(messages: list) -> str:
-    """Multi-turn chat, replaces chat_ollama."""
-    return _call_deepseek(messages, temperature=0.7)
-
 
 _REDIRECT_STATUS = (301, 302, 303, 307, 308)
 _MAX_REDIRECT_HOPS = 5
@@ -250,15 +110,6 @@ def fetch_html(url: str, timeout: int = 15) -> str | None:
         return None
     except Exception:
         return None
-
-
-def extract_url(url: str) -> str | None:
-    """抓取 + 解析。任一步失败返回 None，交给上层降级。"""
-    html = fetch_html(url, timeout=URL_EXTRACT_FETCH_TIMEOUT)
-    if not html:
-        return None
-    import trafilatura
-    return trafilatura.extract(html, include_comments=False)
 
 
 def _meta_content(html: str, prop: str) -> str:

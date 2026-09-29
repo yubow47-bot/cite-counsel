@@ -53,7 +53,7 @@
 │   · 用户补充字段：唯一能写入"用户"来源的入口                    │
 ├──────────────────────────────────────────────────────────────┤
 │ 插件（可勾选）                                                │
-│   数据源：a2aj · legisinfo · crossref · openlibrary · canlii   │
+│   数据源：a2aj · legisinfo · crossref · openlibrary            │
 │   提取：  file · web                                          │
 │   功能：  mcgill · quote · bibliography · deadlines            │
 ├──────────────────────────────────────────────────────────────┤
@@ -143,7 +143,6 @@ Plugin(
 | `legisinfo` | 数据源 | 按编号查议案；按关键词查议案（按最新排序） | `local_tools/legisinfo_api.py` |
 | `crossref` | 数据源 | DOI 查询；按标题 / 作者查文章 | `local_tools/crossref_api.py`、`core/bibliographic.py` |
 | `openlibrary` | 数据源 | ISBN 查询；按书名 / 作者查书 | `local_tools/openlibrary_api.py`、`core/bibliographic.py` |
-| `canlii` | 数据源 | 按引用号查判例、法规（需要 key，默认关） | `local_tools/canlii_api.py` |
 | `file` | 提取 | 从上传的 PDF / DOCX / 图片提取字段 | `local_tools/file_extractor.py` |
 | `web` | 提取 | 网络搜索（搜索服务由用户在设置中选择）；读取网页 | `plugins/web` |
 | `mcgill` | 功能 | 记录 → 引文；列出某类记录缺哪些字段 | `core/mcgill_format.py`、`mcgill_rules.json` |

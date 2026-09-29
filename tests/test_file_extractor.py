@@ -16,7 +16,7 @@ from local_tools.file_extractor import (
 #  Image dispatch
 # ═══════════════════════════════════════════════════════════════════
 
-@patch("llm_api.gemini_api.extract_from_image")
+@patch("llm_api.vision.extract_from_image")
 def test_extract_from_file_png(mock_extract):
     """extract_from_file with .png → calls extract_from_image."""
     mock_extract.return_value = {"page_title": "Test"}
@@ -25,7 +25,7 @@ def test_extract_from_file_png(mock_extract):
     mock_extract.assert_called_once_with("/fake/image.png")
 
 
-@patch("llm_api.gemini_api.extract_from_image")
+@patch("llm_api.vision.extract_from_image")
 def test_extract_from_file_jpg(mock_extract):
     """extract_from_file with .jpg → calls extract_from_image."""
     mock_extract.return_value = {"page_title": "Test"}
@@ -34,7 +34,7 @@ def test_extract_from_file_jpg(mock_extract):
     mock_extract.assert_called_once_with("/fake/photo.jpg")
 
 
-@patch("llm_api.gemini_api.extract_from_image")
+@patch("llm_api.vision.extract_from_image")
 def test_extract_from_file_jpeg(mock_extract):
     """extract_from_file with .jpeg → calls extract_from_image."""
     mock_extract.return_value = {"page_title": "Test"}
@@ -43,7 +43,7 @@ def test_extract_from_file_jpeg(mock_extract):
     mock_extract.assert_called_once_with("/fake/photo.jpeg")
 
 
-@patch("llm_api.gemini_api.extract_from_image")
+@patch("llm_api.vision.extract_from_image")
 def test_extract_from_file_webp(mock_extract):
     """extract_from_file with .webp → calls extract_from_image."""
     mock_extract.return_value = {"page_title": "Test"}

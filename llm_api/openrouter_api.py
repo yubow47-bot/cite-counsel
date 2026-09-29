@@ -1,4 +1,4 @@
-"""Small OpenRouter adapter shared by the Chatbox provider paths.
+"""Small OpenRouter adapter shared by every model call.
 
 This module deliberately does not load dotenv files.  Chatbox supplies its
 configuration through the process environment.
@@ -12,15 +12,8 @@ from local_tools.utils import generic_session, request_with_retry
 OPENROUTER_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
-def chatbox_mode() -> bool:
-    """Whether the local Chatbox launcher owns all generative traffic."""
-    return os.getenv("CHATBOX_OPENROUTER_ONLY") == "1"
-
-
 def check_budget() -> bool:
-    """Return False before a paid Chatbox request once the daily cap is hit."""
-    if not chatbox_mode():
-        return True
+    """Return False before a paid request once the daily cap is hit."""
     try:
         from core.spend_tracker import spend_tracker
         return not spend_tracker.is_over_cap()
@@ -29,7 +22,8 @@ def check_budget() -> bool:
 
 
 def completions_url() -> str:
-    return os.getenv("LLM_COMPLETIONS_URL", OPENROUTER_COMPLETIONS_URL)
+    """Fixed on purpose: the OpenRouter key must never be sent to an endpoint taken from the environment."""
+    return OPENROUTER_COMPLETIONS_URL
 
 
 def api_key() -> str:

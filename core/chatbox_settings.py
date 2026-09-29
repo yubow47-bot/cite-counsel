@@ -1,4 +1,4 @@
-"""Isolated local settings. Never reads the existing application's .env."""
+"""Local settings: config/chatbox*.json plus the allowlisted API keys in .env."""
 
 import json
 import math
@@ -85,13 +85,9 @@ def configure() -> dict:
         raise ValueError("port must be an integer between 1024 and 65535")
     if type(settings["max_upload_mb"]) is not int or not 1 <= settings["max_upload_mb"] <= 200:
         raise ValueError("max_upload_mb must be an integer between 1 and 200")
-    # Set before importing ANY legacy pipeline. No production .env, persistence
-    # or notification credentials are inherited by this dedicated entrypoint.
+    # Read by the model clients at call time.
     os.environ.update({
-        "MCGILL_SKIP_DOTENV": "1", "CHATBOX_OPENROUTER_ONLY": "1",
         "OPENROUTER_API_KEY": os.getenv("OPENROUTER_API_KEY", "").strip(),
-        "LLM_COMPLETIONS_URL": "https://openrouter.ai/api/v1/chat/completions",
-        "LLM_DEFAULT_MODEL": settings["llm_model"],
         "OPENROUTER_VISION_MODEL": settings["vision_model"],
         "DAILY_SPEND_CAP_USD": str(cap),
     })

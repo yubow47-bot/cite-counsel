@@ -1,13 +1,11 @@
 """Offline unit tests for openlibrary_api: ISBN extraction and validation."""
 
-import re
 import sys
 sys.path.insert(0, ".")
 
 from local_tools.openlibrary_api import (
     extract_isbn,
     validate_isbn,
-    build_book_citation,
 )
 
 
@@ -140,35 +138,3 @@ _SAMPLE_OL_DATA_NO_PLACE = {
     "publish_date": "2003",
 }
 
-
-def test_build_book_citation_basic():
-    """Book title must be italicized per McGill 10th ed (da2943c)."""
-    result = build_book_citation(_SAMPLE_OL_DATA)
-    assert result == "David Gilles, *Telecommunications Law* (London, UK: Butterworths, 2003)."
-
-
-def test_build_book_citation_no_place_degrades():
-    """Missing place should degrade gracefully (not return None).
-    Title must still be italicized."""
-    result = build_book_citation(_SAMPLE_OL_DATA_NO_PLACE)
-    assert result == "David Gilles, *Telecommunications Law* (Butterworths, 2003)."
-
-
-def test_build_book_citation_missing_author():
-    data = {**_SAMPLE_OL_DATA, "authors": []}
-    assert build_book_citation(data) is None
-
-
-def test_build_book_citation_missing_title():
-    data = {**_SAMPLE_OL_DATA, "title": ""}
-    assert build_book_citation(data) is None
-
-
-def test_build_book_citation_missing_publisher():
-    data = {**_SAMPLE_OL_DATA, "publishers": []}
-    assert build_book_citation(data) is None
-
-
-def test_build_book_citation_missing_year():
-    data = {**_SAMPLE_OL_DATA, "publish_date": ""}
-    assert build_book_citation(data) is None

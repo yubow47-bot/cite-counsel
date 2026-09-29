@@ -22,7 +22,6 @@ from pathlib import Path
 
 from core.tool_contracts import Artifact, Derivation, Field, is_grounded
 
-ENTRY_KIND = "bib_entry.v1"
 MAX_ENTRIES = 200
 # Corporate authors are listed as written, never turned into "Association, Canadian Bar".
 _ORGANIZATION = re.compile(

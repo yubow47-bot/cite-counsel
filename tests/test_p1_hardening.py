@@ -1,6 +1,4 @@
-"""Tests kept from the P1 hardening batch that still apply after the API
-web app was removed: the rate limiter (now harness-owned), legisinfo
-find_bills, and mcgill_engine's typed DOI/ISBN sentinel errors.
+"""Hardening tests: the rate limiter (harness-owned) and legisinfo find_bills.
 
 Run: pytest tests/test_p1_hardening.py -v
 """
@@ -11,7 +9,6 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pytest
 
 from harness.rate_limiter import RateLimiter, _int_env
 
@@ -66,19 +63,3 @@ def test_find_bills_skips_non_dict_records():
     with patch.object(li, "fetch_legisinfo_bills", MagicMock(return_value=["junk", None, rec])):
         results = li.find_bills("C-22", year=2021)
     assert results == [rec]
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  mcgill_engine — typed DOI/ISBN sentinels
-# ═════════════════════════════════════════════════════════════════════════════
-
-def test_journal_article_without_doi_raises_typed_sentinel():
-    from core.mcgill_engine import format_citation, NotADoiError
-    with pytest.raises(NotADoiError):
-        format_citation({"raw_text": "definitely not a doi"}, doc_type="journal_article")
-
-
-def test_book_with_bad_checksum_isbn_raises_typed_sentinel():
-    from core.mcgill_engine import format_citation, InvalidIsbnError
-    with pytest.raises(InvalidIsbnError):
-        format_citation({"raw_text": "9780132350885"}, doc_type="book")

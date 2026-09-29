@@ -25,7 +25,7 @@ from local_tools.url_guard import (
     next_redirect_url,
     validate_url,
 )
-from llm_api.deepseek_api import fetch_html
+from local_tools.web_extract import fetch_html
 
 _PUBLIC_IP = "93.184.216.34"
 
@@ -159,7 +159,7 @@ def _cffi_resp(status=200, text="", headers=None):
 
 def test_fetch_html_blocks_file_scheme_without_any_request():
     with patch("curl_cffi.requests.get") as mock_get, \
-         patch("llm_api.deepseek_api.request_with_retry") as mock_fb:
+         patch("local_tools.web_extract.request_with_retry") as mock_fb:
         assert fetch_html("file:///etc/passwd") is None
     mock_get.assert_not_called()
     mock_fb.assert_not_called()
@@ -168,7 +168,7 @@ def test_fetch_html_blocks_file_scheme_without_any_request():
 def test_fetch_html_blocks_loopback_target():
     with patch("socket.getaddrinfo", _fake_resolver()), \
          patch("curl_cffi.requests.get") as mock_get, \
-         patch("llm_api.deepseek_api.request_with_retry") as mock_fb:
+         patch("local_tools.web_extract.request_with_retry") as mock_fb:
         assert fetch_html("http://127.0.0.1:8080/admin") is None
     mock_get.assert_not_called()
     mock_fb.assert_not_called()
@@ -180,7 +180,7 @@ def test_fetch_html_follows_redirect_to_public_target():
              _cffi_resp(302, headers={"location": "https://example.com/real"}),
              _cffi_resp(200, text="<html>final</html>"),
          ]) as mock_get, \
-         patch("llm_api.deepseek_api.request_with_retry") as mock_fb:
+         patch("local_tools.web_extract.request_with_retry") as mock_fb:
         html = fetch_html("https://example.com/start")
 
     assert html == "<html>final</html>"
@@ -194,7 +194,7 @@ def test_fetch_html_blocks_redirect_to_metadata_ip():
          patch("curl_cffi.requests.get", side_effect=[
              _cffi_resp(302, headers={"location": "http://169.254.169.254/latest/meta-data/"}),
          ]) as mock_get, \
-         patch("llm_api.deepseek_api.request_with_retry") as mock_fb:
+         patch("local_tools.web_extract.request_with_retry") as mock_fb:
         html = fetch_html("https://example.com/open-redirect")
 
     assert html is None
@@ -207,7 +207,7 @@ def test_fetch_html_blocks_scheme_relative_internal_redirect():
          patch("curl_cffi.requests.get", side_effect=[
              _cffi_resp(302, headers={"location": "//192.168.0.10/internal"}),
          ]) as mock_get, \
-         patch("llm_api.deepseek_api.request_with_retry") as mock_fb:
+         patch("local_tools.web_extract.request_with_retry") as mock_fb:
         assert fetch_html("https://example.com/a") is None
     assert mock_get.call_count == 1
     mock_fb.assert_not_called()
@@ -217,7 +217,7 @@ def test_fetch_html_caps_redirect_hops():
     endless = [_cffi_resp(302, headers={"location": f"https://example.com/h{n}"}) for n in range(10)]
     with patch("socket.getaddrinfo", _fake_resolver()), \
          patch("curl_cffi.requests.get", side_effect=endless) as mock_get, \
-         patch("llm_api.deepseek_api.request_with_retry") as mock_fb:
+         patch("local_tools.web_extract.request_with_retry") as mock_fb:
         assert fetch_html("https://example.com/loop") is None
     assert mock_get.call_count <= 6  # 1 + max hops
     mock_fb.assert_not_called()
@@ -227,7 +227,7 @@ def test_fetch_html_rejects_oversized_body():
     huge = "x" * (MAX_RESPONSE_BYTES + 1)
     with patch("socket.getaddrinfo", _fake_resolver()), \
          patch("curl_cffi.requests.get", return_value=_cffi_resp(200, text=huge)), \
-         patch("llm_api.deepseek_api.request_with_retry") as mock_fb:
+         patch("local_tools.web_extract.request_with_retry") as mock_fb:
         assert fetch_html("https://example.com/huge") is None
     mock_fb.assert_not_called()
 
@@ -242,7 +242,7 @@ def test_fetch_html_fallback_redirect_to_internal_is_blocked():
     fb1.headers = {"location": "http://10.9.9.9/secret"}
     with patch("socket.getaddrinfo", _fake_resolver()), \
          patch("curl_cffi.requests.get", side_effect=TimeoutError("curl down")), \
-         patch("llm_api.deepseek_api.request_with_retry", MagicMock(return_value=fb1)) as mock_fb:
+         patch("local_tools.web_extract.request_with_retry", MagicMock(return_value=fb1)) as mock_fb:
         assert fetch_html("https://example.com/r") is None
     assert mock_fb.call_count == 1
 
@@ -257,7 +257,7 @@ def test_fetch_html_fallback_follows_public_redirect():
     fb2.raise_for_status = MagicMock()
     with patch("socket.getaddrinfo", _fake_resolver()), \
          patch("curl_cffi.requests.get", side_effect=TimeoutError("curl down")), \
-         patch("llm_api.deepseek_api.request_with_retry", MagicMock(side_effect=[fb1, fb2])) as mock_fb:
+         patch("local_tools.web_extract.request_with_retry", MagicMock(side_effect=[fb1, fb2])) as mock_fb:
         html = fetch_html("https://example.com/r")
 
     assert html == "<html>fallback final</html>"

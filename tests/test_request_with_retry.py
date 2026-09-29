@@ -3,10 +3,9 @@
 Run: pytest tests/test_request_with_retry.py -v
 """
 
-import os
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 import requests
@@ -169,24 +168,3 @@ def test_post_retries_zero_no_retry_on_timeout():
     assert session.request.call_count == 1, (
         "Should not retry POST with retries=0"
     )
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Regression: browse_legislation_in_database unchanged behavior
-# ═════════════════════════════════════════════════════════════════════════════
-
-@patch("os.environ.get", return_value="test-api-key")
-@patch("local_tools.canlii_api.canlii_session.request")
-@patch("profiling.timing.ENABLED", False)
-def test_browse_legislation_in_database_unchanged(mock_request, _mock_env):
-    """browse_legislation_in_database still returns the same data via the new helper."""
-    from local_tools.canlii_api import browse_legislation_in_database
-
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = {"legislations": [{"title": "Test Act"}]}
-    mock_request.return_value = mock_resp
-
-    result = browse_legislation_in_database("abs")
-
-    assert result == {"legislations": [{"title": "Test Act"}]}
-    mock_resp.raise_for_status.assert_called_once()

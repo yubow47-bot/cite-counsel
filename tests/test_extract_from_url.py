@@ -1,4 +1,4 @@
-"""Unit tests for extract_from_url() in deepseek_api.py.
+"""Unit tests for extract_from_url() in web_extract.py.
 
 Run: pytest tests/test_extract_from_url.py -v
 """
@@ -12,7 +12,7 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from llm_api.deepseek_api import extract_from_url, fetch_html
+from local_tools.web_extract import extract_from_url, fetch_html
 
 
 @pytest.fixture(autouse=True)
@@ -31,7 +31,7 @@ def _fake_dns():
 
 def test_extract_from_url_trafilatura_extract_raises():
     """trafilatura.extract raises -> error dict, no UnboundLocalError."""
-    with patch("llm_api.deepseek_api.fetch_html", return_value="<html><body>test</body></html>"), \
+    with patch("local_tools.web_extract.fetch_html", return_value="<html><body>test</body></html>"), \
          patch("trafilatura.extract", side_effect=ValueError("parse error")):
         result = extract_from_url("https://example.com/article")
 
@@ -41,7 +41,7 @@ def test_extract_from_url_trafilatura_extract_raises():
 
 def test_extract_from_url_trafilatura_extract_raises_runtime_error():
     """trafilatura.extract raises RuntimeError -> error dict, no crash."""
-    with patch("llm_api.deepseek_api.fetch_html", return_value="<html><body>test</body></html>"), \
+    with patch("local_tools.web_extract.fetch_html", return_value="<html><body>test</body></html>"), \
          patch("trafilatura.extract", side_effect=RuntimeError("unexpected error")):
         result = extract_from_url("https://example.com/article")
 
@@ -55,7 +55,7 @@ def test_extract_from_url_trafilatura_extract_raises_runtime_error():
 
 def test_extract_from_url_fetch_html_fails():
     """fetch_html returns None -> error dict (no longer asserts a specific cause)."""
-    with patch("llm_api.deepseek_api.fetch_html", return_value=None):
+    with patch("local_tools.web_extract.fetch_html", return_value=None):
         result = extract_from_url("https://example.com/blocked")
 
     assert "error" in result
@@ -66,7 +66,7 @@ def test_extract_from_url_fetch_html_fails():
 
 def test_extract_from_url_trafilatura_returns_none():
     """trafilatura.extract returns None -> extraction failure error dict."""
-    with patch("llm_api.deepseek_api.fetch_html", return_value="<html><body>test</body></html>"), \
+    with patch("local_tools.web_extract.fetch_html", return_value="<html><body>test</body></html>"), \
          patch("trafilatura.extract", return_value=None):
         result = extract_from_url("https://example.com/article")
 
@@ -94,7 +94,7 @@ def test_fetch_html_fallback_succeeds():
     mock_fallback = MagicMock(return_value=mock_fb_resp)
 
     with patch("curl_cffi.requests.get", mock_curl), \
-         patch("llm_api.deepseek_api.request_with_retry", mock_fallback):
+         patch("local_tools.web_extract.request_with_retry", mock_fallback):
         html = fetch_html("https://example.com/article", timeout=8)
 
     assert html == "<html><body>fallback content</body></html>", (
@@ -112,7 +112,7 @@ def test_fetch_html_both_fail():
     mock_fallback = MagicMock(side_effect=ConnectionError("fallback failed"))
 
     with patch("curl_cffi.requests.get", mock_curl), \
-         patch("llm_api.deepseek_api.request_with_retry", mock_fallback):
+         patch("local_tools.web_extract.request_with_retry", mock_fallback):
         html = fetch_html("https://example.com/article", timeout=8)
 
     assert html is None, f"Expected None, got {html!r}"
@@ -127,7 +127,7 @@ def test_fetch_html_curl_succeeds_no_fallback():
     mock_fallback = MagicMock()
 
     with patch("curl_cffi.requests.get", mock_curl), \
-         patch("llm_api.deepseek_api.request_with_retry", mock_fallback):
+         patch("local_tools.web_extract.request_with_retry", mock_fallback):
         html = fetch_html("https://example.com/article", timeout=8)
 
     assert html == "<html><body>primary content</body></html>", (
@@ -146,7 +146,7 @@ def test_fetch_html_fallback_http_error_returns_none():
     mock_fallback = MagicMock(return_value=mock_fb_resp)
 
     with patch("curl_cffi.requests.get", mock_curl), \
-         patch("llm_api.deepseek_api.request_with_retry", mock_fallback):
+         patch("local_tools.web_extract.request_with_retry", mock_fallback):
         html = fetch_html("https://example.com/article", timeout=8)
 
     assert html is None, (
@@ -160,7 +160,7 @@ def test_fetch_html_fallback_http_error_returns_none():
 
 def test_extract_from_url_error_does_not_claim_blocked():
     """Error message no longer asserts a specific blocked cause."""
-    with patch("llm_api.deepseek_api.fetch_html", return_value=None):
+    with patch("local_tools.web_extract.fetch_html", return_value=None):
         result = extract_from_url("https://example.com/article")
 
     assert "error" in result
@@ -178,7 +178,7 @@ def test_extract_from_url_error_does_not_claim_blocked():
 
 def test_extract_from_url_pdf_suffix_short_circuits():
     """URL ending in .pdf returns error immediately; fetch_html is NOT called."""
-    with patch("llm_api.deepseek_api.fetch_html") as mock_fetch:
+    with patch("local_tools.web_extract.fetch_html") as mock_fetch:
         result = extract_from_url("https://example.com/document.pdf")
 
     assert "error" in result
@@ -189,7 +189,7 @@ def test_extract_from_url_pdf_suffix_short_circuits():
 
 def test_extract_from_url_pdf_suffix_case_insensitive():
     """URL ending in .PDF (uppercase) short-circuits the same way."""
-    with patch("llm_api.deepseek_api.fetch_html") as mock_fetch:
+    with patch("local_tools.web_extract.fetch_html") as mock_fetch:
         result = extract_from_url("https://example.com/report.PDF")
 
     assert "error" in result
@@ -199,7 +199,7 @@ def test_extract_from_url_pdf_suffix_case_insensitive():
 
 def test_extract_from_url_pdf_suffix_with_query_string():
     """Query string is stripped before the suffix check; short-circuits."""
-    with patch("llm_api.deepseek_api.fetch_html") as mock_fetch:
+    with patch("local_tools.web_extract.fetch_html") as mock_fetch:
         result = extract_from_url("https://example.com/file.pdf?download=true")
 
     assert "error" in result
@@ -220,7 +220,7 @@ def test_extract_from_url_non_pdf_url_unaffected():
         ),
     })
     with (
-        patch("llm_api.deepseek_api.fetch_html", return_value="<html><body>ok</body></html>") as mock_fetch,
+        patch("local_tools.web_extract.fetch_html", return_value="<html><body>ok</body></html>") as mock_fetch,
         patch("trafilatura.extract", return_value=fake_trafilatura_json),
     ):
         result = extract_from_url("https://example.com/article")

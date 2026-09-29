@@ -60,7 +60,7 @@ def test_web_fetch_stores_the_page_as_an_extracted_record():
     h = make()
     session, _ = h.sessions.start()
     from plugins import web
-    with patch("llm_api.deepseek_api.extract_from_url", return_value={
+    with patch("local_tools.web_extract.extract_from_url", return_value={
         "page_title": "A page", "raw_text": "page body text",
     }):
         result = web.fetch(ctx_for(h, session, "web"),

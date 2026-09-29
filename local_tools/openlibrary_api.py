@@ -1,11 +1,9 @@
 """Open Library API: ISBN extraction, metadata fetch, McGill book citation assembly (no LLM)."""
 
 import re
-import requests
 from local_tools.utils import openlibrary_session, request_with_retry
 from profiling import timing as prof
 
-from local_tools.format_util import _wrap_italic
 
 
 def extract_isbn(text: str) -> str | None:
@@ -153,73 +151,6 @@ def edition_to_data(edition: dict, author_names: list[str]) -> dict:
     if languages:
         data["languages"] = languages
     return data
-
-
-def build_book_citation(ol_data: dict) -> str | None:
-    """Assemble a McGill-format book citation from Open Library data (no LLM).
-
-    Format: Author, Title, Edition (Place: Publisher, Year).
-
-    ISBN is **never** included in the output.
-    Returns None if any required field (author, title, publisher, year) is
-    missing.  Missing place/edition are silently omitted.
-    """
-    # ── Authors ──
-    authors = ol_data.get("authors", [])
-    if not authors:
-        return None
-    author_names = [a.get("name", "").strip() for a in authors if a.get("name")]
-    author_names = [n for n in author_names if n]
-    if not author_names:
-        return None
-
-    if len(author_names) == 1:
-        author_str = f"{author_names[0]}, "
-    elif len(author_names) == 2:
-        author_str = f"{author_names[0]} & {author_names[1]}, "
-    elif len(author_names) == 3:
-        author_str = f"{author_names[0]}, {author_names[1]} & {author_names[2]}, "
-    else:
-        author_str = f"{author_names[0]} et al, "
-
-    # ── Title ──
-    title = ol_data.get("title", "").strip()
-    if not title:
-        return None
-    subtitle = ol_data.get("subtitle", "").strip()
-    if subtitle:
-        title = f"{title}: {subtitle}"
-
-    # ── Edition (optional) ──
-    edition = ol_data.get("edition_name", "").strip()
-    edition_str = f", {edition}" if edition else ""
-
-    # ── Place of publication (optional — degrade gracefully) ──
-    # Open Library wraps uncertain / missing places like [United States?]
-    # or [S.l.] (sine loco). Strip brackets and ?, then omit S.l. / empty.
-    places = ol_data.get("publish_places", [])
-    place = places[0].get("name", "").strip() if places else ""
-    if place:
-        place = re.sub(r'^\[(.+)\]$', r'\1', place).replace('?', '').strip()
-        if place.lower() in ("s.l.", "s.l", ""):
-            place = ""
-    place_str = f"{place}: " if place else ""
-
-    # ── Publisher ──
-    publishers = ol_data.get("publishers", [])
-    if not publishers:
-        return None
-    publisher = publishers[0].get("name", "").strip()
-    if not publisher:
-        return None
-
-    # ── Year ──
-    publish_date = ol_data.get("publish_date", "").strip()
-    year = _extract_year(publish_date)
-    if not year:
-        return None
-
-    return f"{author_str}{_wrap_italic(title)}{edition_str} ({place_str}{publisher}, {year})."
 
 
 def _extract_year(date_str: str) -> str | None:

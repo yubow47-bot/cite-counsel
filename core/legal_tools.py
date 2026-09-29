@@ -1,158 +1,18 @@
-"""Deterministic legal-tool functions built on the evidence contracts.
+"""Deterministic date arithmetic for the deadlines plugin, built on the evidence contracts.
 
 The module deliberately contains no source lookup, legal reasoning, court-rule
-selection, or model calls.  Its public functions are the callables that the
-tool registry can expose under ``cite.render``, ``doc.table_of_authorities``,
-and ``quote.verify``.
+selection, or model calls.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from datetime import date, timedelta
 from typing import Literal
 
-from core import mcgill_format
-from core.tool_contracts import Artifact, Derivation, Field, Finding, is_grounded
+from core.tool_contracts import Artifact, Derivation, Field
 
 
-CITATION_ARTIFACT_KIND = "citation_text"
-TOA_STRICT_POLICY = "traceable_only"
-TOA_DRAFT_POLICY = "allow_unverified_draft"
-ToAPolicy = Literal["traceable_only", "allow_unverified_draft"]
 DateMode = Literal["calendar_days", "court_days"]
-
-
-def _field_mapping(fields: Mapping[str, Field]) -> dict[str, Field]:
-    """Copy and validate names without changing any field provenance."""
-    if not isinstance(fields, Mapping) or not fields:
-        raise ValueError("Citation fields must be a nonempty mapping of names to Field objects")
-    copied = dict(fields)
-    if any(not isinstance(name, str) or not name.strip() or not isinstance(field, Field)
-           for name, field in copied.items()):
-        raise ValueError("Citation fields must be a nonempty mapping of names to Field objects")
-    return copied
-
-
-def cite_render(source_type: str, fields: Mapping[str, Field]) -> Artifact:
-    """Render a citation without discarding the provenance of its fields.
-
-    ``mcgill_format.render_fields`` remains the single source of the McGill
-    templates.  The exact input ``Field`` instances become the named leaves of
-    the artifact's derivation, retaining source IDs, spans, and any nested
-    computed-field derivations.
-    """
-    if not isinstance(source_type, str) or not source_type.strip():
-        raise ValueError("Citation source type must be nonempty text")
-    evidence = _field_mapping(fields)
-    content = mcgill_format.render_fields(
-        source_type, {name: field.value for name, field in evidence.items()}
-    )
-    return Artifact(
-        kind=CITATION_ARTIFACT_KIND,
-        content=content,
-        derivation=Derivation(
-            tuple(evidence.values()), "cite.render.v1", tuple(evidence.keys())
-        ),
-    )
-
-
-def _citation_artifacts(artifacts: list[Artifact]) -> tuple[Artifact, ...]:
-    if not isinstance(artifacts, list) or not artifacts:
-        raise ValueError("A table of authorities requires a nonempty list of citation artifacts")
-    result = tuple(artifacts)
-    if any(not isinstance(artifact, Artifact) or artifact.kind != CITATION_ARTIFACT_KIND
-           or not isinstance(artifact.content, str) for artifact in result):
-        raise ValueError("A table of authorities accepts only text citation artifacts")
-    return result
-
-
-def table_of_authorities(
-    artifacts: list[Artifact], *, policy: ToAPolicy = TOA_STRICT_POLICY
-) -> Artifact:
-    """Compose supplied citations into a deterministic, generic authority list.
-
-    The normal policy accepts only citations whose complete derivation is
-    traceable according to ``is_grounded``.  ``allow_unverified_draft`` is an
-    explicit opt-in for working drafts.  Its content is prominently labelled
-    as unverified and never represents court-format compliance.  This tool
-    preserves input order because Artifact carries neither jurisdiction nor
-    authority category, both of which are needed for court-specific ordering.
-    """
-    citations = _citation_artifacts(artifacts)
-    if policy not in {TOA_STRICT_POLICY, TOA_DRAFT_POLICY}:
-        raise ValueError("Unknown table-of-authorities policy")
-
-    untraceable = [index for index, citation in enumerate(citations, start=1)
-                   if not is_grounded(citation.derivation)]
-    if untraceable and policy == TOA_STRICT_POLICY:
-        joined = ", ".join(str(index) for index in untraceable)
-        raise ValueError(f"Citation artifacts must be traceable; unsupported entries: {joined}")
-
-    lines: list[str] = []
-    kind = "table_of_authorities"
-    rule_id = "doc.table_of_authorities.v1"
-    if policy == TOA_DRAFT_POLICY:
-        kind = "table_of_authorities_draft"
-        rule_id = "doc.table_of_authorities.draft.v1"
-        lines.append("DRAFT TABLE OF AUTHORITIES — UNVERIFIED; NOT COURT-FORMAT COMPLIANT")
-    else:
-        lines.append("TABLE OF AUTHORITIES")
-    lines.append("")
-    lines.extend(f"{index}. {citation.content}" for index, citation in enumerate(citations, start=1))
-
-    return Artifact(
-        kind=kind,
-        content="\n".join(lines),
-        derivation=Derivation(
-            tuple(citation.derivation for citation in citations),
-            rule_id,
-            tuple(f"citation_{index}" for index in range(1, len(citations) + 1)),
-        ),
-    )
-
-
-def draft_table_of_authorities(artifacts: list[Artifact]) -> Artifact:
-    """Build an explicitly unverified draft under the opt-in draft policy."""
-    return table_of_authorities(artifacts, policy=TOA_DRAFT_POLICY)
-
-
-def quote_verify(
-    quote: Field, source: Field, coverage: Literal["complete", "partial"] = "partial"
-) -> Finding:
-    """Check an exact, case- and whitespace-sensitive quote against supplied text.
-
-    Partial coverage can confirm text that is present, but an absent quote is
-    inconclusive because unexamined portions of the original may contain it.
-    Complete coverage turns an absence into a contradiction.  The result says
-    only what was found in the supplied source Field; provenance is retained in
-    the Finding derivation for callers to assess independently.
-    """
-    if not isinstance(quote, Field) or not isinstance(source, Field):
-        raise ValueError("Quote verification requires quote and source Field objects")
-    if not quote.value:
-        raise ValueError("Quote verification requires nonempty quoted text")
-    if not source.value:
-        raise ValueError("Quote verification requires nonempty source text")
-    if coverage not in {"complete", "partial"}:
-        raise ValueError("Quote verification coverage must be complete or partial")
-
-    if quote.value in source.value:
-        verdict = "confirmed"
-        detail = "The quote appears verbatim in the supplied source text."
-    elif coverage == "partial":
-        verdict = "inconclusive"
-        detail = "The quote is absent from the supplied source text, but only partial source coverage was checked."
-    else:
-        verdict = "contradicted"
-        detail = "The quote does not appear verbatim in the supplied complete source text."
-
-    return Finding(
-        verdict=verdict,
-        detail=detail,
-        coverage=coverage,
-        derivation=Derivation((quote, source), "quote.verify.exact.v1", ("quote", "source")),
-    )
 
 
 def _nonempty_field(field: Field, name: str) -> Field:
@@ -323,23 +183,3 @@ def court_days(
         derivation=Derivation(inputs, f"date.court_days.v1;weekend={','.join(map(str, sorted(weekend)))};start={int(include_start)};end={int(include_end)}", names),
     )
 
-
-# Friendly Python aliases; the registry maps the canonical names above to
-# dotted tool names rather than making this module mimic a package hierarchy.
-render_citation = cite_render
-verify_quote = quote_verify
-
-
-__all__ = [
-    "CITATION_ARTIFACT_KIND",
-    "TOA_DRAFT_POLICY",
-    "TOA_STRICT_POLICY",
-    "cite_render",
-    "court_days",
-    "draft_table_of_authorities",
-    "limit_compute",
-    "quote_verify",
-    "render_citation",
-    "table_of_authorities",
-    "verify_quote",
-]

@@ -3,9 +3,7 @@ import sys, os
 from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from local_tools.a2aj_api import _map_fields
-from core.mcgill_engine import detect_type, select_subpattern
-from local_tools.citation_search import search_citation
+from local_tools.a2aj_api import _extract_case_citation, _map_fields
 
 
 class TestMapFieldsReporter:
@@ -39,18 +37,6 @@ class TestMapFieldsReporter:
         assert mapped["neutral_citation"] == "2011 TCC 223"
         assert mapped["reporter"] == ""
 
-    def test_neutral_only_select_subpattern(self):
-        """Neutral-only record routes to 'juris.neutral', not 'juris.neutral_parallel'."""
-        record = {
-            "citation_en": "2011 TCC 223",
-            "name_en": "Scarlet Nelson/ Larry Nelson v. The Queen",
-            "document_date_en": "2011-04-20T00:00:00+00:00",
-            "dataset": "TCC",
-        }
-        mapped = _map_fields(record)
-        sp = select_subpattern("jurisprudence", mapped)
-        assert sp == "juris.neutral", f"Expected juris.neutral, got {sp!r}"
-
     # ── CLASS B: genuine neutral + reporter (must NOT regress) ───
 
     def test_neutral_and_reporter_populated(self):
@@ -66,19 +52,6 @@ class TestMapFieldsReporter:
         assert mapped["neutral_citation"] == "2016 SCC 27"
         assert mapped["reporter"] == "[2016] 1 SCR 631"  # distinct from neutral
         assert mapped["reporter"] != mapped["neutral_citation"]
-
-    def test_neutral_and_reporter_select_subpattern(self):
-        """Genuine neutral+reporter record routes to 'juris.neutral_parallel'."""
-        record = {
-            "citation_en": "2016 SCC 27",
-            "citation2_en": "[2016] 1 SCR 631",
-            "name_en": "R. v. Jordan",
-            "document_date_en": "2016-07-08T00:00:00+00:00",
-            "dataset": "SCC",
-        }
-        mapped = _map_fields(record)
-        sp = select_subpattern("jurisprudence", mapped)
-        assert sp == "juris.neutral_parallel", f"Expected juris.neutral_parallel, got {sp!r}"
 
     # ── CLASS C: citation2_en duplicates citation_en (pre-neutral era, Gladue) ──
 
@@ -111,22 +84,6 @@ class TestMapFieldsReporter:
         assert mapped["neutral_citation"] == ""
         assert mapped["reporter"] == "[1999] 1 SCR 688"
 
-    def test_duplicate_citation2_en_select_subpattern(self):
-        """Equal-value pre-neutral record routes to 'juris.reported_only' — the
-        subpattern whose example is itself a reporter citation.  Routing it to
-        'juris.neutral' made the model fabricate a neutral cite to match that
-        subpattern's example ("R v King, 2002 SCC 10")."""
-        record = {
-            "citation_en": "[1999] 1 SCR 688",
-            "citation2_en": "[1999] 1 SCR 688",
-            "name_en": "R. v. Gladue",
-            "document_date_en": "1999-04-23T00:00:00",
-            "dataset": "SCC",
-        }
-        mapped = _map_fields(record)
-        sp = select_subpattern("jurisprudence", mapped)
-        assert sp == "juris.reported_only", f"Expected juris.reported_only, got {sp!r}"
-
     def test_print_only_citation_goes_to_reporter(self):
         """Single print citation with no citation2_en (Roncarelli) → reporter,
         never neutral_citation."""
@@ -139,7 +96,6 @@ class TestMapFieldsReporter:
         mapped = _map_fields(record)
         assert mapped["neutral_citation"] == ""
         assert mapped["reporter"] == "[1959] SCR 121"
-        assert select_subpattern("jurisprudence", mapped) == "juris.reported_only"
 
     def test_print_primary_with_neutral_parallel_is_unswapped(self):
         """Reversed A2AJ record (print in citation_en, neutral in citation2_en)
@@ -154,7 +110,6 @@ class TestMapFieldsReporter:
         mapped = _map_fields(record)
         assert mapped["neutral_citation"] == "2012 SCC 13"
         assert mapped["reporter"] == "[2012] 1 SCR 433"
-        assert select_subpattern("jurisprudence", mapped) == "juris.neutral_parallel"
 
     def test_canlii_number_is_a_neutral_citation(self):
         """CanLII-assigned numbers are neutral citations, not reporter cites."""
@@ -188,7 +143,6 @@ class TestMapFieldsReporter:
         mapped = _map_fields(record)
         assert mapped["neutral_citation"] == ""
         assert mapped["reporter"] == "[1993] 3 SCR 3"
-        assert select_subpattern("jurisprudence", mapped) == "juris.reported_only"
 
     def test_dotted_neutral_duplicate_collapses(self):
         """A dotted neutral variant must not render as a parallel cite."""
@@ -229,36 +183,6 @@ class TestMapFieldsReporter:
         assert mapped["citation"] == "RRO 1990, Reg 194"
         assert "neutral_citation" not in mapped
         assert mapped["jurisdiction"] == "Ontario"
-        assert detect_type(mapped) == "legislation"
-        assert select_subpattern("legislation", mapped) == "leg.statute"
-
-
-def test_statute_shaped_citation_number_uses_legislation_pipeline_first():
-    response = MagicMock()
-    response.raise_for_status.return_value = None
-    response.json.return_value = {"results": [{
-        "citation_en": "RSC 1985, c C-46",
-        "name_en": "Criminal Code",
-        "dataset": "LEGISLATION-FED",
-    }]}
-    classification = {
-        "type": "citation_number",
-        "normalized": "Criminal Code, RSC 1985, c C-46, s 718.2(e)",
-        "original": "Criminal Code, RSC 1985, c C-46, s 718.2(e)",
-    }
-
-    with patch("local_tools.citation_search.fetch_by_citation") as generic_fetch, \
-         patch("local_tools.utils.request_with_retry", return_value=response) as laws_fetch:
-        result = search_citation(classification["original"], classification=classification)
-
-    generic_fetch.assert_not_called()
-    assert laws_fetch.call_args.kwargs["params"] == {
-        "citation": "RSC 1985, c C-46",
-        "doc_type": "laws",
-    }
-    assert result[0]["verified"] is True
-    assert result[0]["chapter"] == "c C-46"
-    assert result[0]["pinpoint"] == "s 718.2(e)"
 
 
 def test_search_cases_multi_resolves_an_embedded_citation_directly():
@@ -311,3 +235,35 @@ def test_search_cases_multi_runs_search_directly_when_no_citation_is_embedded():
 
     fetch.assert_not_called()
     search_call.assert_called_once()
+
+
+class TestExtractCaseCitation:
+    """"name + citation" is the ordinary copy-paste shape."""
+
+    def test_reporter_after_case_name(self):
+        assert _extract_case_citation("Roncarelli v Duplessis [1959] SCR 121") == "[1959] SCR 121"
+
+    def test_reporter_with_volume_after_case_name(self):
+        assert _extract_case_citation("R v Gladue [1999] 1 SCR 688") == "[1999] 1 SCR 688"
+
+    def test_reporter_without_space_before_bracket(self):
+        assert _extract_case_citation("Roncarelli v Duplessis[1959] SCR 121") == "[1959] SCR 121"
+
+    def test_neutral_after_case_name(self):
+        assert _extract_case_citation("R v Ipeelee 2012 SCC 13") == "2012 SCC 13"
+
+    def test_bare_neutral(self):
+        assert _extract_case_citation("2012 SCC 13") == "2012 SCC 13"
+
+    def test_canlii_number(self):
+        assert _extract_case_citation("2012 CanLII 27167") == "2012 CanLII 27167"
+
+    def test_privy_council_reporter(self):
+        assert _extract_case_citation("Edwards v Canada (AG) [1930] AC 124") == "[1930] AC 124"
+
+    def test_name_only_has_no_citation(self):
+        assert _extract_case_citation("Roncarelli v Duplessis") == ""
+
+    def test_empty_and_none(self):
+        assert _extract_case_citation("") == ""
+        assert _extract_case_citation(None) == ""
