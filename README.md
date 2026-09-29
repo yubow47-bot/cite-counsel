@@ -89,7 +89,6 @@ Plugins are installed, trusted code and do not run in a sandbox. The contract ca
 | `mcgill` | function | on | `cite`, `missing` | Renders citations from `mcgill_rules.json` and lists missing fields |
 | `quote` | function | on | `check` | Checks a quotation against a stored judgment's full text and finds the paragraph |
 | `bibliography` | function | on | `build` | Builds a bibliography from stored citations and recomputes verification |
-| `deadlines` | function | off | `compute` | Deadline date arithmetic, with every input echoed back |
 
 ### Writing a plugin
 
