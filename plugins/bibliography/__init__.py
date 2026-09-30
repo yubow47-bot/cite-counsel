@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field as PField
 
+from core.tool_contracts import is_grounded
 from harness.plugin import Plugin, Result, Tool
 
 
@@ -38,7 +39,7 @@ def build(ctx, p: BuildParams) -> Result:
             rows.append([section["title"], ("✓ " if entry["verified"] else "○ ") + entry["text"]])
     return Result(
         {"ref": ref, "count": result["count"], "unverified": result["unverified"],
-         "grounded": result["grounded"],
+         "grounded": is_grounded(ctx.records.get(ref).derivation),
          "note": "the bibliography is stored as an artifact; every entry's verification was re-derived"},
         [{"type": "card", "title": f"Bibliography ({result['count']} entries)",
           "rows": rows[:60], "body": result["text"],

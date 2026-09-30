@@ -153,7 +153,7 @@ def _map_fields(result: dict) -> dict:
             "citation": citation,
             "jurisdiction": _extract_jurisdiction(dataset),
             "year": year,
-            "url": result.get("url_en", ""),
+            "url": result.get("url_en") or result.get("source_url_en", ""),
         }
     else:
         # ── Shape-based slotting, not positional ──────────────────────────

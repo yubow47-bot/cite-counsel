@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from harness import core as harness_core, llm
 from harness.app import create_app
-from harness.core import MAX_STEPS, Harness
+from harness.core import MAX_STEPS, REPEATED_CALL, WRAP_UP, Harness
 from harness.plugin import Plugin, Result, Setting, Tool
 
 
@@ -203,11 +203,28 @@ def test_a_reply_with_unsourced_facts_is_shown_and_annotated(monkeypatch, harnes
     assert any(f["fact"] == "1999" and f["verdict"] == "unsourced" for f in blocks[-1]["facts"])
 
 
-def test_repeated_failures_stop_early(monkeypatch, harness):
-    script = Script(monkeypatch, [call("load_plugin", name="alpha")] + [call("alpha__missing")] * 10)
+def test_failures_do_not_stop_the_turn(monkeypatch, harness):
+    """Failed calls leave the model its tools: only the step budget ends a turn."""
+    Script(monkeypatch, [call("load_plugin", name="alpha"), call("alpha__missing", q="a"),
+                         call("alpha__missing", q="b"), call("alpha__missing", q="c"), say("gave up")])
     session, _ = harness.sessions.start()
     blocks = harness.run_turn(session, "x")
-    assert blocks[-1]["type"] == "notice" and len(script.calls) == 3
+    assert blocks[-1] == {"type": "text", "text": "gave up"}
+    assert not any(b["type"] == "notice" for b in blocks)
+
+
+def test_an_identical_failed_call_is_not_run_again(monkeypatch, harness):
+    retry = call("alpha__echo", wrong=1)
+    retry["tool_calls"][0]["id"] = "c2"
+    retry["tool_calls"][0]["function"]["arguments"] = json.dumps({"wrong": 1}, indent=1)  # same call, other spelling
+    Script(monkeypatch, [call("load_plugin", name="alpha"), call("alpha__echo", wrong=1), retry,
+                         call("alpha__echo", wrong=2), say("done")])
+    session, _ = harness.sessions.start()
+    harness.run_turn(session, "x")
+    first, second, third = [json.loads(m["content"]) for m in session.messages if m["role"] == "tool"][1:]
+    assert first["error"] == "invalid arguments"
+    assert second == {"error": REPEATED_CALL, "previous_error": "invalid arguments"}
+    assert third["error"] == "invalid arguments"                  # new arguments are run
 
 
 def working_round():
@@ -217,24 +234,39 @@ def working_round():
 
 
 def test_step_limit(monkeypatch, harness):
-    script = Script(monkeypatch, [call("load_plugin", name="alpha")] + [working_round()] * (MAX_STEPS + 5))
+    script = Script(monkeypatch, [call("load_plugin", name="alpha")] + [working_round()] * MAX_STEPS
+                    + [say("Here is where things stand.")])
     session, _ = harness.sessions.start()
     blocks = harness.run_turn(session, "x")
-    assert blocks[-1]["type"] == "notice"
-    assert len(script.calls) == MAX_STEPS + 1                     # the load round was free
+    assert blocks[-2]["type"] == "notice"
+    assert blocks[-1] == {"type": "text", "text": "Here is where things stand."}
+    assert len(script.calls) == MAX_STEPS + 2                     # the load round was free; one wrap-up
+    assert script.calls[-1]["tools"] == []                        # the wrap-up cannot call tools
+    assert script.calls[-1]["messages"][-1] == {"role": "user", "content": WRAP_UP}
 
 
 def test_loading_plugins_is_bounded(monkeypatch, harness):
-    Script(monkeypatch, [call("load_plugin", name="alpha")] * (MAX_STEPS + 10))
+    script = Script(monkeypatch, [call("load_plugin", name="alpha")] * (MAX_STEPS + 10))
     session, _ = harness.sessions.start()
     blocks = harness.run_turn(session, "x")
-    assert blocks[-1]["type"] == "notice"
+    assert blocks[0]["type"] == "notice"
+    assert script.calls[-1]["tools"] == []                        # ended by a wrap-up with no tools
 
 
 def test_prompt_says_to_retry_before_asking(harness):
     session, _ = harness.sessions.start()
     prompt = harness._system_prompt(session)
     assert "search again in another form" in prompt and "record__compose" in prompt
+
+
+def test_prompt_separates_citable_records_from_source_text_and_handles_errors(harness):
+    session, _ = harness.sessions.start()
+    prompt = harness._system_prompt(session)
+    assert "cite it directly with the cite tool" in prompt        # a record with fields: no rebuild
+    assert "holds only source text" in prompt                     # source text: compose from it
+    assert '"retry" note' in prompt and "Do not guess a value" in prompt
+    assert "hand-written" in prompt or "hand-written" in harness._system_prompt(session, True)
+    assert "[Input hints:" in __import__("harness.core", fromlist=["_input_hints"])._input_hints("10.1038/x1234")
 
 
 def test_action_notes_are_not_the_users_words(harness):
@@ -822,7 +854,7 @@ def test_a_long_turn_keeps_the_request_ahead_of_its_notes(harness):
 
     session, _ = harness.sessions.start()
     session.messages.append({"role": "user", "content": "cite the attached article"})
-    session.messages.append({"role": "user", "_note": True, "content": "[附件 att_1: a.pdf]"})
+    session.messages.append({"role": "user", "_note": True, "content": "[Attachment att_1: a.pdf]"})
     for n in range(HISTORY_LIMIT):
         session.messages.append({"role": "assistant", "content": None,
                                  "tool_calls": [{"id": f"c{n}", "type": "function",
@@ -851,6 +883,24 @@ def test_compose_from_a_stored_record_needs_no_web_search(tmp_path):
     assert "web__search" in refused.content["error"]
 
 
+def test_compose_from_the_users_own_words_needs_no_web_search(tmp_path):
+    """An interview or an unpublished manuscript is the user's own material;
+    no search will find it, so the gate must not demand one."""
+    from harness.plugin import discover
+
+    h = Harness(discover(), model="m", config_path=tmp_path / "h.json")
+    h.set_enabled("web", True)
+    session, _ = h.sessions.start()
+    session.messages.append({"role": "user", "content": "Cite my interview with Jane Roe, 3 March 2024."})
+    composed = _compose(h, session, record_type="website", fields={
+        "title": {"value": "Interview with Jane Roe", "source": "user", "quote": "interview with Jane Roe"}})
+    assert composed.content["ref"]
+    # Words the user never wrote do not open the gate.
+    refused = _compose(h, session, record_type="website", fields={
+        "title": {"value": "Invented", "source": "user", "quote": "Invented"}})
+    assert "web__search" in refused.content["error"]
+
+
 def test_compose_is_not_gated_by_a_web_plugin_the_user_switched_off(tmp_path):
     """Loaded once, then disabled: web__search can no longer run, so the
     gate must not wait for it."""
@@ -861,3 +911,23 @@ def test_compose_is_not_gated_by_a_web_plugin_the_user_switched_off(tmp_path):
     session.loaded.append("web")
     assert _compose(h, session, record_type="jurisprudence",
                     fields={"style_of_cause": {"value": "R v X"}}).content["ref"] == "rec_1"
+
+
+def test_a_failed_call_may_be_retried_once_something_succeeded(monkeypatch, harness):
+    """The compose gate case: the same call fails, a search runs, the call is retried."""
+    Script(monkeypatch, [call("load_plugin", name="alpha"), call("alpha__echo", wrong=1),
+                         call("alpha__echo", text="ok"), call("alpha__echo", wrong=1), say("done")])
+    session, _ = harness.sessions.start()
+    harness.run_turn(session, "x")
+    results = [json.loads(m["content"]) for m in session.messages if m["role"] == "tool"][1:]
+    assert [r.get("error") for r in results] == ["invalid arguments", None, "invalid arguments"]
+
+
+def test_stream_step_limit_ends_with_a_wrap_up_reply(monkeypatch, harness):
+    StreamScript(monkeypatch, [call("load_plugin", name="alpha")] + [working_round()] * MAX_STEPS
+                 + [say("Here is where things stand.")])
+    session, _ = harness.sessions.start()
+    events = list(harness.run_turn_stream(session, "x"))
+    blocks = [payload for kind, payload in events if kind == "block"]
+    assert blocks[-2]["type"] == "notice"
+    assert blocks[-1] == {"type": "text", "text": "Here is where things stand."}

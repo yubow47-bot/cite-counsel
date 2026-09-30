@@ -42,6 +42,37 @@ def test_a2aj_no_match_says_what_was_searched():
     assert any(b["type"] == "notice" for b in result.blocks)
 
 
+def test_a2aj_legislation_uses_the_source_url_as_its_identifier():
+    """A2AJ's /search for laws gives the document link as source_url_en only."""
+    h, session = make()
+    from plugins import a2aj
+    with patch("core.source_tools.search_laws_by_name", return_value=[{
+        "name_en": "Canadian Human Rights Act", "citation_en": "RSC 1985, c H-6",
+        "dataset": "LEGISLATION-FED", "document_date_en": "1988-12-12T00:00:00+00:00",
+        "source_url_en": "https://laws-lois.justice.gc.ca/eng/XML/H-6.xml",
+    }]):
+        result = a2aj.find_legislation(ctx_for(h, session, "a2aj"),
+                                       a2aj.LegislationParams(query="Canadian Human Rights Act"))
+    record = session.records.get(result.content["records"][0]["ref"])
+    assert record.fields["citation"].value == "RSC 1985, c H-6"
+    assert record.fields["citation"].source_id == "a2aj:https://laws-lois.justice.gc.ca/eng/XML/H-6.xml"
+    assert record.fields["url"].value == "https://laws-lois.justice.gc.ca/eng/XML/H-6.xml"
+
+
+def test_a_result_with_no_identifier_tells_the_model_not_to_retry():
+    from harness.core import NO_RETRY
+    h, session = make()
+    h.set_enabled("a2aj", True)
+    session.loaded.append("a2aj")
+    tool_call = {"id": "c1", "function": {"name": "a2aj__find_legislation",
+                                          "arguments": '{"query": "Some Act"}'}}
+    with patch("core.source_tools.search_laws_by_name", return_value=[{
+        "name_en": "Some Act", "citation_en": "SC 2000, c 1", "dataset": "LEGISLATION-FED",
+    }]):
+        _, result = h._execute(session, tool_call)
+    assert result.content == {"error": "legislation result has no real record identifier", "retry": NO_RETRY}
+
+
 def test_legisinfo_keyword_search_filters_by_title():
     h, session = make()
     from plugins import legisinfo

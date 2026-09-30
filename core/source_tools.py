@@ -31,7 +31,7 @@ def _source_id(provider: str, record_id: Any, kind: str) -> str:
 
 def _provider_and_id(item: Mapping[str, Any], kind: str) -> tuple[str, str, str]:
     """Use a connector ID or its original URL; never invent an identifier."""
-    url = item.get("url") or item.get("url_en") or item.get("longUrl")
+    url = item.get("url") or item.get("url_en") or item.get("source_url_en") or item.get("longUrl")
     if url:
         text_url = str(url).strip()
         provider = "a2aj"  # The lookup provider; URL is the underlying source document.

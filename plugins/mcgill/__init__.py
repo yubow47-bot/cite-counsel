@@ -58,11 +58,12 @@ def cite(ctx, p: CiteParams) -> Result:
     content = mcgill_format.render_fields(record.source_type, values)
     artifact = Artifact("citation_text", content,
                         Derivation(tuple(derivation_inputs), RENDER_RULE, tuple(derivation_names)))
-    verified = is_grounded(artifact.derivation)
     ref = ctx.save(artifact, meta={"source_type": record.source_type, "base": None,
                                    "fields": {name: {"value": values.get(name, field.value),
                                                      "origin": field.origin, "source_id": field.source_id}
                                               for name, field in used.items()}})
+    # From the stored artifact: the store downgrades any leaf it cannot back.
+    verified = is_grounded(ctx.records.get(ref).derivation)
     state = "Verified" if verified else "Unverified (not every field comes from a database)"
     return Result(
         {"ref": ref, "citation": content, "verified": verified,
