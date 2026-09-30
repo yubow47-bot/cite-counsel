@@ -116,13 +116,10 @@ def test_two_empty_searches_warn_the_model_to_stop_retrying(h, session):
         second = web.search(ctx, web.SearchParams(query="two"))
     assert first.content["note"] == ""
     assert "2 searches in a row" in second.content["note"]
-    assert "fetch" in second.content["note"]
+    assert "returned no results" in second.content["note"]
 
 
-def test_a_search_attempt_sets_the_flag_that_opens_record_compose(h, session):
-    """Even a blocked search discharges the model's duty to try the web:
-    without this, a broken key would lock the model out of record__compose
-    forever, and the user could not hand over values either."""
+def test_a_blocked_search_does_not_gate_record_compose(h, session):
     from harness.core import BUILTIN_TOOLS
 
     h.set_plugin_settings("web", {"provider": "duckduckgo_lite"})
@@ -130,12 +127,56 @@ def test_a_search_attempt_sets_the_flag_that_opens_record_compose(h, session):
                return_value=FakeResponse(status_code=202, text="<html>challenge</html>")):
         with pytest.raises(ValueError):
             web.search(h.context(session, "web"), web.SearchParams(query="Ottawa shooting"))
-    assert session.web_search_used is True
     compose = BUILTIN_TOOLS[0]
     result = h._run_builtin(session, compose, {"record_type": "jurisprudence",
                                                "fields": {"style_of_cause": {"value": "R v X"}}},
                             "record__compose")[1]
-    assert result.content["ref"] == "rec_1"                   # the gate opened
+    assert result.content["ref"] == "rec_1"
+
+
+def test_fetch_saves_response_bytes_with_time_and_hash(h, session):
+    import hashlib
+    import json
+
+    body = b"<html><body>Source passage</body></html>"
+
+    def extracted(url, capture=None):
+        capture(body, {"final_url": url, "status": 200, "content_type": "text/html",
+                       "etag": "", "last_modified": ""})
+        return {"page_title": "Source", "raw_text": "Source passage"}
+
+    with patch("local_tools.web_extract.extract_from_url", side_effect=extracted):
+        result = web.fetch(h.context(session, "web"), web.FetchParams(url="https://example.com/source"))
+    ref = result.content["record"]["ref"]
+    root = h.sessions.store_dir / session.id / "sources"
+    assert (root / f"{ref}.body").read_bytes() == body
+    meta = json.loads((root / f"{ref}.json").read_text(encoding="utf-8"))
+    assert meta["sha256"] == hashlib.sha256(body).hexdigest()
+    assert meta["version_as_of"] is None and meta["retrieved_at"].endswith("Z")
+
+
+def test_source_snapshot_requires_this_sessions_token(h):
+    from fastapi.testclient import TestClient
+    from harness.app import create_app
+
+    session, token = h.sessions.start()
+    body = b"<html>Evidence</html>"
+
+    def extracted(url, capture=None):
+        capture(body, {"final_url": url, "status": 200, "content_type": "text/html",
+                       "etag": "", "last_modified": ""})
+        return {"page_title": "Evidence", "raw_text": "Evidence"}
+
+    with patch("local_tools.web_extract.extract_from_url", side_effect=extracted):
+        ref = web.fetch(h.context(session, "web"), web.FetchParams(url="https://example.com/evidence")) \
+            .content["record"]["ref"]
+    client = TestClient(create_app(h))
+    path = f"/api/sources/{ref}"
+    assert client.post(path, json={"session_id": session.id, "session_token": "wrong"}).status_code == 404
+    response = client.post(path, json={"session_id": session.id, "session_token": token})
+    assert response.status_code == 200 and response.content == body
+    (h.sessions.store_dir / session.id / "sources" / f"{ref}.body").write_bytes(b"changed")
+    assert client.post(path, json={"session_id": session.id, "session_token": token}).status_code == 409
 
 
 def test_fetch_keeps_the_page_date_and_strips_the_site_suffix(h, session):
@@ -194,11 +235,8 @@ def test_a_bot_check_page_is_refused_not_stored(h, session):
 
 
 @pytest.mark.parametrize("settings", [{"provider": ""}, {"provider": "exa", "exa_api_key": ""}])
-def test_a_search_that_cannot_run_still_opens_record_compose(h, session, settings, monkeypatch):
-    """No service chosen, or Exa with no key: the search cannot run, and
-    record__compose must not wait forever for one that will never happen."""
+def test_search_reports_missing_configuration(h, session, settings, monkeypatch):
     monkeypatch.delenv("EXA_API_KEY", raising=False)
     h.set_plugin_settings("web", settings)
     result = web.search(h.context(session, "web"), web.SearchParams(query="Ottawa shooting"))
     assert "error" in result.content
-    assert session.web_search_used is True

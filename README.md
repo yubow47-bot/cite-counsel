@@ -1,6 +1,6 @@
 # Cite Counsel Harness
 
-A local agent harness for Canadian legal citation. You talk to it, and the model decides which plugins to load and which tools to call. The harness makes sure every fact the model states can be traced to a source. The first use case is producing citations in the style of the *Canadian Guide to Uniform Legal Citation* (McGill Guide, 10th edition).
+A local agent harness for legal research and citation. The model chooses when to read an optional Skill, load a tool plugin, call a tool, or answer. The harness enforces access, resource and provenance contracts. The first deterministic formatting capability is McGill Guide (10th edition) citation rendering.
 
 > Experimental research aid. A citation it produces is not guaranteed to be correct. Check each one against the original source and the official McGill Guide.
 
@@ -14,15 +14,15 @@ One Python process serves both the page and the API.
 
 ## The problem it addresses
 
-Most "LLM plus search" tools treat sources as a soft hint. The model reads some material, writes a citation in its own words, and the user cannot tell which fields were looked up and which were invented. The harness constrains this with three rules:
+Legal work needs the model to read and judge material while keeping source identity honest. The current architecture separates three responsibilities:
 
-1. The model never handles facts. A data source returns a record with provenance (`rec_N`). The model sees only the number and a short summary. The object stays in the session store, tools fetch it by number, and the model cannot rewrite it and pass it back in.
+1. The model may read, understand and extract facts from material. Source records carry provenance (`rec_N`); tools receive the stored object by reference. `record__read` exposes bounded text slices without changing the record's origin.
 2. "Verified" comes from the derivation chain. A citation is rendered from record fields, and each field it uses is a leaf in a derivation chain. It counts as verified only if every leaf comes from a database (`database`) and carries a `source_id`. A single `user`, `extracted`, or `model` leaf marks it unverified.
-3. The reply check annotates the text and hides nothing. Years, case citations, DOIs, and pinpoints in each paragraph of model text are matched against the session's evidence. A match gets its source and the quoted passage. A miss is tagged `unsourced`. The text is shown either way.
+3. The reply check annotates text and hides nothing. Years, case citations, DOIs, and pinpoints are matched against session text. A match is a traceability hint, not proof that the claim is correct or that the source is authoritative. A miss is tagged `unsourced`.
 
 There are five origins: `database` (returned by a database), `extracted` (read from a file or web page), `user` (the user's own words), `computed` (derived by code), and `model` (written by the model, with nothing in the session to check it against).
 
-The project skips work that cannot be verified, such as contract review and legal Q&A. It covers work with a right answer that code can check: citation format, source verification, quotations against the original, and deadline calculation.
+The model may tackle research, comparison and drafting with an explicit account of evidence and uncertainty. Deterministic tools handle citation formatting, quotation comparison and date arithmetic; those tools do not decide the legal answer for the model.
 
 ## Architecture
 
@@ -30,10 +30,10 @@ The project skips work that cannot be verified, such as contract review and lega
 user message + attachments
       │
       ▼
- run_turn: system prompt (plugin catalogue + disabled plugins + input hints)
+ one shared loop: general principles + tool and Skill directories
       │
       ▼
- model chooses load_plugin / tool calls (up to 20 steps per turn)
+ model chooses read_skill / load_plugin / tool calls / reply
       │
       ▼
  _execute: validate params ──► handler(ctx, params)
@@ -50,12 +50,13 @@ user message + attachments
 
 | Module | Role |
 | --- | --- |
-| `harness/core.py` | Agent loop, tool execution, parameter checks, built-in `record__compose` |
+| `harness/core.py` | Shared streamed agent loop, tool execution, parameter checks, built-in record tools |
+| `harness/skills.py` and `skills/` | Optional Markdown methods loaded by name, independently of tools |
 | `harness/plugin.py` | Plugin interface and discovery: `Plugin`, `Tool`, `Result`, `Setting`, `UserText` |
 | `harness/records.py` | Session record store: numbering, category contract checks, leaf reconciliation |
-| `harness/session.py` | Sessions, message history, attachments, local persistence |
+| `harness/session.py` | Sessions, attachments, local persistence, append-only model/tool events, source snapshots |
 | `harness/grounding.py` | Fact extraction and source annotation for replies |
-| `harness/llm.py` | OpenRouter-compatible calls with native tool calling and streaming |
+| `harness/llm.py` | OpenRouter-compatible calls, streaming and model response profiles |
 | `harness/app.py` | Local HTTP surface, upload checks, settings API; `harness/rate_limiter.py` limits requests |
 | `harness/web/` | Single-page UI: chat box, settings bar, plugin UI loader |
 | `core/tool_contracts.py` | Contract types: `Field`, `Record`, `Artifact`, `Finding`, `Derivation` |
@@ -105,13 +106,13 @@ A parameter that should be the user's own words is declared as `UserText`. The h
 
 ### Sessions and persistence
 
-Each session is one file, `sessions/<id>.json`, with attachments under `sessions/<id>/attachments/`. Writes are atomic. After a restart, record numbers continue and old references still resolve. Only a hash of the token is stored. Sessions expire after 4 hours idle, and startup sweeps expired files and caps the total.
+Each session has a snapshot file, `sessions/<id>.json`, an append-only `sessions/<id>.events.jsonl`, and a directory for attachments and saved web responses. Snapshot writes are atomic. After a restart, record numbers continue and old references still resolve. Only a hash of the token is stored. Sessions expire after 4 hours idle, and startup sweeps expired files and caps the total.
 
 ## Usage and configuration
 
 - Settings bar: model ID, OpenRouter API key (written to `.env` in the project root, effective immediately, never shown again), plugin switches, and each plugin's own settings. Enabling a plugin only makes it available to the model. It does not run on its own.
 - Config file: copy `config/chatbox.example.json` to `config/chatbox.local.json` to change the port, the model, the vision model, the upload limit (50 MB by default), and the daily spend threshold. Keep secrets in `.env` only (see `.env.example`).
-- Web search: pick a search service in the settings bar. Exa needs `EXA_API_KEY`, and a value entered in the settings bar takes precedence over `.env`. While the web plugin is enabled, creating a new record requires a `web__search` call earlier in the session.
+- Web search: pick a search service in the settings bar. Exa needs `EXA_API_KEY`, and a value entered in the settings bar takes precedence over `.env`. Creating a record has no mandatory web-search prerequisite.
 - Launcher: `./start-chatbox.ps1`. With `-Restart` it stops only a process whose command line matches this project's `run_chatbox.py`.
 
 ### Limits and privacy
@@ -119,12 +120,13 @@ Each session is one file, `sessions/<id>.json`, with attachments under `sessions
 - The server listens on `127.0.0.1` only. It applies a TrustedHost check, a same-origin check, rate limiting, and a CSP. Uploads are checked by extension, size, and file header.
 - Once a key is configured, conversation content is sent to OpenRouter and its model providers. Plugins also contact external databases and websites. Do not submit material that must not leave your machine.
 - `daily_spend_cap_usd` is an in-process estimate that resets on restart. It is not a hard billing limit. For a strict limit, set one on the key in OpenRouter.
-- A database hit verifies the source metadata. It does not verify the final formatting, and coverage depends on the upstream service.
+- A database field carries the database source identity. It does not establish that a hit matches the user's target or that the legal analysis is correct.
 
 ## Layout
 
 ```text
 harness/        agent loop, plugin interface, record store, sessions, reply check, HTTP surface and page
+skills/         optional on-demand method notes
 plugins/        built-in plugins
 core/           contract types, McGill formatting and rules, quote checking, bibliography, spend tracking
 local_tools/    database adapters, URL guard, page reading (web_extract), file extraction
@@ -141,7 +143,7 @@ profiling/      HTTP call timing helper
 python -m pytest        # collects tests/ only
 ```
 
-The contract tests cover out-of-category origins, unknown or cross-session record numbers, forged `database` leaves, model values staying out of the evidence store, the evidence and format checks in `record__compose`, and persistence round trips (`tests/test_harness.py`, `tests/test_tool_contracts.py`, `tests/test_persistence.py`, and others). Most tests mock external services, so a pass does not show that an upstream API, credential, or model is available right now.
+The contract tests cover plugin boundaries, Skill independence, tool execution, event recording, bounded record reading, source snapshots, source provenance and persistence. Most tests mock external services, so a pass does not show that an upstream API, credential, or model is available right now.
 
 ## Roadmap
 

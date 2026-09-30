@@ -48,10 +48,6 @@ PLUGIN = Plugin(
     name="crossref",
     title="Journal articles (Crossref)",
     description="Look up a journal article by DOI or by title; fields come from the Crossref record.",
-    instructions="Records you receive are numbered (rec_N). Refer to them by number. For a title search, show "
-                 "the candidates and let the user pick; do not pick for them. When you searched to verify something "
-                 "you already have (an uploaded file, a page), compare each candidate's author, title and year with "
-                 "it; a candidate that does not match is a different work -- say so, do not cite it.",
     tools=[Tool("doi", "Fetch a journal article's metadata by DOI.", DoiParams, find_doi),
            Tool("article", "Search journal articles by title.", ArticleParams, find_article)],
     category="source",

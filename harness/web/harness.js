@@ -81,8 +81,9 @@
       if (seen.has(key)) continue;
       seen.add(key);
       if (shown >= 6) { line.append(el('span', 'fact-source', `+${sources.length - shown} more`)); break; }
-      const chip = el('span', 'fact-source', f.ref ? `${f.ref} · ${f.field}` : (f.kind === 'user' ? 'your message' : 'tool result'));
+      const chip = el(f.snapshot ? 'button' : 'span', 'fact-source', f.ref ? `${f.ref} · ${f.field}` : (f.kind === 'user' ? 'your message' : 'tool result'));
       if (f.excerpt) chip.title = f.excerpt;
+      if (f.snapshot) chip.addEventListener('click', () => api.openSource(f.ref).catch(error => toast(error.message)));
       line.append(chip);
       shown += 1;
     }
@@ -197,6 +198,23 @@
   // ── The plugin API ────────────────────────────────────────────────
   const api = {
     el, toast, post,
+    async openSource(ref) {
+      if (!session) throw new Error('No conversation yet.');
+      const tab = window.open('about:blank', '_blank');
+      try {
+        const response = await fetch(`/api/sources/${encodeURIComponent(ref)}`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(sessionRef())
+        });
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.message || 'The source snapshot is unavailable.');
+        }
+        const url = URL.createObjectURL(new Blob([await response.arrayBuffer()], {type: 'text/plain;charset=utf-8'}));
+        if (tab) tab.location.href = url;
+        else { const a = el('a'); a.href = url; a.download = `${ref}.txt`; a.click(); }
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+      } catch (error) { if (tab) tab.close(); throw error; }
+    },
     registerBlock(plugin, type, fn) { renderers.set(plugin + ':' + type, fn); },
     decorate(plugin, type, fn) { const key = plugin + ':' + type; decorators.set(key, [...(decorators.get(key) || []), fn]); },
     on(plugin, type, fn) { const key = plugin + ':' + type; listeners.set(key, [...(listeners.get(key) || []), fn]); },

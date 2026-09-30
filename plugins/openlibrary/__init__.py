@@ -49,10 +49,6 @@ PLUGIN = Plugin(
     name="openlibrary",
     title="Books (Open Library)",
     description="Look up a book by ISBN or by title; fields come from the library catalogue record.",
-    instructions="Records you receive are numbered (rec_N). Refer to them by number. For a title search, show "
-                 "the candidates and let the user pick. If a field is missing, write it with "
-                 "record__compose (base_ref=the book record), quoting the user's words or a record on screen; "
-                 "the database fields stay verified, the added ones read unverified, which is correct.",
     tools=[Tool("isbn", "Fetch a book's catalogue record by ISBN.", IsbnParams, find_isbn),
            Tool("book", "Search books by title.", BookParams, find_book)],
     category="source",

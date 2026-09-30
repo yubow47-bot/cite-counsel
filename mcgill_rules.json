@@ -1,8 +1,25 @@
 {
+  "constitutional": {
+    "render": {
+      "label": "Constitutional statutes",
+      "fields": [
+        {"name": "title", "label": "Statute title", "required": true},
+        {"name": "jurisdiction", "label": "Jurisdiction"},
+        {"name": "citation", "label": "Statutory citation"},
+        {"name": "pinpoint", "label": "Provision"},
+        {"name": "part", "label": "Part"},
+        {"name": "part_of", "label": "The Act that Part belongs to"},
+        {"name": "enacted_as", "label": "What the Act was enacted as"},
+        {"name": "reprinted_in", "label": "Reprint reference"}
+      ],
+      "required_any": [["enacted_as", "citation"]],
+      "segments": [["title", "*", "*"], ["jurisdiction", " (", ")"], ["citation", ", ", ""], ["pinpoint", ", ", ""], ["part", ", ", ""], ["part_of", " of the *", "*"], ["enacted_as", ", being ", ""], ["reprinted_in", ", reprinted in ", ""]]
+    }
+  },
   "_chatbox_bibliography_v1": {
     "_source": "general_rules / Structuring a Bibliography",
     "sections": [
-      {"id": "legislation", "title": "Legislation", "source_types": ["legislation", "bill"], "sort_field": "title"},
+      {"id": "legislation", "title": "Legislation", "source_types": ["legislation", "constitutional", "bill"], "sort_field": "title"},
       {"id": "jurisprudence", "title": "Jurisprudence", "source_types": ["jurisprudence"], "sort_field": "style_of_cause"},
       {"id": "secondary", "title": "Secondary Materials", "source_types": ["book", "journal_article", "news_online", "website"], "sort_field": "author", "invert_first_author": true}
     ],
@@ -761,7 +778,7 @@
     ]
   },
   "legislation": {
-    "render": {"label": "法律 / 法规", "fields": [{"name": "title", "label": "Statute / regulation title", "required": true}, {"name": "citation", "label": "Full statutory citation (e.g. RSC 1985, c C-46)", "required": true}, {"name": "pinpoint", "label": "Provision (e.g. s 718.2(e) or r 21.01)"}], "segments": [["title", "*", "*"], ["citation", ", ", ""], ["pinpoint", ", ", ""]]},
+    "render": {"label": "法律 / 法规", "fields": [{"name": "title", "label": "Statute / regulation title", "required": true}, {"name": "citation", "label": "Full statutory citation (e.g. RSC 1985, c C-46)", "required": true}, {"name": "pinpoint", "label": "Provision (e.g. s 718.2(e) or r 21.01)"}], "segments": [["title", "*", "*"], ["citation", ", ", ""], ["pinpoint", ", ", ""]], "_fixed_forms_rule": "legislation / Constitutional Statutes: these statutes are cited in full at first mention and the Guide fixes the whole form. *Title*, before_pinpoint, then the pinpoint, then after_pinpoint. Matched on the name with case, commas, a leading 'the' and extra spaces ignored; aliases name the same statute.", "fixed_forms": {"canadian charter of rights and freedoms": {"title": "Canadian Charter of Rights and Freedoms", "before_pinpoint": "", "after_pinpoint": "Part I of the *Constitution Act, 1982*, being Schedule B to the *Canada Act 1982* (UK), 1982, c 11"}, "constitution act 1982": {"title": "Constitution Act, 1982", "before_pinpoint": "", "after_pinpoint": "being Schedule B to the *Canada Act 1982* (UK), 1982, c 11"}, "constitution act 1867": {"title": "Constitution Act, 1867", "before_pinpoint": " (UK), 30 & 31 Vict, c 3", "after_pinpoint": "reprinted in RSC 1985, Appendix II, No 5"}, "canada act 1982": {"title": "Canada Act 1982", "before_pinpoint": " (UK), 1982, c 11", "after_pinpoint": ""}}, "fixed_form_aliases": {"charter": "canadian charter of rights and freedoms", "canadian charter": "canadian charter of rights and freedoms", "charter of rights and freedoms": "canadian charter of rights and freedoms", "british north america act 1867": "constitution act 1867", "bna act": "constitution act 1867"}},
     "category": "Legislation",
     "source_files": [
       "LAWS 2908D Winter 2026 Legislation.pdf"

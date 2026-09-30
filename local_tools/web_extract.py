@@ -18,7 +18,7 @@ _REDIRECT_STATUS = (301, 302, 303, 307, 308)
 _MAX_REDIRECT_HOPS = 5
 
 
-def fetch_html(url: str, timeout: int = 15) -> str | None:
+def fetch_html(url: str, timeout: int = 15, capture=None) -> str | None:
     """Fetch HTML from a user-supplied URL (SSRF-guarded).
 
     curl_cffi first (Chrome TLS fingerprint), plain requests fallback —
@@ -48,12 +48,22 @@ def fetch_html(url: str, timeout: int = 15) -> str | None:
         logger.info("[SSRF] URL fetch blocked: %s", e)
         return None
 
-    def _capped(text: str | None) -> str | None:
+    def _capped(text: str | None, response, final_url: str) -> str | None:
         # Post-hoc body cap: trafilatura only needs a normal article; a body
         # beyond MAX_RESPONSE_BYTES is not a citation source (memory spike
         # before the cap is bounded by the fetch timeout).
-        if text and len(text) > MAX_RESPONSE_BYTES:
+        raw = getattr(response, "content", None)
+        if text and (len(text) > MAX_RESPONSE_BYTES or
+                     isinstance(raw, bytes) and len(raw) > MAX_RESPONSE_BYTES):
             return None
+        if text and capture is not None:
+            capture(raw if isinstance(raw, bytes) else text.encode("utf-8"), {
+                "final_url": final_url,
+                "status": response.status_code,
+                "content_type": response.headers.get("content-type", ""),
+                "etag": response.headers.get("etag", ""),
+                "last_modified": response.headers.get("last-modified", ""),
+            })
         return text
 
     # ── Primary attempt: curl_cffi (Chrome TLS fingerprint) ──
@@ -70,7 +80,7 @@ def fetch_html(url: str, timeout: int = 15) -> str | None:
                 hops += 1
                 continue
             r.raise_for_status()
-            return _capped(r.text)
+            return _capped(r.text, r, current)
     except UrlBlocked as e:
         logger.info("[SSRF] redirect blocked: %s", e)
         return None
@@ -100,7 +110,7 @@ def fetch_html(url: str, timeout: int = 15) -> str | None:
                 continue
             try:
                 resp.raise_for_status()
-                return _capped(resp.text)
+                return _capped(resp.text, resp, current)
             except requests.exceptions.HTTPError:
                 return None
             finally:
@@ -144,7 +154,7 @@ def _best_title(meta_title: str | None, html: str) -> str:
     return meta_title or page_title
 
 
-def extract_from_url(url: str) -> dict:
+def extract_from_url(url: str, capture=None) -> dict:
     """Fetch a URL with curl_cffi and extract structured citation fields.
 
     Uses trafilatura's JSON output to get title, author, date, and sitename
@@ -162,7 +172,7 @@ def extract_from_url(url: str) -> dict:
 
     import trafilatura
 
-    html = fetch_html(url, timeout=URL_EXTRACT_FETCH_TIMEOUT)
+    html = fetch_html(url, timeout=URL_EXTRACT_FETCH_TIMEOUT, capture=capture)
     if not html:
         return {"url": url, "error": "We couldn't fetch this page. It may be blocking automated access, or the request may have timed out. Please fill in the citation fields manually."}
 

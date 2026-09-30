@@ -12,11 +12,8 @@ entry-point group. It declares:
 - ``settings``: options shown in the settings bar, owned by the plugin;
 - ``requires``: other plugins whose public ``api`` it uses.
 
-The model's prose is not vetoed: the harness stamps every fact-shaped string
-in it with its source (``harness.grounding``) -- matched facts carry the
-record they came from, unmatched ones are reported as unsourced and still
-shown. Nothing needs to be stricter than that; a plugin that disagrees can
-say so in its ``instructions``.
+Method notes live in independent Markdown skills. Loading a plugin exposes
+its tools, never an implicit instruction block.
 
 Plugins are trusted, installed code. Discovery happens at startup; nothing is
 hot-reloaded.
@@ -92,7 +89,6 @@ class Plugin:
     name: str
     title: str
     description: str               # one line; this is all the model sees before loading
-    instructions: str = ""         # added to the system prompt once loaded
     tools: list[Tool] = field(default_factory=list)
     actions: dict[str, Callable[..., Result]] = field(default_factory=dict)  # name -> fn(ctx, payload)
     ui: Path | None = None
@@ -102,6 +98,7 @@ class Plugin:
     api: Any = None
     category: str = "function"     # "source" | "extract" | "function": what origins it may produce
     fact_patterns: tuple = ()      # regexes for fact-shaped strings this domain uses (grounding)
+    skill: Path | None = None       # optional Markdown method note; readable separately from tools
 
     def validate(self) -> None:
         if not NAME_RE.match(self.name):
@@ -119,6 +116,8 @@ class Plugin:
             seen.add(tool.name)
         if self.ui is not None and not (Path(self.ui) / "ui.js").is_file():
             raise ValueError(f"plugin {self.name}: ui directory has no ui.js")
+        if self.skill is not None and not Path(self.skill).is_file():
+            raise ValueError(f"plugin {self.name}: skill path does not exist")
 
 
 def discover(root: Path | None = None) -> dict[str, Plugin]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import queue
@@ -151,6 +152,23 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
     @app.get("/api/health")
     def health():
         return {"ok": True}
+
+    @app.post("/api/sources/{ref}")
+    def source_snapshot(ref: str, body: SessionRef):
+        session, _ = session_for(body, create=False)
+        if session is None or not re.fullmatch(r"rec_\d+", ref):
+            return fail("No such source in this conversation.", 404)
+        try:
+            session.records.get(ref)
+        except ValueError:
+            return fail("No such source in this conversation.", 404)
+        meta = session.records.meta(ref).get("source_snapshot")
+        path = harness.sessions.store_dir / session.id / "sources" / f"{ref}.body"
+        if not meta or not path.is_file():
+            return fail("No source snapshot is available for this record.", 404)
+        if hashlib.sha256(path.read_bytes()).hexdigest() != meta.get("sha256"):
+            return fail("The saved source response does not match its recorded hash.", 409)
+        return FileResponse(path, media_type="application/octet-stream")
 
     @app.post("/api/settings/model")
     def set_model(body: ModelChoice):

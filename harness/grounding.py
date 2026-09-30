@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
+from core.evidence_text import find_text
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,7 @@ def annotate_facts(text: str, index: list[dict], shapes=()) -> list[dict]:
                      "kind": None, "ref": None, "field": None, "origin": None,
                      "source_id": None, "excerpt": None}
             for source, original, haystack in sources:
-                at = haystack.find(key)
+                at = find_text(haystack, key)
                 if at < 0:
                     continue
                 span = _find_span(original, key)

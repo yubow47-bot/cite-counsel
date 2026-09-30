@@ -48,8 +48,6 @@ PLUGIN = Plugin(
     name="legisinfo",
     title="Federal bills (LEGISinfo)",
     description="Look up federal bills by number or by keywords in the title, with their status and dates.",
-    instructions="Records you receive are numbered (rec_N). Refer to them by number; the card shows the title "
-                 "and status. Say what was searched when nothing matches.",
     tools=[Tool("bill", "Find a federal bill by its number.", BillParams, find_bill),
            Tool("bills", "Find federal bills by keywords in the title, newest first.", BillsParams,
                 search_bills)],

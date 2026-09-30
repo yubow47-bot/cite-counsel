@@ -6,12 +6,160 @@ import json
 import logging
 import os
 import re
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
 
 class LLMError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class ModelProfile:
+    think_tags: bool = True
+    text_tool_calls: bool = True
+
+
+_PROFILES = {
+    "openai/": ModelProfile(think_tags=False, text_tool_calls=False),
+    "anthropic/": ModelProfile(think_tags=False, text_tool_calls=False),
+}
+
+
+def profile_for(model: str) -> ModelProfile:
+    name = model.casefold()
+    return next((profile for prefix, profile in _PROFILES.items() if name.startswith(prefix)), ModelProfile())
+
+
+# Some models write their chain of thought as <think> tags inside ``content``
+# instead of the structured ``reasoning`` field. Either way it becomes a
+# collapsible thinking block and stays out of the reply text.
+_THINK_PAIR = re.compile(r"<think>(.*?)</think>", re.S)
+_THINK_OPEN = re.compile(r"<think>(.*)\Z", re.S)
+
+
+def split_thinking(content: str, model: str = "") -> tuple[str, str]:
+    """(reply, thinking): every <think> section moves out of the content. An
+    unclosed <think> (a turn cut off mid-thought) counts as thinking to the
+    end of the text; sections join with blank lines."""
+    if not profile_for(model).think_tags or ('<think>' not in content and '</think>' not in content):
+        return content, ""
+    without_pairs = _THINK_PAIR.sub("", content)
+    parts = _THINK_PAIR.findall(content)
+    if '</think>' in without_pairs and '<think>' not in content:
+        # A stray closer with no opener: drop it, nothing is thinking.
+        return without_pairs.replace('</think>', "").strip(), ""
+    open_without_pair = _THINK_OPEN.search(without_pairs)
+    if open_without_pair:
+        parts.append(open_without_pair.group(1))
+        without_pairs = without_pairs[:open_without_pair.start()]
+    reply = without_pairs.replace('</think>', "").strip()
+    return reply, "\n\n".join(part.strip() for part in parts if part.strip())
+
+
+class ThinkSniffer:
+    """The streaming counterpart to ``split_thinking``: watches content
+    deltas as they arrive for a leading ``<think>...</think>`` block (a model
+    that has no structured ``reasoning`` field puts its whole chain of
+    thought there instead) and peels reasoning text off it live, chunk by
+    chunk, instead of only once the full reply is in. Content that is never
+    a think tag is recognised within the first few characters and passed
+    straight through after that -- no per-delta overhead once resolved."""
+
+    _OPEN, _CLOSE = "<think>", "</think>"
+
+    def __init__(self):
+        self._buffer = ""
+        self._mode = "sniff"   # "sniff" -> "think" -> "content"
+        self.plain: list[str] = []
+
+    def feed(self, chunk: str) -> list[str]:
+        """Reasoning text pulled out of this chunk, if any, to show live."""
+        if self._mode == "content":
+            self.plain.append(chunk)
+            return []
+        self._buffer += chunk
+        if self._mode == "sniff":
+            if self._buffer.startswith(self._OPEN):
+                self._buffer = self._buffer[len(self._OPEN):]
+                self._mode = "think"
+            elif len(self._buffer) < len(self._OPEN) and self._OPEN.startswith(self._buffer):
+                return []          # still ambiguous -- wait for more
+            else:
+                self._mode = "content"
+                self.plain.append(self._buffer)
+                self._buffer = ""
+                return []
+        if self._mode == "think":
+            idx = self._buffer.find(self._CLOSE)
+            if idx == -1:
+                safe = len(self._buffer) - (len(self._CLOSE) - 1)
+                if safe <= 0:
+                    return []
+                out, self._buffer = self._buffer[:safe], self._buffer[safe:]
+                return [out]
+            out, rest = self._buffer[:idx], self._buffer[idx + len(self._CLOSE):]
+            self._buffer, self._mode = "", "content"
+            if rest:
+                self.plain.append(rest)
+            return [out] if out else []
+        return []
+
+    def flush(self) -> list[str]:
+        """An unclosed <think> section remains reasoning through stream end."""
+        if self._mode == "think" and self._buffer:
+            text, self._buffer = self._buffer, ""
+            return [text]
+        if self._buffer:
+            self.plain.append(self._buffer)
+            self._buffer = ""
+        return []
+
+
+class PlainSniffer:
+    def __init__(self):
+        self.plain: list[str] = []
+
+    def feed(self, chunk: str) -> list[str]:
+        self.plain.append(chunk)
+        return []
+
+    def flush(self) -> list[str]:
+        return []
+
+
+def think_sniffer(model: str) -> ThinkSniffer | PlainSniffer:
+    return ThinkSniffer() if profile_for(model).think_tags else PlainSniffer()
+
+
+def plain_schema(schema: dict) -> dict:
+    """A tool's JSON schema with every ``$ref`` inlined, schema titles
+    dropped, and ``anyOf [X, null]`` (an optional field) collapsed to X --
+    nested parameters (record__compose's per-field objects) reach the model
+    spelled out instead of behind a reference some providers do not follow."""
+    defs = schema.get("$defs", {})
+
+    def walk(node, properties=False):
+        if isinstance(node, list):
+            return [walk(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+        if properties:                       # keys here are field names, not keywords
+            return {name: walk(value) for name, value in node.items()}
+        if "$ref" in node:
+            return walk(defs[node["$ref"].rsplit("/", 1)[-1]])
+        out = {key: walk(value, key == "properties") for key, value in node.items()
+               if key not in ("$defs", "title")}
+        options = out.get("anyOf")
+        if isinstance(options, list):
+            kept = [option for option in options if option.get("type") != "null"]
+            if len(kept) == 1:
+                out = {**kept[0], **{k: v for k, v in out.items() if k != "anyOf"}}
+        return out
+
+    return walk(schema)
+
 
 
 def _post(model: str, messages: list[dict], tools: list[dict], timeout: float, *,
@@ -55,11 +203,12 @@ def chat(model: str, messages: list[dict], tools: list[dict], *, timeout: float 
         message = data["choices"][0]["message"]
     except (KeyError, IndexError, TypeError) as exc:
         raise LLMError("The model returned an unexpected format.") from exc
-    return _finalize(message, tools)
+    return _finalize(message, tools, profile_for(model))
 
 
-def _finalize(message: dict, tools: list[dict]) -> dict:
-    if tools:
+def _finalize(message: dict, tools: list[dict], profile: ModelProfile | None = None) -> dict:
+    profile = profile or ModelProfile()
+    if tools and profile.text_tool_calls:
         return _recover_leaked_calls(message)
     # No tools were offered, so nothing to run -- just keep the markup off screen.
     if isinstance(message.get("content"), str) and "<tool_call>" in message["content"]:
@@ -102,8 +251,10 @@ def chat_stream(model: str, messages: list[dict], tools: list[dict], *, timeout:
                 break
             try:
                 chunk = json.loads(payload)
-            except ValueError:
-                continue
+            except ValueError as exc:
+                raise LLMError("The model returned malformed stream data.") from exc
+            if not isinstance(chunk, dict):
+                raise LLMError("The model returned malformed stream data.")
             if isinstance(chunk.get("usage"), dict):
                 usage = chunk["usage"]
             choices = chunk.get("choices") or []
@@ -145,7 +296,7 @@ def chat_stream(model: str, messages: list[dict], tools: list[dict], *, timeout:
     if ordered:
         message["tool_calls"] = [{"id": c["id"] or f"call_{n}", "type": "function", "function": c["function"]}
                                  for n, c in enumerate(ordered)]
-    yield "done", _finalize(message, tools)
+    yield "done", _finalize(message, tools, profile_for(model))
 
 
 # GLM sometimes writes a tool call in its own text format instead of the
@@ -180,6 +331,10 @@ def _recover_leaked_calls(message: dict) -> dict:
         return message
     logger.info("Recovered %d tool call(s) the model wrote as text", len(calls))
     return {**message, "content": _LEAKED_CALL.sub("", content).strip(), "tool_calls": calls}
+
+
+def strip_leaked_markup(content: str) -> str:
+    return _LEAKED_CALL.sub("", content).strip()
 
 
 def configured() -> bool:

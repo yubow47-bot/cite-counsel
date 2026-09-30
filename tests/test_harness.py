@@ -49,11 +49,16 @@ class Script:
 
     def __init__(self, monkeypatch, replies):
         self.replies, self.calls = list(replies), []
-        monkeypatch.setattr(llm, "chat", self)
+        monkeypatch.setattr(llm, "chat_stream", self)
 
     def __call__(self, model, messages, tools, **kwargs):
         self.calls.append({"messages": messages, "tools": [t["function"]["name"] for t in tools]})
-        return self.replies.pop(0)
+        message = self.replies.pop(0)
+        if message.get("reasoning"):
+            yield "reasoning", message["reasoning"]
+        if message.get("content"):
+            yield "content", message["content"]
+        yield "done", message
 
 
 class StreamScript:
@@ -109,15 +114,15 @@ def test_nothing_is_loaded_until_the_model_asks(monkeypatch, harness):
     session, _ = harness.sessions.start()
     blocks = harness.run_turn(session, "hello there")
     plugin_tools = [t for t in script.calls[0]["tools"] if not t.startswith("record__")]
-    assert plugin_tools == ["load_plugin"]                        # only the catalogue
+    assert plugin_tools == ["load_plugin", "read_skill"]
     assert "alpha: Echoes text." in script.calls[0]["messages"][0]["content"]
     assert "record__compose" in script.calls[0]["tools"]          # harness-owned, always on
-    assert script.calls[1]["tools"] == ["alpha__echo", "record__compose"]
+    assert script.calls[1]["tools"] == ["alpha__echo", "record__compose", "read_skill", "record__read"]
     assert [b["type"] for b in blocks] == ["activity", "echo", "text"] and blocks[1]["plugin"] == "alpha"
     # The echo result was final: the model is told it is on screen, but keeps
     # its tools -- the request may need a next step; here it just replies.
     assert len(script.calls) == 3 and "alpha__echo" in script.calls[2]["tools"]
-    assert "now on the user's screen" in script.calls[2]["messages"][0]["content"]
+    assert "A tool call is not task completion" in script.calls[2]["messages"][0]["content"]
     assert harness.seen == [("echo", "hello there")]
 
 
@@ -156,6 +161,12 @@ def test_think_tags_in_content_become_thinking_blocks(monkeypatch, harness):
     assert "think" + ">" not in str(blocks)
 
 
+def test_model_profile_keeps_literal_think_markup_for_openai_models():
+    content = "The source literally contains <think> in its text."
+    assert llm.split_thinking(content, "openai/gpt-5") == (content, "")
+    assert llm.profile_for("glm-5").text_tool_calls is True
+
+
 def test_loaded_plugins_stay_loaded_for_the_session(monkeypatch, harness):
     Script(monkeypatch, [call("load_plugin", name="alpha"), say("ok")])
     session, _ = harness.sessions.start()
@@ -173,14 +184,16 @@ def test_disabled_plugins_are_listed_as_off_but_not_loadable(monkeypatch, harnes
     assert "disabled" in offered and "- beta: Peeks at alpha." in offered  # s5.1
     assert "beta" not in session.loaded
     tool_reply = json.loads(session.messages[2]["content"])
-    assert tool_reply == {"error": "no such enabled plugin"}
+    assert tool_reply == {"error": "no such enabled plugin", "kind": "unavailable_plugin",
+                          "retryable": False}
 
 
 def test_tools_of_unloaded_plugins_cannot_be_called(monkeypatch, harness):
     Script(monkeypatch, [call("alpha__echo", text="x"), say("sorry")])
     session, _ = harness.sessions.start()
     harness.run_turn(session, "x")
-    assert json.loads(session.messages[2]["content"]) == {"error": "unknown or unloaded tool"}
+    assert json.loads(session.messages[2]["content"]) == {
+        "error": "unknown or unloaded tool", "kind": "unavailable_tool", "retryable": False}
     assert harness.seen == []
 
 
@@ -223,7 +236,8 @@ def test_an_identical_failed_call_is_not_run_again(monkeypatch, harness):
     harness.run_turn(session, "x")
     first, second, third = [json.loads(m["content"]) for m in session.messages if m["role"] == "tool"][1:]
     assert first["error"] == "invalid arguments"
-    assert second == {"error": REPEATED_CALL, "previous_error": "invalid arguments"}
+    assert second == {"error": REPEATED_CALL, "kind": "repeated_call", "retryable": False,
+                      "previous_error": "invalid arguments"}
     assert third["error"] == "invalid arguments"                  # new arguments are run
 
 
@@ -253,20 +267,85 @@ def test_loading_plugins_is_bounded(monkeypatch, harness):
     assert script.calls[-1]["tools"] == []                        # ended by a wrap-up with no tools
 
 
-def test_prompt_says_to_retry_before_asking(harness):
+def test_prompt_keeps_route_choice_with_the_model(harness):
     session, _ = harness.sessions.start()
     prompt = harness._system_prompt(session)
-    assert "search again in another form" in prompt and "record__compose" in prompt
+    assert "Choose useful tools and skills" in prompt
+    assert "search again in another form" not in prompt
+    assert "record__compose" not in prompt
 
 
-def test_prompt_separates_citable_records_from_source_text_and_handles_errors(harness):
+def test_skills_are_independent_of_plugin_loading(harness):
     session, _ = harness.sessions.start()
     prompt = harness._system_prompt(session)
-    assert "cite it directly with the cite tool" in prompt        # a record with fields: no rebuild
-    assert "holds only source text" in prompt                     # source text: compose from it
-    assert '"retry" note' in prompt and "Do not guess a value" in prompt
-    assert "hand-written" in prompt or "hand-written" in harness._system_prompt(session, True)
-    assert "[Input hints:" in __import__("harness.core", fromlist=["_input_hints"])._input_hints("10.1038/x1234")
+    assert "Optional skills (read_skill by name):" in prompt
+    assert "source_review" in prompt and "citation_scope" in prompt
+    assert "cite it directly with the cite tool" not in prompt
+    skill = next(t for t in harness_core.BUILTIN_TOOLS if t.name == "read_skill")
+    result = harness._run_builtin(session, skill, {"name": "source_review"}, "read_skill")[1]
+    assert "Compare a retrieved result" in result.content["content"]
+    assert session.loaded == [] and session.read_skills == ["source_review"]
+
+
+def test_installed_plugin_can_ship_separate_skill(tmp_path):
+    path = tmp_path / "SKILL.md"
+    path.write_text("# Practice note\n> Check a supplied source.\n\nRead the complete source.\n", encoding="utf-8")
+    plugin = Plugin("outside", "Outside", "Provides a source tool.", skill=path,
+                    default_enabled=True)
+    harness = Harness({"outside": plugin}, model="test-model", config_path=tmp_path / "harness.json")
+    session, _ = harness.sessions.start()
+    assert "outside: Check a supplied source." in harness._system_prompt(session)
+    tool = next(t for t in harness_core.BUILTIN_TOOLS if t.name == "read_skill")
+    result = harness._run_builtin(session, tool, {"name": "outside"}, "read_skill")[1]
+    assert "Read the complete source." in result.content["content"]
+    assert session.loaded == []
+
+
+def test_malformed_model_stream_fails_instead_of_looking_like_an_empty_answer(monkeypatch):
+    from core.spend_tracker import spend_tracker
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def iter_lines(self, **kwargs):
+            yield "data: {broken"
+
+    monkeypatch.setattr(spend_tracker, "is_over_cap", lambda: False)
+    monkeypatch.setattr(llm, "_post", lambda *args, **kwargs: Response())
+    with pytest.raises(llm.LLMError, match="malformed stream"):
+        list(llm.chat_stream("test-model", [{"role": "user", "content": "hello"}], []))
+
+
+def test_record_read_returns_bounded_source_text(harness):
+    from core.tool_contracts import Field, Record
+
+    session, _ = harness.sessions.start()
+    ref = session.records.put(Record("document", {"text": Field("abcdefghij", "extracted")},
+                                     "file", "sample"))
+    tool = next(t for t in harness_core.BUILTIN_TOOLS if t.name == "record__read")
+    result = harness._run_builtin(session, tool, {"ref": ref, "field": "text", "offset": 3, "limit": 4},
+                                  "record__read")[1]
+    assert result.content["text"] == "defg"
+    assert result.content["next_offset"] == 7
+    assert result.content["origin"] == "extracted"
+
+
+def test_event_log_captures_exact_model_request_and_result(monkeypatch, harness):
+    Script(monkeypatch, [call("load_plugin", name="alpha"), say("done")])
+    session, _ = harness.sessions.start()
+    harness.run_turn(session, "hello")
+    path = harness.sessions.store_dir / f"{session.id}.events.jsonl"
+    events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert [event["kind"] for event in events] == [
+        "model_request", "model_response", "tool_call", "tool_result", "model_request", "model_response"]
+    request = events[0]["payload"]
+    assert "Available tool plugins:" in request["messages"][0]["content"]
+    assert "- alpha: Echoes text." in request["messages"][0]["content"]
+    assert any(spec["function"]["name"] == "read_skill" for spec in request["tools"])
+    assert events[3]["payload"]["content"]["loaded"] == "alpha"
 
 
 def test_action_notes_are_not_the_users_words(harness):
@@ -548,7 +627,7 @@ def test_function_plugin_cannot_mint_a_record(monkeypatch, harness):
 
 
 def _compose(h, session, **params):
-    compose = harness_core.BUILTIN_TOOLS[0]
+    compose = next(tool for tool in harness_core.BUILTIN_TOOLS if tool.name == "record__compose")
     return h._run_builtin(session, compose, params, "record__compose")[1]
 
 
@@ -642,7 +721,7 @@ def test_a_case_record_built_only_from_a_report_is_allowed_but_warned(harness):
     warned = _compose(harness, session, record_type="jurisprudence", fields={
         "style_of_cause": {"value": "De-Zoysa", "source": page, "quote": "sentenced Febrio De-Zoysa to life"}})
     assert warned.content["ref"]
-    assert page in warned.content["warnings"][0] and "cite that record directly" in warned.content["warnings"][0]
+    assert page in warned.content["warnings"][0] and "may describe the work" in warned.content["warnings"][0]
     session.messages.append({"role": "user", "content": "it is R v De-Zoysa"})
     fine = _compose(harness, session, record_type="jurisprudence", fields={
         "style_of_cause": {"value": "R v De-Zoysa", "source": "user", "quote": "R v De-Zoysa"}})
@@ -667,20 +746,16 @@ def test_base_ref_adds_to_an_existing_record_and_replaces_it(harness):
     assert result.content["record_type"] == "book"
 
 
-def test_compose_wants_a_web_search_first_when_web_is_enabled(tmp_path):
-    """A new record is for a source the databases lack, so the web is tried
-    first; extending an existing record (base_ref) is not gated."""
+def test_compose_has_no_web_search_gate(tmp_path):
     from harness.plugin import discover
 
     h = Harness(discover(), model="m", config_path=tmp_path / "h.json")
     h.set_enabled("web", True)
     session, _ = h.sessions.start()
-    refused = _compose(h, session, record_type="jurisprudence", fields={"style_of_cause": {"value": "R v X"}})
-    assert "web__search" in refused.content["error"]
-    assert session.records.all() == []
-    session.web_search_used = True                                  # one real attempt opens it
-    assert _compose(h, session, record_type="jurisprudence",
-                    fields={"style_of_cause": {"value": "R v X"}}).content["ref"] == "rec_1"
+    composed = _compose(h, session, record_type="jurisprudence", fields={"style_of_cause": {"value": "R v X"}})
+    assert composed.content["ref"]
+    assert composed.content["written"]["style_of_cause"]["origin"] == "model"
+    assert session.records.all()[0][0] == "rec_1"
 
 
 def test_a_record_composed_from_a_page_cites_with_the_page_provenance(tmp_path):
@@ -722,25 +797,39 @@ def test_new_plugins_get_their_default_after_settings_were_saved(tmp_path):
     assert "gamma" in h.config["enabled"]       # unknown then, default on
 
 
-# ── Harness-level grounding (§5.4) and input hints (§5.2) ────────────
+# ── Harness-level text provenance annotations ────────────────────────
 
 
 def test_reply_facts_carry_their_source_and_stay_visible(harness):
     """Annotation, not hiding: the prose survives untouched; a fact that
     traces to the session carries its source, a fact that traces nowhere is
     reported as unsourced."""
+    from core.tool_contracts import Field, Record
+
     session, _ = harness.sessions.start()
     session.messages.append({"role": "user", "content": "R v Gladue 1999"})
+    session.records.put(Record("jurisprudence", {"reporter": Field("[1999] 1 SCR 688", "database",
+                                                                  source_id="a2aj:c1")}, "a2aj", "c1"))
     session.messages.append({"role": "tool", "tool_call_id": "c1",
-                             "content": '{"citation": "[1999] 1 SCR 688"}'})
+                             "content": '{"error": "2002 SCC 10"}'})
     text = ("找到了 [1999] 1 SCR 688，请看卡片。\n"
             "另外它在 2002 SCC 10 里也被讨论过。")
     facts = harness._annotate_reply(session, text)
     sourced = {f["fact"]: f for f in facts if f["verdict"] == "sourced"}
     unsourced = {f["fact"] for f in facts if f["verdict"] == "unsourced"}
-    assert "[1999] 1 SCR 688" in sourced                       # grounded: the tool result has it
+    assert "[1999] 1 SCR 688" in sourced
     assert "2002 SCC 10" in unsourced
     assert "请看卡片" in text and "2002 SCC 10" in text          # nothing was removed
+
+
+def test_model_origin_record_field_does_not_source_a_reply(harness):
+    from core.tool_contracts import Field, Record
+
+    session, _ = harness.sessions.start()
+    session.records.put(Record("jurisprudence", {"citation": Field("2002 SCC 10", "model")},
+                               "user", "blank"))
+    facts = harness._annotate_reply(session, "See 2002 SCC 10.")
+    assert facts[0]["verdict"] == "unsourced"
 
 
 def test_a_fact_from_a_stored_record_links_to_it(harness):
@@ -777,13 +866,12 @@ def test_plugin_fact_patterns_apply_without_loading(harness):
     assert facts and facts[0]["verdict"] == "unsourced" and facts[0]["fact"] == "Bill C-22"
 
 
-def test_input_hints_flag_fixed_format_inputs():
-    from harness.core import _input_hints
-    hints = _input_hints("帮我查 10.1234/abc.def")
-    assert "DOI" in hints
-    assert _input_hints("gladue") == ""
-    assert "ISBN" in _input_hints("这本书是 978-0-306-40615-7")
-    assert "bill" in _input_hints("C-22 那个议案进展如何")
+def test_domain_input_does_not_create_harness_notes(monkeypatch, harness):
+    script = Script(monkeypatch, [say("I can check that DOI.")])
+    session, _ = harness.sessions.start()
+    harness.run_turn(session, "帮我查 10.1234/abc.def")
+    assert [m for m in script.calls[0]["messages"] if m["role"] == "user"] == [
+        {"role": "user", "content": "帮我查 10.1234/abc.def"}]
 
 
 def test_a_tool_call_written_as_text_is_recovered():
@@ -831,19 +919,14 @@ def test_a_long_clean_reply_is_shown_in_full(monkeypatch, harness):
     assert [b["type"] for b in blocks] == ["text"] and blocks[0]["text"].count("citator") == 20
 
 
-def test_an_input_hint_does_not_change_the_reply_language(monkeypatch, harness):
-    """Seen in review: the hint is labelled in Chinese, and kept inside the
-    user's message it made an English question about 2022 SCC 39 read as
-    Chinese -- the model was told to reply in Simplified Chinese."""
+def test_reply_language_uses_the_users_words(monkeypatch, harness):
     script = Script(monkeypatch, [say("Here it is.")])
     session, _ = harness.sessions.start()
     harness.run_turn(session, "Can you cite 2022 SCC 39 for me?")
     system = script.calls[0]["messages"][0]["content"]
     assert system.rstrip().endswith("Reply in the language of the user's latest message.")
-    # The hint still reaches the model, as a harness note, not the user's words.
     assert session.user_texts() == ["Can you cite 2022 SCC 39 for me?"]
-    assert any(m["role"] == "user" and "neutral citation" in (m["content"] or "")
-               for m in script.calls[0]["messages"])
+    assert len([m for m in script.calls[0]["messages"] if m["role"] == "user"]) == 1
 
 
 def test_a_long_turn_keeps_the_request_ahead_of_its_notes(harness):
@@ -877,10 +960,10 @@ def test_compose_from_a_stored_record_needs_no_web_search(tmp_path):
     composed = _compose(h, session, record_type="jurisprudence", fields={
         "style_of_cause": {"value": "Donoghue v Stevenson", "source": page}})
     assert composed.content["ref"]
-    # A made-up ref is not a stored record: still gated.
-    refused = _compose(h, session, record_type="jurisprudence", fields={
+    # A made-up ref cannot acquire source provenance.
+    unsupported = _compose(h, session, record_type="jurisprudence", fields={
         "style_of_cause": {"value": "R v X", "source": "rec_99"}})
-    assert "web__search" in refused.content["error"]
+    assert unsupported.content["written"]["style_of_cause"]["origin"] == "model"
 
 
 def test_compose_from_the_users_own_words_needs_no_web_search(tmp_path):
@@ -895,10 +978,10 @@ def test_compose_from_the_users_own_words_needs_no_web_search(tmp_path):
     composed = _compose(h, session, record_type="website", fields={
         "title": {"value": "Interview with Jane Roe", "source": "user", "quote": "interview with Jane Roe"}})
     assert composed.content["ref"]
-    # Words the user never wrote do not open the gate.
-    refused = _compose(h, session, record_type="website", fields={
+    # Words the user never wrote remain model-origin.
+    unsupported = _compose(h, session, record_type="website", fields={
         "title": {"value": "Invented", "source": "user", "quote": "Invented"}})
-    assert "web__search" in refused.content["error"]
+    assert unsupported.content["written"]["title"]["origin"] == "model"
 
 
 def test_compose_is_not_gated_by_a_web_plugin_the_user_switched_off(tmp_path):
