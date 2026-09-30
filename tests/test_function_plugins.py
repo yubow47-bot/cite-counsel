@@ -168,7 +168,10 @@ def test_deadline_artifact_is_stored_with_its_inputs():
     artifact = session.records.get(result.content["ref"], Artifact)
     assert artifact.kind == "deadline_date"
     leaves = artifact.derivation.inputs
-    assert all(isinstance(node, Field) and node.origin == "user" for node in leaves[:3])
+    assert all(isinstance(node, Field) and node.origin == "model" for node in leaves[:3])
+    assert result.content["inputs"][0]["origin"] == "model"
+    assert any(item["name"] == "weekend_days" and item["origin"] == "default"
+               for item in result.content["inputs"])
 
 
 def test_a2aj_full_text_attaches_a_database_field():
@@ -313,3 +316,160 @@ def test_a_database_leaf_from_a_different_source_id_is_downgraded():
     ref = ctx.save(Artifact("x", "y", Derivation(
         (Field("conditional sentencing regime in 1996", "database", source_id="a2aj:other"),), "cite.render.v1")))
     assert leaf_origins(session, ref) == ["model"]
+
+
+def _clean(values):
+    from core.mcgill_format import mcgill_clean
+    return {name: mcgill_clean(name, value) for name, value in values.items()}
+
+
+def test_constitutional_form_arranges_the_guides_own_examples_from_fields():
+    """Only the form lives in the plugin: given the parts as a source prints
+    them, it reproduces the Guide's Constitutional Statutes examples."""
+    import json as _json
+    from core.mcgill_format import _RULES_PATH, render_fields
+    topic = next(t for t in _json.loads(_RULES_PATH.read_text(encoding="utf-8"))["legislation"]["topics"]
+                 if t["topic"] == "Constitutional Statutes")
+    rendered = [
+        render_fields("constitutional", _clean({
+            "title": "Constitution Act, 1982", "pinpoint": "s 35",
+            "enacted_as": "Schedule B to the Canada Act 1982, 1982, c. 11 (U.K.)"})),
+        render_fields("constitutional", _clean({
+            "title": "Canadian Charter of Rights and Freedoms", "pinpoint": "s 7",
+            # As Justice Laws prints them: a heading in capitals, the enactment in its own style.
+            "part": "PART I", "part_of": "CONSTITUTION ACT, 1982",
+            "enacted_as": "Schedule B to the Canada Act 1982 , 1982, c. 11 (U.K.)"})),
+        render_fields("constitutional", _clean({
+            "title": "Constitution Act, 1867", "jurisdiction": "UK", "citation": "30 & 31 Vict, c 3",
+            "pinpoint": "s 91", "reprinted_in": "RSC 1985, Appendix II, No 5"})),
+    ]
+    assert rendered == topic["examples"]
+
+
+def test_the_constitutional_form_adds_nothing_the_record_lacks():
+    """No part of the enactment comes from the plugin: without what the Act
+    was enacted as there is no citation, and a Part needs its Act."""
+    from core.mcgill_format import missing_summary, render_fields
+    with pytest.raises(ValueError) as exc:
+        render_fields("constitutional", _clean({"title": "Canadian Charter of Rights and Freedoms",
+                                                "part": "PART I", "part_of": "CONSTITUTION ACT, 1982"}))
+    assert "What the Act was enacted as" in str(exc.value)
+    gap = missing_summary("constitutional", {"title": "Canadian Charter of Rights and Freedoms", "part": "PART I",
+                                             "enacted_as": "Schedule B to the Canada Act 1982, 1982, c. 11 (U.K.)"})
+    assert gap.startswith("The Act that Part belongs to")
+
+
+def test_a_part_of_value_that_repeats_the_part_is_sent_back():
+    from core.mcgill_format import field_problem
+    assert "the Act's title alone" in field_problem("constitutional", "part_of",
+                                                    "Part I of the Constitution Act, 1982")
+    assert field_problem("constitutional", "part", "PART I") is None
+
+
+CHARTER_PAGE = "https://laws-lois.justice.gc.ca/eng/Const/page-12.html"
+CONST_INDEX = "https://laws.justice.gc.ca/eng/Const/Const_index.html"
+
+
+def _page(session, url, text):
+    return session.records.put(Record("website", {
+        "title": Field("The Constitution Acts 1867 to 1982", "extracted", source_id=url),
+        "url": Field(url, "extracted", source_id=url),
+        "text": Field(text, "extracted", source_id=url),
+    }, "web", url))
+
+
+def _justice_laws_pages(session):
+    """Readable source text with explicit token boundaries; quotes preserve its spacing."""
+    charter = _page(session, CHARTER_PAGE, "THE CONSTITUTION ACTS 1867 to 1982 [771 KB] CONSTITUTION ACT, 1982 End "
+                                           "note (81) PART I Canadian Charter of Rights and Freedoms Whereas Canada "
+                                           "is founded upon principles")
+    index = _page(session, CONST_INDEX, "The Constitution Act, 1982 was enacted as Schedule B to the Canada Act "
+                                        "1982 , 1982, c. 11 (U.K.). It is set out in this consolidation")
+    return charter, index
+
+
+def _compose_charter(h, session, charter, index):
+    import harness.core as harness_core
+    return h._run_builtin(session, harness_core.BUILTIN_TOOLS[0], {
+        "record_type": "constitutional",
+        "fields": [
+            {"name": "title", "value": "Canadian Charter of Rights and Freedoms", "source": charter,
+             "quote": "PART I Canadian Charter of Rights and Freedoms"},
+            {"name": "part", "value": "PART I", "source": charter,
+             "quote": "PART I Canadian Charter of Rights and Freedoms"},
+            {"name": "part_of", "value": "CONSTITUTION ACT, 1982", "source": charter,
+             "quote": "CONSTITUTION ACT, 1982 End note"},
+            {"name": "enacted_as", "value": "Schedule B to the Canada Act 1982 , 1982, c. 11 (U.K.)",
+             "source": index, "quote": "was enacted as Schedule B to the Canada Act 1982 , 1982, c. 11 (U.K.)"},
+        ]}, "record__compose")[1]
+
+
+def test_every_part_of_a_constitutional_citation_traces_to_the_official_pages():
+    """The data comes from the fetched Justice Laws pages, copied as printed and
+    quoted field by field; the plugin only arranges and styles it. Every field
+    keeps the pages' origin -- correct, and honestly unverified (a page is not
+    a database)."""
+    h, session = make()
+    charter, index = _justice_laws_pages(session)
+    session.messages.append({"role": "user", "content": "i want charter to be cited"})
+    composed = _compose_charter(h, session, charter, index)
+    written = composed.content["written"]
+    assert {name: entry["origin"] for name, entry in written.items()} == {
+        "title": "extracted", "part": "extracted", "part_of": "extracted", "enacted_as": "extracted"}
+    assert composed.content["missing"] == "" and composed.content["rejected"] == {}
+    result = run_tool(h, session, "mcgill__cite", ref=composed.content["ref"])
+    assert result.content["citation"] == (
+        "*Canadian Charter of Rights and Freedoms*, Part I of the *Constitution Act, 1982*, "
+        "being Schedule B to the *Canada Act 1982* (UK), 1982, c 11.")
+    assert result.content["verified"] is False
+    assert "pinpoint_added_by_you" not in result.content
+
+
+def test_a_quote_still_has_to_be_in_the_page():
+    """Spacing is forgiven; words are not."""
+    import harness.core as harness_core
+    h, session = make()
+    charter, _ = _justice_laws_pages(session)
+    composed = h._run_builtin(session, harness_core.BUILTIN_TOOLS[0], {
+        "record_type": "constitutional",
+        "fields": [{"name": "part_of", "value": "Constitution Act, 1982", "source": charter,
+                    "quote": "being Part I of the Constitution Act, 1982"}]}, "record__compose")[1]
+    assert composed.content["written"]["part_of"]["origin"] == "model"
+
+
+def test_a_pinpoint_the_user_never_wrote_is_called_out():
+    """Seen live: asked only to cite the Charter, the model passed s 2(b) and
+    called it the user's. It is still shown (not refused), but the result
+    tells the model and the card tells the user who added it."""
+    h, session = make()
+    charter, index = _justice_laws_pages(session)
+    session.messages.append({"role": "user", "content": "i want charter to be cited"})
+    composed = _compose_charter(h, session, charter, index)
+    result = run_tool(h, session, "mcgill__cite", ref=composed.content["ref"], pinpoint="s 2(b)")
+    assert "s 2(b)" in result.content["citation"] and result.content["verified"] is False
+    assert "did not supply the pinpoint 's 2(b)'" in result.content["pinpoint_added_by_you"]
+    rows = dict(result.blocks[0]["rows"])
+    assert "added by the assistant" in rows["Pinpoint"]
+
+    session.messages.append({"role": "user", "content": "cite s 7 of the Charter"})
+    typed = run_tool(h, session, "mcgill__cite", ref=composed.content["ref"], pinpoint="s 7")
+    assert "pinpoint_added_by_you" not in typed.content
+
+
+def test_a_constitutional_citation_lands_in_the_legislation_section():
+    h, session = make()
+    from plugins import bibliography, mcgill
+    source = "test:const"
+    ref = session.records.put(Record("constitutional", {
+        "title": Field("Constitution Act, 1867", "database", source_id=source),
+        "jurisdiction": Field("UK", "database", source_id=source),
+        "citation": Field("30 & 31 Vict, c 3", "database", source_id=source),
+        "reprinted_in": Field("RSC 1985, Appendix II, No 5", "database", source_id=source)}, "test", "const"))
+    citation = mcgill.cite(ctx_for(h, session, "mcgill"), mcgill.CiteParams(ref=ref))
+    assert citation.content["verified"] is True
+    result = bibliography.build(ctx_for(h, session, "bibliography"),
+                                bibliography.BuildParams(refs=[citation.content["ref"]]))
+    body = result.blocks[0]["body"]
+    assert body.startswith("LEGISLATION")
+    assert "Constitution Act, 1867 (UK), 30 & 31 Vict, c 3, reprinted in RSC 1985, Appendix II, No 5." in body
+    assert result.content["unverified"] == 0

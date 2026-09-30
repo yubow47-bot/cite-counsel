@@ -22,6 +22,11 @@
     row.append('Read page: ');
     if (/^https?:\/\//.test(block.url)) row.append(link(block.url, block.title || block.url));
     if (block.date) row.append(` · ${block.date}`);
+    if (block.snapshot) {
+      const button = el('button', 'web-source', 'Saved response');
+      button.addEventListener('click', () => H.openSource(block.ref).catch(error => H.toast(error.message)));
+      row.append(' · ', button);
+    }
     return row;
   });
 })();

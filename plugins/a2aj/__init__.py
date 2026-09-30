@@ -89,8 +89,6 @@ PLUGIN = Plugin(
     title="Canadian cases & legislation (A2AJ)",
     description="Look up Canadian cases and legislation by name or citation; fields come from the database "
                 "and are traceable.",
-    instructions="Records you receive are numbered (rec_N). Cite them by number; never retype their fields. "
-                 "When nothing matches, say what was searched -- not that the source does not exist.",
     tools=[Tool("find_case", "Find Canadian cases by name or citation.", CaseParams, find_case),
            Tool("find_legislation", "Find Canadian legislation by name or citation.", LegislationParams,
                 find_legislation),

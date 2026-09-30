@@ -38,6 +38,35 @@ def schema_fields(source_type: str) -> list[dict]:
     return list(schema["fields"]) if schema else []
 
 
+def fixed_form(title: str) -> dict | None:
+    """The Guide's whole citation for a statute whose form never changes
+    (the Charter, the Constitution Acts), or None. Only the pinpoint varies.
+    Case, commas, a leading "the" and extra spaces are ignored."""
+    schema = schemas().get("legislation") or {}
+    key = re.sub(r"\s+", " ", re.sub(r"^the\s+", "", (title or "").casefold().replace(",", "").strip(" .;")))
+    key = schema.get("fixed_form_aliases", {}).get(key.strip(), key.strip())
+    return schema.get("fixed_forms", {}).get(key)
+
+
+def fixed_form_titles() -> list[str]:
+    return [form["title"] for form in (schemas().get("legislation") or {}).get("fixed_forms", {}).values()]
+
+
+def render_fixed_form(title: str, pinpoint: str = "") -> str:
+    form = fixed_form(title)
+    if form is None:
+        raise ValueError("No fixed citation form is registered for this title.")
+    text = "*" + form["title"] + "*" + form["before_pinpoint"]
+    if pinpoint:
+        problem = field_problem("legislation", "pinpoint", pinpoint)
+        if problem:
+            raise ValueError(problem)
+        text += ", " + pinpoint
+    if form["after_pinpoint"]:
+        text += ", " + form["after_pinpoint"]
+    return text.rstrip(".") + "."
+
+
 # What a value must look like before it can be written into a record field.
 # Shape only -- never where the value came from. (pattern, hint); the
 # pattern must match the whole value. Fields not listed only get the
@@ -76,6 +105,8 @@ def field_problem(source_type: str, name: str, value: str) -> str | None:
     Shape only: an unknown field, an over-long value, or one that does not
     look like what the field holds (a sentence in a citation-number field).
     """
+    if source_type == "constitutional" and name == "part_of" and re.match(r"part\b", value, re.I):
+        return "Use the Act's title alone; put the Part in its own field."
     fields = {f["name"]: f for f in schema_fields(source_type)}
     if name not in fields:
         return f"{source_type} records take {', '.join(fields)}; not {name}."
@@ -105,6 +136,8 @@ def missing_required(source_type: str, values: dict) -> list[dict]:
         return []
     filled = _filled(values)
     missing = [f for f in schema["fields"] if f.get("required") and f["name"] not in filled]
+    if source_type == "constitutional" and "part" in filled and "part_of" not in filled:
+        missing += [f for f in schema["fields"] if f["name"] == "part_of"]
     for options in schema.get("required_any", []):
         if not filled & set(options):
             missing += [f for f in schema["fields"] if f["name"] in options and f not in missing]
@@ -117,6 +150,8 @@ def missing_summary(source_type: str, values: dict) -> str:
     filled = _filled(values)
     labels = {f["name"]: f["label"] for f in schema.get("fields", [])}
     parts = [f["label"] for f in schema.get("fields", []) if f.get("required") and f["name"] not in filled]
+    if source_type == "constitutional" and "part" in filled and "part_of" not in filled:
+        parts.append(labels["part_of"])
     parts += [" or ".join(labels[key] for key in options if key in labels)
               for options in schema.get("required_any", []) if not filled & set(options)]
     return ", ".join(parts)
@@ -167,6 +202,15 @@ _MONTHS = ("January February March April May June July August September October 
 def mcgill_clean(name: str, value: str) -> str:
     """Deterministic McGill conventions applied to a value copied from a source."""
     value = re.sub(r"\s+", " ", value).strip()
+    if name == "part":
+        value = re.sub(r"^PART\b", "Part", value, flags=re.I)
+    if name == "part_of":
+        value = re.sub(r"CONSTITUTION ACT", "Constitution Act", value, flags=re.I)
+    if name == "enacted_as":
+        value = re.sub(r"Canada Act\s+(\d{4})", r"*Canada Act \1*", value, flags=re.I)
+        value = re.sub(r"\s*,\s*", ", ", value)
+        value = re.sub(r",\s*(\d{4}),\s*c\.?\s*(\d+)\s*\(U\.?K\.?\)\.?$",
+                       r" (UK), \1, c \2", value)
     if name in {"author", "title", "place", "publisher", "journal", "newspaper"}:
         value = value.rstrip(" .,;")
     if name == "author":

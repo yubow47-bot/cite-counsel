@@ -37,6 +37,7 @@ from dataclasses import replace
 from typing import Any
 
 from core.tool_contracts import Artifact, Derivation, Field, Finding, Record, derivation_leaves
+from core.evidence_text import find_text
 
 CATEGORY_ORIGIN = {"source": {"database"}, "extract": {"extracted"}}
 PREFIX = {Record: "rec", Artifact: "art", Finding: "fnd"}
@@ -174,14 +175,19 @@ class Store:
         return obj
 
     def _sourced(self, origin: str, value: str, source_id: str | None) -> bool:
-        """Exact evidence first; then a value contained in a longer stored
-        text from the same source ("26 May 1932" inside a fetched page)."""
+        """Database claims need a complete recorded value. Extracted claims
+        may cite a bounded passage, without acquiring database verification."""
         if (origin, value, source_id) in self._evidence:
             return True
+        if origin == "database":
+            return False
         probe = _probe(value)
         if not probe:
             return False
-        return any(probe in candidate for candidate in self._contained.get((origin, source_id), ()))
+        candidates = list(self._contained.get((origin, source_id), ()))
+        if origin == "extracted":
+            candidates += self._contained.get(("database", source_id), ())
+        return any(find_text(candidate, probe) >= 0 for candidate in candidates)
 
     def _audit(self, derivation, allowed_user: frozenset[str]) -> Derivation:
         """Every leaf must trace to evidence this session actually holds.
@@ -246,9 +252,9 @@ class Store:
         """Where a value anyone (model or user) supplied already exists here.
 
         Exact record-field matches first -- database before extracted before
-        user -- then a value contained inside a record's longer field: a fact
-        the model read out of a fetched page or a judgment's full text is
-        copied from that source, and inherits its origin and source id. Model
+        user -- then a bounded passage inside a record's longer field. A
+        passage in database text is extracted, with its source id preserved;
+        finding text does not verify its role as a citation field. Model
         values are never evidence, so a copy of a copy cannot launder itself
         into a source.
         """
@@ -258,7 +264,7 @@ class Store:
             for ref, record in self.all(Record):
                 for field in record.fields.values():
                     candidate = _probe(field.value)
-                    hit = candidate == probe if exact else bool(probe) and probe in candidate
+                    hit = candidate == probe if exact else find_text(candidate, probe) >= 0
                     if not hit:
                         continue
                     rank = BORROWED.get(field.origin, len(BORROWED) + 1)
@@ -269,7 +275,8 @@ class Store:
         if best is None:
             return Field(value, "model"), ""
         _, ref, field = best
-        return Field(value, field.origin, source_id=field.source_id), ref
+        origin = "extracted" if not exact and field.origin == "database" else field.origin
+        return Field(value, origin, source_id=field.source_id), ref
 
 
 def _clip(value: str, limit: int = 300) -> str:

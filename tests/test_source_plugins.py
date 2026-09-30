@@ -59,8 +59,7 @@ def test_a2aj_legislation_uses_the_source_url_as_its_identifier():
     assert record.fields["url"].value == "https://laws-lois.justice.gc.ca/eng/XML/H-6.xml"
 
 
-def test_a_result_with_no_identifier_tells_the_model_not_to_retry():
-    from harness.core import NO_RETRY
+def test_a_result_with_no_identifier_reports_a_source_contract_error():
     h, session = make()
     h.set_enabled("a2aj", True)
     session.loaded.append("a2aj")
@@ -70,7 +69,8 @@ def test_a_result_with_no_identifier_tells_the_model_not_to_retry():
         "name_en": "Some Act", "citation_en": "SC 2000, c 1", "dataset": "LEGISLATION-FED",
     }]):
         _, result = h._execute(session, tool_call)
-    assert result.content == {"error": "legislation result has no real record identifier", "retry": NO_RETRY}
+    assert result.content == {"error": "legislation result has no real record identifier",
+                              "kind": "source_contract", "retryable": False}
 
 
 def test_legisinfo_keyword_search_filters_by_title():

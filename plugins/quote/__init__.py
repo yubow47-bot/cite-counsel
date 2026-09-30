@@ -30,7 +30,7 @@ def check(ctx, p: CheckParams) -> Result:
     record = ctx.records.get(p.ref)
     full = record.fields.get("full_text")
     if full is None or full.origin != "database":
-        raise ValueError("Fetch the judgment's full text first (a2aj's full_text), then check the quote -- "
+        raise ValueError("This record has no judgment full text for quote checking (a2aj's full_text provides it) -- "
                          "it must be checked against the database's own text.")
     item = {"source_type": record.source_type, "base": None,
             "fields": {name: {"value": field.value, "origin": field.origin, "source_id": field.source_id}
@@ -42,7 +42,9 @@ def check(ctx, p: CheckParams) -> Result:
     if result["pinpoint"]:
         source = result["finding"].derivation.inputs[1]
         pinpoint_ref = ctx.save(Artifact("pinpoint", result["pinpoint"],
-                                         Derivation((source,), "quote.locate.a2aj.v1")))
+                                         Derivation((source,), "quote.locate.a2aj.v1")),
+                                meta={"work": {"provider": record.provider, "record_id": record.record_id,
+                                               "source_type": record.source_type}})
     rows = [["Verdict", VERDICT_LABEL.get(result["verdict"], result["verdict"])]]
     if result["pinpoint"]:
         rows.append(["Pinpoint", result["pinpoint"]])
@@ -62,10 +64,6 @@ PLUGIN = Plugin(
     name="quote",
     title="Quote check",
     description="Check a quotation against the judgment's full text and find its paragraph number.",
-    instructions="Copy the quotation from the user's messages, word for word (punctuation included), when "
-                 "they gave one; a quotation you supply yourself is checked the same way but is recorded "
-                 "as model-supplied, not the user's. The verdict and the pinpoint come from the database "
-                 "text, not from you. A not_found verdict means the words are not in the text -- say so plainly.",
     tools=[Tool("check", "Check a quotation against a stored case's full text; locate its paragraph.",
                 CheckParams, check)],
     category="function",

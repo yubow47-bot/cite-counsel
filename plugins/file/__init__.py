@@ -53,13 +53,6 @@ PLUGIN = Plugin(
     name="file",
     title="File extraction",
     description="Extract the fields and text of an uploaded PDF/DOCX/PPTX/XLSX or image as an extracted record.",
-    instructions="Extracted records (rec_N) carry fields from the file itself. They are not database records: "
-                 "citations from them will read unverified, which is honest. For court decisions, prefer the "
-                 "case databases; the file record is for what they do not have. When the extracted text states the "
-                 "citation itself (title, author, journal, volume, year, first page), compose the citable record "
-                 "from it with record__compose, quoting this record for each field -- before any lookup. A "
-                 "Crossref or catalogue lookup afterwards is only a check: cite its result only if its author, "
-                 "title and year match the file.",
     tools=[Tool("extract", "Extract fields and text from an uploaded file.", ExtractParams, extract)],
     category="extract",
     fact_patterns=(),

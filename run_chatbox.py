@@ -1,7 +1,11 @@
 """Run Cite Counsel locally: .venv/Scripts/python.exe run_chatbox.py."""
 
 if __name__ == "__main__":
+    import logging
     import uvicorn
+    # Each harness step (user message, tool call, result, reply) prints here.
+    logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    logging.getLogger("harness").setLevel(logging.INFO)
     from core.chatbox_settings import configure
     settings = configure()
     from harness.app import create_app

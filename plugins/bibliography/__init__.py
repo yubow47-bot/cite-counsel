@@ -26,7 +26,7 @@ def build(ctx, p: BuildParams) -> Result:
     for ref in p.refs:
         artifact = ctx.records.get(ref)
         if not artifact or getattr(artifact, "kind", "") != "citation_text":
-            raise ValueError(f"{ref} is not a rendered citation; render one with the citation plugin first.")
+            raise ValueError(f"{ref} is not a citation artifact produced by the citation plugin.")
         meta = ctx.records.meta(ref)
         if not meta:
             raise ValueError(f"{ref} has no source snapshot to draw on, so it cannot join the bibliography.")
@@ -53,8 +53,6 @@ PLUGIN = Plugin(
     name="bibliography",
     title="Bibliography",
     description="Assemble stored citations into a McGill bibliography: sections, sorted, pinpoints dropped.",
-    instructions="Bibliography takes citation artifact numbers (art_N) from the mcgill plugin. Show the sections "
-                 "and the unverified count; the card carries the text to copy.",
     tools=[Tool("build", "Build a McGill bibliography from stored citations.", BuildParams, build)],
     category="function",
     fact_patterns=(),

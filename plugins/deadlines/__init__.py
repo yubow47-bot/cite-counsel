@@ -28,8 +28,12 @@ class DeadlineParams(BaseModel):
 def compute(ctx, p: DeadlineParams) -> Result:
     from core.legal_tools import limit_compute
     from core.tool_contracts import Field
-    artifact = limit_compute(Field(p.start, "user"), Field(str(p.days), "user"), Field(p.rule or "unspecified", "user"),
-                             p.roll_forward, tuple(Field(h, "user") for h in p.holidays),
+    start, _ = ctx.provenance(p.start)
+    days, _ = ctx.provenance(str(p.days))
+    rule, _ = ctx.provenance(p.rule) if p.rule else (Field("unspecified", "model"), "")
+    holidays = tuple(ctx.provenance(h)[0] for h in p.holidays)
+    artifact = limit_compute(start, days, rule,
+                             p.roll_forward, holidays,
                              mode=p.mode, weekend_days=tuple(p.weekend_days))
     ref = ctx.save(artifact)
     names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -43,15 +47,21 @@ def compute(ctx, p: DeadlineParams) -> Result:
              "note": "This only does the date arithmetic on the inputs listed above -- it does not judge "
                      "whether the rule applies, and does not know any court holiday not listed here. "
                      "Check each row."}
-    return Result({"ref": ref, "date": artifact.content}, [block], final=True)
+    inputs = [{"name": name, "value": field.value, "origin": field.origin}
+              for name, field in (("start", start), ("days", days), ("rule", rule))]
+    inputs += [{"name": "holiday", "value": field.value, "origin": field.origin} for field in holidays]
+    inputs += [{"name": name, "value": value,
+                "origin": "default" if name not in p.model_fields_set else ctx.provenance(str(value))[0].origin}
+               for name, value in (("mode", p.mode), ("weekend_days", p.weekend_days),
+                                   ("roll_forward", p.roll_forward))]
+    rows.append(["Input origins", "; ".join(f"{item['name']}={item['origin']}" for item in inputs)])
+    return Result({"ref": ref, "date": artifact.content, "inputs": inputs}, [block], final=True)
 
 
 PLUGIN = Plugin(
     name="deadlines",
     title="Deadline calculator",
-    description="Add a number of calendar or court days to a date, using weekends and holidays the user supplies.",
-    instructions="Ask the user for any input they did not give (start date, number of days, counting method, "
-                 "holidays). Never assume a court's holidays.",
+    description="Compute calendar or court days from given inputs and explicitly reported defaults.",
     tools=[Tool("compute", "Compute a deadline date from explicit inputs.", DeadlineParams, compute)],
     default_enabled=False,
 )

@@ -5,11 +5,9 @@ Plugin state is namespaced per plugin; a plugin reaches another plugin's
 state only through that plugin's ``api``, and only if it declared it in
 ``requires``.
 
-Sessions persist locally: one JSON file per session under the store
-directory (messages, loaded plugins, plugin state, every numbered object,
-the attachment index), plus the attachments themselves. A restart loses
-nothing; ``get`` revives a session from disk after verifying the token,
-and reference numbering continues from where the file left off.
+Sessions persist locally: a JSON snapshot, an append-only model/tool event
+log, and a directory for attachments and saved source responses. ``get``
+revives a session after verifying its token; reference numbering continues.
 """
 
 from __future__ import annotations
@@ -19,7 +17,9 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
+import shutil
 import threading
 import time
 from dataclasses import dataclass, field
@@ -42,10 +42,10 @@ class Session:
     expires: float
     messages: list[dict] = field(default_factory=list)   # OpenAI-format history
     loaded: list[str] = field(default_factory=list)       # plugins loaded by the model
+    read_skills: list[str] = field(default_factory=list)  # method notes opened by the model
     state: dict[str, dict] = field(default_factory=dict)  # plugin name -> its state
     attachments: dict[str, dict] = field(default_factory=dict)
     records: Store = field(default_factory=Store)         # numbered evidence objects
-    web_search_used: bool = False                         # web__search has actually run this session
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def user_texts(self) -> list[str]:
@@ -98,6 +98,42 @@ class SessionStore:
 
     # ── Persistence ───────────────────────────────────────────────────
 
+    def append_event(self, session: Session, kind: str, payload: dict) -> None:
+        """Append the exact model/tool exchange independently of session snapshots."""
+        if self.store_dir is None:
+            return
+        self.store_dir.mkdir(parents=True, exist_ok=True)
+        event = {"time": time.time(), "kind": kind, "payload": payload}
+        path = self.store_dir / f"{session.id}.events.jsonl"
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+
+    def save_source(self, session: Session, ref: str, body: bytes, *, requested_url: str,
+                    response: dict) -> dict:
+        """Save the fetched response bytes beside the record that used them."""
+        if self.store_dir is None:
+            raise ValueError("Source snapshots require a persistent session store.")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", session.id) or not re.fullmatch(r"rec_\d+", ref):
+            raise ValueError("Invalid source snapshot identity.")
+        if not isinstance(body, bytes) or not body or len(body) > 5_000_000:
+            raise ValueError("Invalid or oversized source response.")
+        directory = self.store_dir / session.id / "sources"
+        directory.mkdir(parents=True, exist_ok=True)
+        metadata = {"ref": ref, "requested_url": requested_url,
+                    "retrieved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "sha256": hashlib.sha256(body).hexdigest(), "bytes": len(body),
+                    "version_as_of": None,
+                    **{key: response.get(key) for key in
+                       ("final_url", "status", "content_type", "etag", "last_modified")}}
+        target = directory / f"{ref}.body"
+        tmp = directory / f"{ref}.body.{os.getpid()}.tmp"
+        tmp.write_bytes(body)
+        os.replace(tmp, target)
+        (directory / f"{ref}.json").write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+        return metadata
+
     def save(self, session: Session) -> None:
         """Write the whole session out; a failure never takes the turn down."""
         if self.store_dir is None:
@@ -109,8 +145,8 @@ class SessionStore:
                 "token_hash": session.token_hash.hex(),
                 "messages": session.messages,
                 "loaded": session.loaded,
+                "read_skills": session.read_skills,
                 "state": session.state,
-                "web_search_used": session.web_search_used,
                 "attachments": [{"id": aid, "name": att["name"], "file": Path(att["path"]).name}
                                 for aid, att in session.attachments.items()],
                 "records": [{"ref": ref, "data": encode(obj), "meta": meta or None}
@@ -143,8 +179,8 @@ class SessionStore:
         session = Session(session_id, token_hash, 0.0)
         session.messages = list(payload.get("messages") or [])
         session.loaded = list(payload.get("loaded") or [])
+        session.read_skills = list(payload.get("read_skills") or [])
         session.state = dict(payload.get("state") or {})
-        session.web_search_used = bool(payload.get("web_search_used"))
         attachments_dir = self.store_dir / session_id / "attachments"
         for att in payload.get("attachments") or []:
             path = attachments_dir / str(att.get("file") or "")
@@ -166,7 +202,8 @@ class SessionStore:
         for path in files:
             if kept >= self.limit:
                 path.unlink(missing_ok=True)
-                self._drop_attachments(path)
+                path.with_suffix(".events.jsonl").unlink(missing_ok=True)
+                self._drop_session_dir(path)
                 continue
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
@@ -175,7 +212,8 @@ class SessionStore:
                 expired = True
             if expired:
                 path.unlink(missing_ok=True)
-                self._drop_attachments(path)
+                path.with_suffix(".events.jsonl").unlink(missing_ok=True)
+                self._drop_session_dir(path)
             else:
                 kept += 1
 
@@ -191,12 +229,15 @@ class SessionStore:
             return
         path = self.store_dir / f"{session_id}.json"
         path.unlink(missing_ok=True)
-        self._drop_attachments(path)
+        path.with_suffix(".events.jsonl").unlink(missing_ok=True)
+        self._drop_session_dir(path)
 
-    def _drop_attachments(self, session_file: Path) -> None:
+    def _drop_session_dir(self, session_file: Path) -> None:
         try:
-            import shutil
-            shutil.rmtree(self.store_dir / session_file.stem / "attachments", ignore_errors=True)
+            target = (self.store_dir / session_file.stem).resolve()
+            if target.parent != self.store_dir.resolve():
+                raise ValueError("Session directory escaped the store.")
+            shutil.rmtree(target, ignore_errors=True)
         except OSError:
             pass
 
@@ -226,9 +267,8 @@ class Context:
 
     @property
     def claimable_user_values(self) -> frozenset[str]:
-        """Values this call may label user-origin: harness-verified slices
-        and the call's own parameter values."""
-        return self.user_values | self.param_values
+        """Only values checked against the person's own messages may claim user origin."""
+        return self.user_values
 
     def save(self, obj, meta: dict | None = None, *, supersedes: str | None = None) -> str:
         """Store an object under its next number, after the category and
@@ -262,7 +302,8 @@ class Context:
         probe = re.sub(r"\s+", " ", value).strip().casefold()
         for text in reversed(self.user_texts()):
             flat = re.sub(r"\s+", " ", text)
-            at = flat.casefold().find(probe)
+            from core.evidence_text import find_text
+            at = find_text(flat, probe)
             if at >= 0:
                 return flat[at:at + len(probe)]
         return ""

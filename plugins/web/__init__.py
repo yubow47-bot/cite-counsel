@@ -4,9 +4,7 @@ The search service is the user's choice in the settings bar: Exa (an API
 key they fill in themselves -- in the settings bar, or as ``EXA_API_KEY``
 in the project's ``.env``) or the keyless DuckDuckGo Lite. With none
 chosen, search reports that instead of picking one; a searcher that is
-blocked says so instead of quietly returning nothing -- and two empty
-searches in a row tell the model to stop retrying and read known pages
-directly. Page reading goes through the project's SSRF-guarded fetcher
+blocked says so instead of quietly returning nothing. Page reading goes through the project's SSRF-guarded fetcher
 (deterministic extraction, no model in between). Web content is
 information, not a verified source: nothing here produces a citation, but
 a read page is stored with the date and author its metadata carries.
@@ -27,9 +25,7 @@ from harness.plugin import Plugin, Result, Setting, Tool
 PROVIDERS = {"": "Not selected", "exa": "Exa (needs an API key)",
             "duckduckgo_lite": "DuckDuckGo Lite (no key, often blocked)"}
 _EMPTY_STREAK_WARN = 2
-_EMPTY_STREAK_NOTE = ("{n} searches in a row came back empty: the search service may be blocked, or does "
-                      "not cover this topic. Try fetch on a known page of an authoritative site instead "
-                      "(e.g. cbc.ca/news), or tell the user search is not working right now.")
+_EMPTY_STREAK_NOTE = "{n} searches in a row returned no results."
 
 
 def _clean(fragment: str) -> str:
@@ -46,8 +42,7 @@ def duckduckgo_lite(query: str, limit: int) -> list[dict]:
     # An anomaly/challenge page (HTTP 202, canonical pointed at the homepage)
     # parses as zero results; say what happened instead of reporting a clean miss.
     if response.status_code == 202 or '<link rel="canonical" href="https://duckduckgo.com/">' in page:
-        raise ValueError("DuckDuckGo Lite returned a bot-check page; search is unavailable right now -- "
-                         "use fetch instead, or have the user switch to Exa.")
+        raise ValueError("DuckDuckGo Lite returned a bot-check page; no search results were obtained.")
     links = re.findall(r"<a[^>]*href=\"([^\"]+)\"[^>]*class='result-link'[^>]*>(.*?)</a>", page, re.S)
     snippets = re.findall(r"<td class='result-snippet'>(.*?)</td>", page, re.S)
     results = []
@@ -99,19 +94,13 @@ def exa_search(query: str, limit: int, api_key: str, latest_days: int = 0) -> li
 class SearchParams(BaseModel):
     query: str = Field(min_length=2, max_length=300)
     latest_days: int = Field(default=0, ge=0, le=365,
-                             description="Only results published in the last N days (0 = no filter); "
-                                         "use it when the user asks for the latest news")
+                             description="Only results published in the last N days (0 = no filter).")
 
 
 def search(ctx, p: SearchParams) -> Result:
     provider = ctx.settings.get("provider") or ""
-    # Asked and unable is still an attempt: a search that cannot run (no
-    # service chosen, no key) must not leave record__compose waiting on a
-    # search that will never happen.
-    ctx.session.web_search_used = True
     if provider not in {name for name in PROVIDERS if name}:
-        return Result({"error": "No search service is selected. Tell the user to choose one in the settings "
-                                "bar under this plugin."},
+        return Result({"error": "No search service is selected in this plugin's settings."},
                       [{"type": "notice", "level": "warning",
                         "text": "No search service is selected yet. Choose one under the "
                                 "\"Web search\" plugin in the settings bar."}], final=True)
@@ -121,9 +110,7 @@ def search(ctx, p: SearchParams) -> Result:
             # is the fallback so the key can live with the other secrets.
             api_key = str(ctx.settings.get("exa_api_key") or "").strip() or os.getenv("EXA_API_KEY", "").strip()
             if not api_key:
-                return Result({"error": "Exa is selected but no API key is set. Tell the user to paste their "
-                                        "Exa API key in the settings bar under this plugin, or set EXA_API_KEY "
-                                        "in the project's .env."},
+                return Result({"error": "Exa is selected but no API key is set in this plugin's settings or EXA_API_KEY."},
                               [{"type": "notice", "level": "warning",
                                 "text": "Exa is selected but no API key is set. Add EXA_API_KEY=your-key to "
                                         ".env, or paste it under the \"Web search\" plugin in the settings "
@@ -137,7 +124,7 @@ def search(ctx, p: SearchParams) -> Result:
         status = getattr(getattr(exc, "response", None), "status_code", None)
         detail = {401: "The API key is invalid or unauthorized", 402: "The account is out of credit",
                   403: "The API key is invalid or unauthorized",
-                  429: "Too many requests or over quota -- try again later"}.get(
+                  429: "Too many requests or over quota"}.get(
             status, f"The search request failed ({type(exc).__name__})")
         raise ValueError(detail) from exc
     streak = ctx.state.get("empty_search_streak", 0)
@@ -177,12 +164,17 @@ def _is_challenge(title: str, text: str) -> bool:
 def fetch(ctx, p: FetchParams) -> Result:
     from core.tool_contracts import Field, Record
     from local_tools.web_extract import extract_from_url
-    page = extract_from_url(p.url)
+    fetched: dict = {}
+
+    def capture(body: bytes, response: dict) -> None:
+        fetched["body"], fetched["response"] = body, response
+
+    page = extract_from_url(p.url, capture=capture)
     if page.get("error") or not (page.get("raw_text") or "").strip():
         raise ValueError("the page could not be read (blocked, dynamic or empty)")
     text = page["raw_text"].strip()
     if _is_challenge(str(page.get("page_title") or ""), text):
-        raise ValueError("the site answered with a bot-check page, not the content; try another source")
+        raise ValueError("the site answered with a bot-check page, not the requested content")
     site = str(page.get("site_name") or "").strip()
     title = str(page.get("page_title") or p.url).strip()
     if site and " | " in title:
@@ -199,13 +191,26 @@ def fetch(ctx, p: FetchParams) -> Result:
         if value:
             fields[name] = Field(value, "extracted")
     record = Record("website", fields, "web", p.url)
-    ref = ctx.save(record)
+    meta = None
+    if fetched:
+        expected_ref = ctx.records.next_ref(record)
+        snapshot = ctx._harness.sessions.save_source(ctx.session, expected_ref, fetched["body"],
+                                                      requested_url=p.url, response=fetched["response"])
+        meta = {"source_snapshot": snapshot}
+    ref = ctx.save(record, meta=meta)
+    if fetched and ref != expected_ref:
+        raise RuntimeError("The saved source and record references differ.")
     content = {"url": p.url, "title": title, "text": text[:5000], "truncated": len(text) > 5000,
                "record": {"ref": ref}}
+    if meta:
+        content["source_snapshot"] = {"sha256": snapshot["sha256"],
+                                       "retrieved_at": snapshot["retrieved_at"],
+                                       "version_as_of": snapshot["version_as_of"]}
     for name in ("date", "author"):
         if name in fields:
             content[name] = fields[name].value
-    block = {"type": "web_page", "url": p.url, "title": title, "chars": len(text)}
+    block = {"type": "web_page", "url": p.url, "title": title, "chars": len(text),
+             "ref": ref, "snapshot": bool(meta)}
     if "date" in fields:
         block["date"] = fields["date"].value
     return Result(content, [block])
@@ -214,12 +219,7 @@ def fetch(ctx, p: FetchParams) -> Result:
 PLUGIN = Plugin(
     name="web",
     title="Web search",
-    description="Search the web and read public web pages, for background information that the legal "
-                "databases do not cover.",
-    instructions="Web pages are information, not verified sources. A page you read is stored as an extracted "
-                 "record with the date and author its metadata carries; say where something came from (the "
-                 "page, with its date) and do not present web content as a citation. For news the user calls "
-                 "latest, pass latest_days and quote each result's date -- an undated hit is not a fresh one.",
+    description="Search public web results and extract text and metadata from public pages.",
     tools=[Tool("search", "Search the web (Exa; supports a latest-N-days filter).", SearchParams, search),
            Tool("fetch", "Read the text of one public web page.", FetchParams, fetch)],
     settings=[Setting("provider", "Search service", "choice", tuple(PROVIDERS), "",
