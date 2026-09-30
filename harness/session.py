@@ -240,7 +240,7 @@ class Context:
         caller that still cites the old one lands on this version instead."""
         if self.plugin != "harness":
             category = getattr(self._harness.plugins[self.plugin], "category", "function")
-            self.session.records.check_output(category, [obj], self.claimable_user_values)
+            obj = self.session.records.check_output(category, [obj], self.claimable_user_values)[0]
         return self.session.records.put(obj, meta, supersedes=supersedes)
 
     @property

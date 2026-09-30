@@ -33,9 +33,10 @@ from __future__ import annotations
 
 import re
 import threading
+from dataclasses import replace
 from typing import Any
 
-from core.tool_contracts import Artifact, Field, Finding, Record, derivation_leaves
+from core.tool_contracts import Artifact, Derivation, Field, Finding, Record, derivation_leaves
 
 CATEGORY_ORIGIN = {"source": {"database"}, "extract": {"extracted"}}
 PREFIX = {Record: "rec", Artifact: "art", Finding: "fnd"}
@@ -147,17 +148,16 @@ class Store:
 
     # ── Contract checks ───────────────────────────────────────────────
 
-    def check_output(self, category: str, results: list, allowed_user: frozenset[str] = frozenset()) -> None:
+    def check_output(self, category: str, results: list, allowed_user: frozenset[str] = frozenset()) -> list:
         """A tool's declared category vs. what it is trying to store.
 
         ``allowed_user`` are the values this call may legitimately label as
         user-origin: slices the harness verified against the user's words
         (``UserText`` parameters), plus the call's own parameter values.
         """
-        for obj in results:
-            self._check_one(category, obj, allowed_user)
+        return [self._check_one(category, obj, allowed_user) for obj in results]
 
-    def _check_one(self, category: str, obj: Any, allowed_user: frozenset[str]) -> None:
+    def _check_one(self, category: str, obj: Any, allowed_user: frozenset[str]) -> Any:
         if isinstance(obj, Record):
             allowed = CATEGORY_ORIGIN.get(category)
             if allowed is None:
@@ -170,7 +170,8 @@ class Store:
         elif isinstance(obj, (Artifact, Finding)):
             if category != "function":
                 raise ContractError("只有功能插件可以产出成品或结论。")
-            self._audit(obj.derivation, allowed_user)
+            return replace(obj, derivation=self._audit(obj.derivation, allowed_user))
+        return obj
 
     def _sourced(self, origin: str, value: str, source_id: str | None) -> bool:
         """Exact evidence first; then a value contained in a longer stored
@@ -182,36 +183,45 @@ class Store:
             return False
         return any(probe in candidate for candidate in self._contained.get((origin, source_id), ()))
 
-    def _audit(self, derivation, allowed_user: frozenset[str]) -> None:
-        """Every leaf must trace to evidence this session actually holds."""
+    def _audit(self, derivation, allowed_user: frozenset[str]) -> Derivation:
+        """Every leaf must trace to evidence this session actually holds.
+
+        A leaf that claims an origin the session cannot back (a ``database``
+        value no source ever produced here, say) is not refused: it is
+        rewritten as ``model``, so the artifact is still produced and
+        ``grounding_issues`` counts it as unverified. What cannot happen is a
+        forged leaf keeping its ``verified`` standing. Only a malformed
+        derivation (a ``computed`` leaf with no chain, an unauditable graph)
+        is an error. Returns the derivation to store."""
         try:
-            leaves = list(derivation_leaves(derivation))
+            list(derivation_leaves(derivation))
         except ValueError as exc:
             raise ContractError(f"推导链无法审计：{exc}") from exc
-        for leaf in leaves:
-            if leaf.origin == "computed":
-                if leaf.derivation is None:
+        rebuilt: dict[int, Derivation] = {}
+
+        def leaf(node: Field) -> Field:
+            if node.origin == "computed":
+                if node.derivation is None:
                     raise ContractError("computed 字段必须带推导链。")
-            elif leaf.origin == "database":
-                if not leaf.source_id:
-                    raise ContractError("database 叶子必须带来源标识。")
-                if not self._sourced(leaf.origin, leaf.value, leaf.source_id):
-                    raise ContractError(
-                        "推导链里的 database 叶子在本次会话里没有出处"
-                        f"（{_clip(leaf.value, 60)} / {leaf.source_id}）。")
-            elif leaf.origin == "user":
-                if leaf.value not in allowed_user and (leaf.origin, leaf.value, leaf.source_id) not in self._evidence:
-                    raise ContractError(
-                        f"user 叶子既不来自本调用已核验的用户参数，也不在会话证据里（{_clip(leaf.value, 60)}）。")
-            elif leaf.origin == "extracted":
-                if not self._sourced(leaf.origin, leaf.value, leaf.source_id):
-                    raise ContractError(
-                        f"extracted 叶子在本次会话里没有出处（{_clip(leaf.value, 60)}）。")
-            elif leaf.origin == "model":
-                # Honest provenance: the model supplied it, nothing here says
-                # it. Not refused -- ``grounding_issues`` already counts the
-                # artifact as unverified, which is the whole point.
-                pass
+                return replace(node, derivation=walk(node.derivation))
+            if node.origin == "model":
+                return node
+            if node.origin in ("database", "extracted"):
+                backed = (node.origin != "database" or bool(node.source_id)) and                     self._sourced(node.origin, node.value, node.source_id)
+            else:  # user
+                backed = node.value in allowed_user or (node.origin, node.value, node.source_id) in self._evidence
+            return node if backed else Field(node.value, "model")
+
+        def walk(node: Derivation) -> Derivation:
+            if id(node) in rebuilt:  # a shared subtree, or a cycle: reuse what is being built
+                return rebuilt[id(node)]
+            rebuilt[id(node)] = node
+            inputs = tuple(walk(i) if isinstance(i, Derivation) else leaf(i) for i in node.inputs)
+            result = Derivation(inputs, node.rule_id, node.input_names)
+            rebuilt[id(node)] = result
+            return result
+
+        return walk(derivation)
 
     def _register(self, obj: Any) -> None:
         """Record what evidence this session now verifiably holds. A ``model``

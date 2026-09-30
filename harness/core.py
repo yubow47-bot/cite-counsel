@@ -34,6 +34,7 @@ from harness import grounding, llm
 from harness.plugin import Plugin, Result, UserText, discover
 from harness.records import ContractError, _probe
 from harness.session import HISTORY_LIMIT, Context, Session, SessionStore
+from core.source_tools import SourceContractError
 from core.tool_contracts import Field as EvidenceField, Record
 from pydantic import BaseModel, Field, model_validator
 from typing import Literal
@@ -42,15 +43,28 @@ logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / ".chatbox-runtime" / "harness.json"
 MAX_STEPS = 20  # tool rounds per turn; a round that only loads plugins is free
+# The tool ran, but its answer can never become a usable result: rephrasing will
+# not help, so point the model at the other ways forward instead.
+NO_RETRY = ("retrying this tool will not help. Use another plugin (web, if enabled) or "
+            "record__compose, or tell the user what is missing.")
+# The one error worth repeating as it is: it says the failure may pass.
+TRANSIENT_ERROR = "the tool failed; try again later"
+# A failed call is not run again in the same turn with the same arguments.
+REPEATED_CALL = ("this exact call already failed this turn and would fail the same way. "
+                 "Change the arguments, use another tool, or reply to the user.")
+# Said to the model once the step budget is spent, for one last reply without tools.
+WRAP_UP = ("The tool budget for this turn is used up; no more tools can be called. Reply to "
+           "the user now: what you found, what failed and why, and what they can do next.")
 TOOL_CONTENT_LIMIT = 6000
 SEP = "__"  # model-facing tool names: plugin__tool (dots are not allowed there)
 FOLLOW_UP = (
     "\n\nThe tool results are now on the user's screen. If the user's request still needs another step "
     "(they asked for a citation and you only have the record, say), take it with the tools. Otherwise "
-    "reply to the user in one to three sentences: what you found or did, and what they can do next (e.g. which candidate is most likely what they "
-    "meant, and that they can pick it). You may mention facts that appear in the tool results; do not "
-    "add any that do not. Render a citation with the cite tool when you can; you may also write one "
-    "yourself from a record's fields, following the McGill rules -- say which record it came from.")
+    "reply to the user, briefly: what you found or did, and what they can do next (e.g. which candidate "
+    "is most likely what they meant, and that they can pick it). You may mention facts that appear in "
+    "the tool results; do not add any that do not. Render every citation with the cite tool. Write one "
+    "yourself only when cite cannot render it, following the McGill rules, and say it is hand-written, "
+    "which record it came from, and that it is unverified.")
 
 
 # Some models write their chain of thought as <think> tags inside ``content``
@@ -171,6 +185,18 @@ def _call_name(call: dict) -> str:
     return (call.get("function") or {}).get("name") or ""
 
 
+def _canonical_arguments(raw: Any) -> str:
+    """The same arguments written in another key order are the same call."""
+    try:
+        return json.dumps(json.loads(raw or "{}"), sort_keys=True, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(raw)
+
+
+def _is_error(result: Result) -> bool:
+    return isinstance(result.content, dict) and "error" in result.content
+
+
 def _strip_private(message: dict) -> dict:
     return {k: v for k, v in message.items() if not k.startswith("_")}
 
@@ -192,7 +218,7 @@ def _input_hints(text: str) -> str:
     found = [note for pattern, note in _INPUT_HINTS if pattern.search(text)]
     if not found:
         return ""
-    return "[输入提示: " + "; ".join(found) + ". These are only hints; decide yourself which plugin fits.]"
+    return "[Input hints: " + "; ".join(found) + ". These are only hints; decide yourself which plugin fits.]"
 
 
 class _Builtin:
@@ -294,7 +320,12 @@ def _compose(ctx, p: Compose) -> Result:
         # A field quoting a stored record (an uploaded file, a fetched page, a
         # database hit) means the source is already in hand -- there is
         # nothing for a web search to find first.
-        from_stored = any(item.source and _stored_record(ctx, item.source) for item in p.fields)
+        # The same goes for a field the user typed themselves (an interview, an
+        # unpublished manuscript): their own words are the source, and no search
+        # will find them.
+        from_stored = any(item.source and (_stored_record(ctx, item.source) or (
+            item.source.strip().lower() == "user" and ctx.user_said(item.quote or item.value)))
+            for item in p.fields)
         if web_available and not from_stored and not ctx.session.web_search_used:
             # A new record is for a source the databases lack; the web is tried first.
             return Result(
@@ -358,9 +389,10 @@ def _compose(ctx, p: Compose) -> Result:
 
 BUILTIN_TOOLS = (
     _Builtin("record__compose",
-             "Build a citation record in one call, for a source no stored record already covers. First: if a "
-             "stored record already IS the source (a fetched page, an extracted file, a database hit), cite that "
-             "record directly -- do not rebuild it. Pass record_type and every field at once, each as "
+             "Build a citation record in one call. Use it when no stored record covers the source, or when a stored "
+             "record holds only source text (an uploaded file, a page's body) whose citation details you can read "
+             "from it -- then give that record as each field's source. If a stored record already has the fields a "
+             "citation needs (a database hit), cite it directly instead; do not rebuild it. Pass record_type and every field at once, each as "
              "{name, value, source, quote} in a list: source is the record you read the value from (rec_N) or \"user\" for the "
              "user's own words; quote is the exact words in that source containing the value. A field whose "
              "quote checks out keeps that source's origin; one without a source is written as model-supplied, "
@@ -509,17 +541,21 @@ class Harness:
         waiting = [p for p in enabled if p.name not in session.loaded]
         lines = [
             "You are the assistant of Cite Counsel, a workspace for legal research and writing. "
-            "Reply in the language of the user's latest message, in one to three short sentences.",
+            "Keep replies short (usually one to three sentences); take more room when you must explain "
+            "a failure, what is missing, or what the user can do next.",
             "You act only through plugins. A plugin's tools become available after you call "
             "load_plugin; load only what this request needs.",
-            "Results the tools show the user are authoritative. Do not restate or alter their facts "
-            "in your reply, and never invent facts, sources, citations, dates or numbers. If no "
-            "plugin can do what is asked, say so plainly.",
-            "Cite what you actually found. A stored record -- a database hit, a fetched page, an extracted "
-            "file -- is citable as it is: cite it directly. Build a record with record__compose only when "
-            "no stored record is the source, and then quote, for each field, the words you read it from. "
-            "An extracted file often already states its own citation (a cover page's \"Citation:\" line, "
-            "the title and author on its first page): build the record from that text directly.",
+            "Results the tools show the user are authoritative. You may repeat their facts exactly as "
+            "shown; never alter them, add any that do not appear there, or invent facts, sources, "
+            "citations, dates or numbers. If no plugin can do what is asked, say so plainly.",
+            "Cite what you actually found. If a stored record already has the fields a citation needs (a "
+            "database hit, a page whose metadata gives its title and date), cite it directly with the cite "
+            "tool; do not rebuild it. If a stored record holds only source text (an uploaded file, a "
+            "page's body) and the citation details are written in that text -- a cover page's \"Citation:\" "
+            "line, the title and author on its first page -- use record__compose to turn that text into a "
+            "citable record: give every field with that stored record as its source and the exact words you "
+            "read it from. Use record__compose with no stored source only when nothing stored covers the "
+            "source at all.",
             "A lookup elsewhere is a check, not the answer: compare what it returns -- author, title, year -- "
             "with what you are verifying. A result that does not match is a different work: do not cite it; "
             "say it did not match and use what you already have.",
@@ -527,6 +563,12 @@ class Harness:
             "alone, the name alone), or load another plugin that could plausibly hold it. If what you find "
             "is only a report about a source (a news story about a decision), say that the source itself "
             "was not found and offer to cite the report -- do not present the report as the decision.",
+            "An error that carries a \"retry\" note means the tool cannot help with this request: do not "
+            "repeat it in another form; take another route (another plugin, record__compose) or tell the "
+            "user what is missing.",
+            "If a citation still lacks required fields and no source you hold has them, list what is "
+            "missing (the mcgill missing tool does this) and ask the user for it. Do not guess a value "
+            "to fill a gap.",
         ]
         latest = next((t for t in reversed(session.user_texts()) if t.strip()), "")
         # Chinese characters in the latest message are the one clear signal;
@@ -638,13 +680,37 @@ class Harness:
             # The plugin stores evidence itself (ctx.save) and answers with refs.
             result = tool.handler(ctx, params)
         except ContractError as exc:
-            return name, Result({"error": "contract violation", "details": str(exc)})
+            return name, Result({"error": "contract violation", "details": str(exc), "retry": NO_RETRY})
+        except SourceContractError as exc:
+            return name, Result({"error": str(exc), "retry": NO_RETRY})
         except ValueError as exc:
             return name, Result({"error": str(exc)})
         except Exception as exc:  # A plugin failure must not take the turn down.
             logger.warning("Tool %s failed: %s", name, type(exc).__name__, exc_info=True)
-            return name, Result({"error": "the tool failed; try again later"})
+            return name, Result({"error": TRANSIENT_ERROR})
         return name, result
+
+    def _execute_once(self, session: Session, call: dict, failed: dict) -> tuple[str, Result]:
+        """``_execute``, except a call that already failed this turn with the
+        same arguments is answered from that failure instead of being run
+        again. The model is told, and keeps its tools; only the step budget
+        ends the turn."""
+        function = call.get("function") or {}
+        key = (function.get("name") or "", _canonical_arguments(function.get("arguments")))
+        if key in failed:
+            return key[0], Result({"error": REPEATED_CALL, "previous_error": failed[key]})
+        name, result = self._execute(session, call)
+        if not _is_error(result):
+            # Something changed (a plugin loaded, a search done): what failed
+            # before may work now, so earlier failures no longer block a retry.
+            failed.clear()
+        elif result.content["error"] != TRANSIENT_ERROR:
+            failed[key] = result.content["error"]
+        return name, result
+
+    def _wrap_up_history(self, session: Session) -> list[dict]:
+        return [{"role": "system", "content": self._system_prompt(session, False)},
+                *self._history(session), {"role": "user", "content": WRAP_UP}]
 
     def _run_builtin(self, session: Session, builtin: _Builtin, arguments: Any, name: str) -> tuple[str, Result]:
         ctx = Context(session, "harness", self)
@@ -658,7 +724,7 @@ class Harness:
             return name, Result({"error": str(exc)})
         except Exception as exc:
             logger.warning("Tool %s failed: %s", name, type(exc).__name__, exc_info=True)
-            return name, Result({"error": "the tool failed; try again later"})
+            return name, Result({"error": TRANSIENT_ERROR})
         return name, result
 
     def _prepare_params(self, ctx: Context, params: Any) -> Any:
@@ -756,14 +822,14 @@ class Harness:
         # (a page range, a year) off as something the user typed. Kept as
         # its own _note message: visible to the model, invisible to
         # user_said()'s grounding check.
-        notes = [f"[附件 {aid}: {session.attachments[aid]['name']}]" for aid in attachments
+        notes = [f"[Attachment {aid}: {session.attachments[aid]['name']}]" for aid in attachments
                  if aid in session.attachments]
         if notes:
             session.messages.append({"role": "user", "_note": True, "content": "\n".join(notes)})
 
     def _turn(self, session: Session) -> list[dict]:
         blocks: list[dict] = []
-        failures = 0
+        failed: dict = {}
         steps = 0
         follow_up = False
         # Loading is bounded by the plugin count, so free loads still end.
@@ -787,32 +853,28 @@ class Harness:
                 return blocks
             if any(_call_name(c) != "load_plugin" for c in calls):
                 steps += 1
-            all_final, all_failed = True, True
+            all_final = True
             for call in calls:
-                name, result = self._execute(session, call)
+                name, result = self._execute_once(session, call, failed)
                 plugin_name = name.partition(SEP)[0]
                 if name != "load_plugin":
                     blocks.append({"type": "activity", "plugin": plugin_name,
                                    "text": self.plugins[plugin_name].title if plugin_name in self.plugins else name,
-                                   "tool": name.partition(SEP)[2], "error": isinstance(result.content, dict)
-                                   and "error" in result.content})
+                                   "tool": name.partition(SEP)[2], "error": _is_error(result)})
                 blocks.extend({"plugin": plugin_name, **block} for block in result.blocks)
                 content = json.dumps(result.content, ensure_ascii=False, default=str)
                 session.messages.append({"role": "tool", "tool_call_id": call["id"],
                                          "content": content[:TOOL_CONTENT_LIMIT]})
                 all_final = all_final and result.final and name != "load_plugin"
-                all_failed = all_failed and isinstance(result.content, dict) and "error" in result.content
-            failures = failures + 1 if all_failed else 0
-            if failures >= 2:
-                # The model is retrying the same dead end; stop instead of burning steps.
-                blocks.append({"type": "notice", "level": "warning",
-                               "text": "The tool failed twice in a row, so this stopped. Try rephrasing, or use the results above directly."})
-                return blocks
             # A final result is ready to show, not the end of the request: the
             # model keeps its tools and either takes the next step (a citation
             # from the record it just got) or replies. The step budget bounds it.
             follow_up = all_final
-        blocks.append({"type": "notice", "level": "warning", "text": "Too many steps this round, so this stopped. Try rephrasing."})
+        blocks.append({"type": "notice", "level": "warning", "text": "This turn reached its step limit."})
+        message = llm.chat(self.config["model"], self._wrap_up_history(session), [])
+        reply, _ = _split_thinking(message.get("content") or "")
+        session.messages.append({"role": "assistant", "content": reply})
+        self._add_caption(session, reply, blocks)
         return blocks
 
     def run_turn_stream(self, session: Session, text: str, attachments: list[str] = ()):
@@ -829,7 +891,7 @@ class Harness:
             self.sessions.save(session)
 
     def _turn_events(self, session: Session):
-        failures = 0
+        failed: dict = {}
         steps = 0
         follow_up = False
         # Loading is bounded by the plugin count, so free loads still end.
@@ -877,29 +939,34 @@ class Harness:
                 return
             if any(_call_name(c) != "load_plugin" for c in calls):
                 steps += 1
-            all_final, all_failed = True, True
+            all_final = True
             for call in calls:
-                name, result = self._execute(session, call)
+                name, result = self._execute_once(session, call, failed)
                 plugin_name = name.partition(SEP)[0]
                 if name != "load_plugin":
                     yield "block", {"type": "activity", "plugin": plugin_name,
                                     "text": self.plugins[plugin_name].title if plugin_name in self.plugins else name,
-                                    "tool": name.partition(SEP)[2], "error": isinstance(result.content, dict)
-                                    and "error" in result.content}
+                                    "tool": name.partition(SEP)[2], "error": _is_error(result)}
                 for block in result.blocks:
                     yield "block", {"plugin": plugin_name, **block}
                 content = json.dumps(result.content, ensure_ascii=False, default=str)
                 session.messages.append({"role": "tool", "tool_call_id": call["id"],
                                          "content": content[:TOOL_CONTENT_LIMIT]})
                 all_final = all_final and result.final and name != "load_plugin"
-                all_failed = all_failed and isinstance(result.content, dict) and "error" in result.content
-            failures = failures + 1 if all_failed else 0
-            if failures >= 2:
-                yield "block", {"type": "notice", "level": "warning",
-                                "text": "The tool failed twice in a row, so this stopped. Try rephrasing, or use the results above directly."}
-                return
             follow_up = all_final
-        yield "block", {"type": "notice", "level": "warning", "text": "Too many steps this round, so this stopped. Try rephrasing."}
+        yield "block", {"type": "notice", "level": "warning", "text": "This turn reached its step limit."}
+        message: dict = {}
+        for kind, payload in llm.chat_stream(self.config["model"], self._wrap_up_history(session), []):
+            if kind == "reasoning" and payload:
+                yield "thinking_delta", payload
+            elif kind == "done":
+                message = payload
+        reply, _ = _split_thinking(message.get("content") or "")
+        session.messages.append({"role": "assistant", "content": reply})
+        closing: list[dict] = []
+        self._add_caption(session, reply, closing)
+        for block in closing:
+            yield "block", block
 
     def run_action(self, session: Session, plugin_name: str, action: str, payload: dict) -> list[dict]:
         """A button in a plugin's UI: deterministic, no model call."""

@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from core.tool_contracts import Artifact, Derivation, Field, Finding, Record, is_grounded
+from core.tool_contracts import Artifact, Derivation, Field, Finding, Record, derivation_leaves, is_grounded
 from harness.core import Harness
 from harness.plugin import discover
 from harness.session import Context
@@ -202,13 +202,18 @@ def fabricated(kind: str = "database"):
                     Derivation((Field("R v Fabricated", kind, source_id="nowhere:1"),), "cite.render.v1", ("x",)))
 
 
-def test_a_fabricated_database_leaf_is_refused():
+def leaf_origins(session, ref):
+    return [leaf.origin for leaf in derivation_leaves(session.records.get(ref).derivation)]
+
+
+def test_a_fabricated_database_leaf_is_stored_as_unverified():
+    """Not refused -- the user still gets the artifact -- but the forged leaf
+    loses its "database" standing, so the artifact cannot count as verified."""
     h, session = make()
     ctx = ctx_for(h, session, "mcgill")
-    with pytest.raises(Exception) as exc:
-        ctx.save(fabricated("database"))
-    assert "没有出处" in str(exc.value)
-    assert session.records.all(Artifact) == []
+    ref = ctx.save(fabricated("database"))
+    assert leaf_origins(session, ref) == ["model"]
+    assert not is_grounded(session.records.get(ref).derivation)
 
 
 def test_a_stored_field_passes_the_audit_but_only_as_stored():
@@ -233,26 +238,23 @@ def test_a_computed_leaf_without_a_derivation_is_refused():
     assert "推导链" in str(exc.value)
 
 
-def test_a_user_leaf_from_thin_air_is_refused():
+def test_a_user_leaf_from_thin_air_is_stored_as_unverified():
     h, session = make()
     session.records.put(gladue_record())
     ctx = ctx_for(h, session, "mcgill")
-    bad = Artifact("x", "y", Derivation((Field("the user said this", "user"),), "cite.render.v1"))
-    with pytest.raises(Exception) as exc:
-        ctx.save(bad)
-    assert "user 叶子" in str(exc.value)
+    ref = ctx.save(Artifact("x", "y", Derivation((Field("the user said this", "user"),), "cite.render.v1")))
+    assert leaf_origins(session, ref) == ["model"]
 
 
 def test_an_extracted_leaf_needs_session_evidence():
     h, session = make()
     ctx = ctx_for(h, session, "mcgill")
     bad = Artifact("x", "y", Derivation((Field("scanned text", "extracted"),), "cite.render.v1"))
-    with pytest.raises(Exception) as exc:
-        ctx.save(bad)
-    assert "extracted" in str(exc.value)
+    assert leaf_origins(session, ctx.save(bad)) == ["model"]
     # Once a file extraction stored it, the same value traces.
     session.records.put(Record("document", {"text": Field("scanned text", "extracted")}, "file", "att_1"))
-    ctx.save(Artifact("x", "y", Derivation((Field("scanned text", "extracted"),), "cite.render.v1")))
+    ref = ctx.save(Artifact("x", "y", Derivation((Field("scanned text", "extracted"),), "cite.render.v1")))
+    assert leaf_origins(session, ref) == ["extracted"]
 
 
 def test_every_record_type_a_source_produces_has_a_mcgill_rule():
@@ -285,10 +287,9 @@ def test_a_leaf_read_out_of_a_stored_page_passes_the_audit():
                             Derivation((Field("26 May 1932", "extracted", source_id="https://case.report"),),
                                        "cite.render.v1", ("date",))))
     assert ref == "art_2"
-    with pytest.raises(Exception) as exc:
-        ctx.save(Artifact("x", "y", Derivation(
-            (Field("31 December 2099", "extracted", source_id="https://case.report"),), "cite.render.v1")))
-    assert "没有出处" in str(exc.value)
+    ref = ctx.save(Artifact("x", "y", Derivation(
+        (Field("31 December 2099", "extracted", source_id="https://case.report"),), "cite.render.v1")))
+    assert leaf_origins(session, ref) == ["model"]
 
 
 def test_a_database_leaf_quoted_from_stored_full_text_passes():
@@ -303,13 +304,12 @@ def test_a_database_leaf_quoted_from_stored_full_text_passes():
         (Field("conditional sentencing regime in 1996", "database", source_id=URL),), "cite.render.v1")))
 
 
-def test_a_database_leaf_from_a_different_source_id_still_fails():
+def test_a_database_leaf_from_a_different_source_id_is_downgraded():
     h, session = make()
     session.records.put(Record("jurisprudence", {
         "full_text": Field(TEXT, "database", source_id=URL),
     }, "a2aj", "c1"))
     ctx = ctx_for(h, session, "mcgill")
-    with pytest.raises(Exception) as exc:
-        ctx.save(Artifact("x", "y", Derivation(
-            (Field("conditional sentencing regime in 1996", "database", source_id="a2aj:other"),), "cite.render.v1")))
-    assert "没有出处" in str(exc.value)
+    ref = ctx.save(Artifact("x", "y", Derivation(
+        (Field("conditional sentencing regime in 1996", "database", source_id="a2aj:other"),), "cite.render.v1")))
+    assert leaf_origins(session, ref) == ["model"]
