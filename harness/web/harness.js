@@ -399,5 +399,14 @@
   };
   document.addEventListener('dragover', event => event.preventDefault());
   document.addEventListener('drop', event => { event.preventDefault(); upload(event.dataTransfer.files[0]); });
+  // No chat-history feature exists yet, so a page load starts a fresh chat:
+  // a session left in localStorage would otherwise stay live on the server
+  // (the model still reading turns the empty page no longer shows). Same
+  // path as New chat: delete it server-side, best-effort, then forget it.
+  if (session) {
+    const stale = session;
+    saveSession(null);
+    post('/api/sessions/close', {session_id: stale.id, session_token: stale.token}).catch(() => {});
+  }
   loadConfig();
 })();
