@@ -1,12 +1,48 @@
 # Cite Counsel Harness
 
-An experimental agent harness for legal work. It keeps materials, model decisions, tool calls and source provenance together for review.
+[![CI](https://github.com/yubow47-bot/cite-counsel/actions/workflows/ci.yml/badge.svg)](https://github.com/yubow47-bot/cite-counsel/actions/workflows/ci.yml)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+An agent harness for legal research. The model decides how to investigate and draft; the harness checks every tool call and keeps each fact tied to where it came from, so a reviewer can see what was supplied, what was retrieved and what still needs checking.
+
+| | |
+| --- | --- |
+| **The problem** | Language models write plausible legal citations and quotations. A reader cannot tell which parts came from a real source and which were generated. |
+| **The approach** | Tools return stored records with source identity (`rec_N`). Citations, quotations and bibliographies are built by code from those records, and each value keeps its origin. The harness scans the final reply and marks unsourced claims. |
+| **What it looks like** | A local chat UI. The model chooses among tools for Canadian case law, federal bills, Crossref, Open Library, file and web extraction, and McGill citation formatting. Result cards and source annotations appear next to the answer. [An example](#example-what-a-check-returns) is below. |
+| **Stack** | Python 3.11+, FastAPI, Pydantic, vanilla JS front end, OpenRouter-compatible models. A plugin system with typed tool contracts. |
+| **How well it works** | 400+ automated tests cover the tool contracts, provenance rules, citation identity, extraction, reply annotations and persistence; CI runs them on Python 3.11 and 3.12. External services are mocked, and there is no accuracy benchmark on live legal research yet. |
+| **Run it** | Build the Docker image locally, or set up Python with three commands. See [Quick start](#quick-start). |
+
+> Research aid. Review the original sources, the applicable law and the official McGill Guide before relying on an output. Grounding means traceability here; it does not establish legal correctness.
+
+## Example: what a check returns
+
+The deterministic checks run without a model or network. This is output from `core/quote_check.py` and `core/mcgill_format.py` on an invented three-paragraph judgment:
+
+```python
+>>> text = "[1] Intro.\n\n[2] The party seeking to uphold a limit must show it is demonstrably justified.\n\n[3] Other."
+>>> locate(text, "The party seeking to uphold a limit must show it is demonstrably justified")
+exact, pinpoint "at para 2"      # paragraph number read from the source text
+>>> locate(text, "the party seeking to uphold a limit must show it is demonstrably justified")
+case_differs, "at para 2"        # McGill needs an exact quotation, so case is reported
+>>> locate(text, "The party must show it is justified")
+not_found                         # a paraphrase is not accepted as a quotation
+
+>>> render_fields("jurisprudence", {"style_of_cause": "R v Oakes", "reporter": "[1986] 1 SCR 103", "pinpoint": "at para 69"})
+"*R v Oakes*, [1986] 1 SCR 103 at para 69."
+>>> render_fields("jurisprudence", {"style_of_cause": "R v Oakes"})
+ValueError: Still needed: Neutral citation (if the source has one) or Reporter citation (year, volume and page)
+```
+
+In the UI, the same checks run when the model calls the tools. A citation is marked `verified` only when every value in it traces to a database record with a source identity.
+
+## Why a harness
 
 Legal research requires the right authority and a careful reading of the relevant passage. The reader needs to know which facts were supplied, which came from retrieved evidence, and what still needs checking. Cite Counsel gives the model a shared execution loop and a session evidence store. The model chooses how to investigate and draft. The harness checks tool access, parameters and provenance, and keeps the exchanges that led to the answer.
 
 The harness stores source identity and document context so readers can review how material was used. They still have to judge jurisdiction, version, authority and whether a passage supports its use in context. Keeping the material and its origins makes those decisions open to inspection; it cannot guarantee they are correct.
-
-> Experimental research aid. Review the original sources, the applicable law and the official McGill Guide before relying on an output. Grounding means traceability here; it does not establish legal correctness.
 
 ## Harness architecture
 
@@ -92,6 +128,17 @@ In the chat UI, users can supply an authority or upload material and ask the mod
 
 ## Quick start
 
+### Docker
+
+```bash
+docker build -t cite-counsel .
+docker run --rm -p 127.0.0.1:8001:8001 -e OPENROUTER_API_KEY=your-key cite-counsel
+```
+
+Open <http://127.0.0.1:8001>. Session files stay inside the container and disappear with it. The image has not been published to a registry; build it locally.
+
+### Python
+
 Use Python 3.11+ in the project directory:
 
 ```powershell
@@ -169,7 +216,11 @@ To run the tests, install the test dependencies in the same environment:
 
 Tests cover tool and plugin contracts, provenance, citation identity, extraction, reply annotations and persistence. Most external services are mocked; passing tests do not establish live API or model availability.
 
-MCP integration and more detailed source review in the UI are future directions. Neither is claimed as a current capability.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for plugin and pull request guidelines.
+
+## Roadmap
+
+Not yet implemented: MCP integration, more detailed source review in the UI, and raw-response snapshots for the source plugins beyond web fetch.
 
 ## License and notices
 

@@ -1,0 +1,11 @@
+.git
+.venv
+.venv_new
+.uv-cache
+.pytest_cache
+__pycache__
+.chatbox-runtime
+sessions
+.env
+config/chatbox.local.json
+.claude
