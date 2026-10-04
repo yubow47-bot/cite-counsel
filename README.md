@@ -1,10 +1,10 @@
 # Cite Counsel Harness
 
-An experimental agent harness for legal work: bringing materials, model judgment, tool calls and source provenance into one reviewable workflow.
+An experimental agent harness for legal work. It keeps materials, model decisions, tool calls and source provenance together for review.
 
-Legal research asks more than whether an assistant can produce a fluent answer. It needs to identify the right authority, read the relevant passage, distinguish supplied facts from retrieved evidence, and show what still needs checking. Cite Counsel gives the model a shared execution loop and a session evidence store for doing that work. The model chooses how to investigate and draft; the harness checks tool access, parameters and provenance, and retains the exchanges behind the answer.
+Legal research requires the right authority and a careful reading of the relevant passage. The reader needs to know which facts were supplied, which came from retrieved evidence, and what still needs checking. Cite Counsel gives the model a shared execution loop and a session evidence store. The model chooses how to investigate and draft. The harness checks tool access, parameters and provenance, and keeps the exchanges that led to the answer.
 
-The design treats source identity, document context and reviewability as engineering requirements. Legal relevance still requires judgment about jurisdiction, version, authority and the use of a passage in context. The harness preserves material and its origins so those decisions can be inspected; it does not automate their correctness.
+The harness stores source identity and document context so readers can review how material was used. They still have to judge jurisdiction, version, authority and whether a passage supports its use in context. Keeping the material and its origins makes those decisions open to inspection; it cannot guarantee they are correct.
 
 > Experimental research aid. Review the original sources, the applicable law and the official McGill Guide before relying on an output. Grounding means traceability here; it does not establish legal correctness.
 
@@ -37,21 +37,21 @@ flowchart TB
     T -->|"Result cards"| OUT
 ```
 
-The arrows summarize responsibilities: the model requests actions, and the harness checks access and parameters before executing them. Tool results return to the shared loop; the harness receives final reply text and applies grounding before display. Structured result cards reach the UI through the local API.
+The model requests actions; the harness checks access and parameters, then executes them. Tool results return to the shared loop. The harness checks the final reply with grounding before displaying it, and sends structured result cards to the UI through the local API.
 
-The model reads an optional Markdown Skill for a method, loads an enabled plugin to expose its tool schemas, and chooses tool calls or a reply. Skills and tools are independent: reading a method does not execute a tool. Enabling a plugin makes it available for selection; it does not run automatically.
+The model can read a Markdown Skill for a method, request an enabled plugin to load its tool schemas, or choose a tool call or reply. Reading a Skill does not execute a tool. An enabled plugin is available for the model to select and runs only when called.
 
-The harness validates calls and stores results by reference (`rec_N`, `art_N`, and findings). Tools receive stored objects rather than relying on the model to repeat their metadata. Tool summaries enter the conversation; structured blocks become UI cards. The model can continue investigating after a tool produces an artifact.
+The harness validates calls and stores results by reference (`rec_N`, `art_N`, and findings). Tools read the stored objects, so the model does not have to repeat their metadata. Summaries enter the conversation and structured blocks appear as UI cards. The model can keep investigating after a tool produces an artifact.
 
-McGill formatting is deterministic code using local templates; quotation comparison, bibliography assembly and date arithmetic are also tool operations. Source verification is computed from stored derivations separately from formatting.
+Code handles McGill formatting with local templates. Tools also compare quotations, build bibliographies and calculate dates. Source verification comes from stored derivations and is checked separately from formatting.
 
-This separation reflects a practical legal workflow: retrieve and inspect the material, use code for repeatable operations, and leave interpretation and the decision to rely on an authority open to review.
+The researcher can inspect retrieved material and review the interpretation before deciding to rely on an authority. Code handles the repeatable operations in that work.
 
 ### Execution and extension contracts
 
-The streamed and non-streamed interfaces use the same turn generator. `Result.content` returns references and summaries to model history, while `Result.blocks` carries UI output. A turn permits at most 20 counted tool rounds; plugin-loading-only rounds are excluded from that count, with total iterations still bounded. Producing an artifact does not force the model to stop investigating.
+The streamed and non-streamed interfaces use the same turn generator. `Result.content` sends references and summaries to model history; `Result.blocks` carries UI output. A turn allows at most 20 counted tool rounds. Rounds that only load plugins do not count toward that limit, but total iterations are still bounded. The model can continue after an artifact is produced.
 
-Each plugin tool declares a Pydantic parameter model and a `handler(ctx, params) -> Result`. `Context` supplies session-scoped records, plugin state and settings. `ctx.records.get(ref)` reads a stored object; `ctx.save(obj, meta)` checks the plugin category and audits derivations before storing it. Category violations or malformed derivations raise `ContractError`; an unsupported provenance claim in a derivation is downgraded to `model` rather than retained as verified.
+Each plugin tool declares a Pydantic parameter model and a `handler(ctx, params) -> Result`. `Context` provides records for the session, plugin state and settings. `ctx.records.get(ref)` reads a stored object. `ctx.save(obj, meta)` checks the plugin category and audits derivations before saving it. Category violations or malformed derivations raise `ContractError`. Unsupported provenance claims in a derivation are downgraded to `model`, so they cannot retain verified status.
 
 | Plugin category | Stored output contract | Implemented examples |
 | --- | --- | --- |
@@ -59,7 +59,7 @@ Each plugin tool declares a Pydantic parameter model and a `handler(ctx, params)
 | `extract` | Records with extracted-origin fields | File and web extraction |
 | `function` | Artifacts and Findings with audited derivation chains | McGill, quotation checks, bibliography, deadlines |
 
-The contract vocabulary is explicit: `Field` carries a value and origin; `Record` identifies a source and its fields; `Artifact` and `Finding` retain a `Derivation` of their inputs. `record__read(ref, field, offset, limit)` exposes at most 4,000 characters per call so the model can inspect longer material in slices.
+`Field` holds a value and its origin. `Record` identifies a source and its fields; `Artifact` and `Finding` keep a `Derivation` of their inputs. With `record__read(ref, field, offset, limit)`, the model can read longer material in slices of up to 4,000 characters per call.
 
 ### What the checks mean
 
@@ -74,21 +74,21 @@ Fields carry five origins: `database` for database-returned values, `extracted` 
 
 `record__compose` checks proposed field values and supporting quotes against stored sources or user input. Unsupported values remain labelled `model`; invalid field shapes are rejected. Copying a passage from database full text yields extracted material, and mixing source identities does not preserve database verification. Function plugins cannot gain verified status merely by asserting a database origin.
 
-These contracts audit trusted plugin outputs. Installed plugins execute Python code without a sandbox, so they remain part of the trust boundary.
+The contracts audit outputs from trusted plugins. Installed plugins run Python code without a sandbox and remain part of the trust boundary.
 
 ### Records, history and source snapshots
 
-Sessions persist locally under `.chatbox-runtime/sessions/`: an atomic JSON snapshot, an append-only model/tool event log, attachments, and saved web responses. The log records what was sent to and returned by the model and tools; it supports inspection, not deterministic replay or external tamper proofing.
+Sessions are stored locally under `.chatbox-runtime/sessions/`. Each has an atomic JSON snapshot, an append-only model/tool event log, attachments and saved web responses. The log records requests and responses for inspection. It does not provide deterministic replay or external tamper proofing.
 
-The backend can restore an unexpired session after a service restart when presented with its ID and token, preserving record references. The current UI starts a fresh chat on page load and attempts to delete the previous session; it does not restore visible chat history. Only the token hash is stored on the server. Sessions have a four-hour idle lifetime; startup sweeps expired files and caps retained sessions. **New chat deletes the previous session**, including its stored materials; this is not a chat archive.
+The backend can restore an unexpired session after a service restart using its ID and token. Record references remain valid. The UI currently starts a fresh chat on page load and attempts to delete the previous session, so it does not restore visible chat history. The server stores only the token hash. Sessions expire after four hours idle; startup cleanup removes expired files and caps the number retained. New chat deletes the previous session and its stored materials. There is no chat archive.
 
 Successful web fetches save response bytes, retrieval metadata and a hash. The UI can open those saved responses through session-authorized source links. Raw-response snapshots are not yet connected for the other source plugins. Retrieval time does not establish a statute's version date.
 
 ## A plugin example: McGill citation
 
-The McGill plugin demonstrates the extension path: source records enter deterministic templates in [mcgill_rules.json](mcgill_rules.json), missing-field checks guide completion, and citation artifacts retain the fields used in their derivations. The quote plugin can supply a pinpoint tied to the cited work; the bibliography plugin consumes stored citations. Formatting and source verification remain separate. The implemented schemas and selected fixed statutory forms do not cover every McGill Guide rule or verify legal applicability.
+The McGill plugin uses source records and deterministic templates in [mcgill_rules.json](mcgill_rules.json) to render citations. It checks for missing fields and stores the fields used in each citation artifact's derivation. The quote plugin can supply a pinpoint tied to the cited work, and the bibliography plugin uses stored citations. Formatting is checked separately from source verification. The schemas and selected fixed statutory forms do not cover every McGill Guide rule or establish legal applicability.
 
-In the chat UI, a user can supply an authority or uploaded material and ask for a passage to be reviewed with its sources. The model selects available tools, and findings, cards and annotations accompany the answer when produced. This describes intended use, not a recorded demo or a guaranteed successful lookup.
+In the chat UI, users can supply an authority or upload material and ask the model to review a passage with its sources. The model selects from the available tools. Any findings, cards and annotations produced during the session accompany the answer. This is an example of intended use; it is not a recorded demo, and lookups can fail.
 
 ## Quick start
 
@@ -114,10 +114,10 @@ Defaults below apply before saved user settings.
 
 | Plugin | Category | Default | Capability |
 | --- | --- | --- | --- |
-| `a2aj` | source | on | Find Canadian cases and legislation; retrieve case full text |
-| `legisinfo` | source | on | Find federal bills through LEGISinfo |
-| `crossref` | source | on | Retrieve article metadata by DOI or title |
-| `openlibrary` | source | on | Retrieve book metadata by ISBN or title |
+| [`a2aj`](https://law.a2aj.ca/) | source | on | Find Canadian cases and legislation; retrieve case full text |
+| [`legisinfo`](https://www.parl.ca/legisinfo/en/) | source | on | Find Canadian federal bills through LEGISinfo |
+| [`crossref`](https://www.crossref.org/documentation/retrieve-metadata/rest-api/) | source | on | Retrieve article metadata by DOI or title |
+| [`openlibrary`](https://openlibrary.org/developers/api) | source | on | Retrieve book metadata by ISBN or title |
 | `file` | extract | on | Extract uploaded PDF, DOCX, PPTX, XLSX and image content |
 | `web` | extract | off | Search and fetch public pages with SSRF protection |
 | `mcgill` | function | on | Render citations and report missing fields |
@@ -150,7 +150,7 @@ Source plugins produce database-origin records; extract plugins produce extracte
 | `plugins/`, `local_tools/` | Tool plugins and database, web and file adapters |
 | `core/`, `mcgill_rules.json` | Deterministic formatting, bibliography, quote checks and supporting logic |
 
-A plugin exports `PLUGIN` from `plugins/<name>/__init__.py` or the `citecounsel.plugins` entry point. Its interface separates callable tools from optional methods and presentation:
+A plugin exports `PLUGIN` from `plugins/<name>/__init__.py` or the `citecounsel.plugins` entry point. The interface has separate declarations for callable tools, optional methods and presentation:
 
 | Declaration | Responsibility |
 | --- | --- |
@@ -160,7 +160,7 @@ A plugin exports `PLUGIN` from `plugins/<name>/__init__.py` or the `citecounsel.
 | `ui` / `settings` | Optional plugin rendering and configuration |
 | `fact_patterns` | Domain patterns used by reply traceability checks |
 
-`UserText` marks parameters intended to contain the user's words; the harness checks them against user messages before execution. Merely passing a model argument does not establish user provenance. Skills are loaded as optional Markdown methods separately from tool schemas. Plugins are discovered at startup, without hot reload; see [HARNESS.md](docs/HARNESS.md) for the complete contract and the remaining McGill-specific registration coupling in `record__compose`.
+`UserText` marks parameters that should contain the user's words. The harness checks them against user messages before execution; a model argument alone cannot establish user provenance. Skills load as optional Markdown methods separately from tool schemas. Plugins are discovered at startup and do not hot reload. See [HARNESS.md](docs/HARNESS.md) for the full contract and the remaining McGill-specific registration coupling in `record__compose`.
 
 To run the tests, install the test dependencies in the same environment:
 
@@ -171,7 +171,7 @@ To run the tests, install the test dependencies in the same environment:
 
 Tests cover tool and plugin contracts, provenance, citation identity, extraction, reply annotations and persistence. Most external services are mocked; passing tests do not establish live API or model availability.
 
-Future directions include MCP integration and richer source review in the UI. These are design directions rather than claims of current support.
+MCP integration and more detailed source review in the UI are future directions. Neither is claimed as a current capability.
 
 ## License and notices
 
