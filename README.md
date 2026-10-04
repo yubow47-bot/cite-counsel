@@ -106,8 +106,6 @@ Open <http://127.0.0.1:8001>. One Python process serves the page and API. Keep t
 - Enable optional plugins and adjust their settings in the settings bar. Web search offers Exa or DuckDuckGo Lite; Exa requires `EXA_API_KEY`. A key entered in settings takes precedence over `.env`.
 - `./start-chatbox.ps1` is an alternative launcher. With `-Restart`, it stops only a process whose command line matches this project's `run_chatbox.py`.
 
-For the Chinese local setup guide, see [CHATBOX_QUICKSTART.md](docs/CHATBOX_QUICKSTART.md).
-
 ### Included plugins
 
 Defaults below apply before saved user settings.
