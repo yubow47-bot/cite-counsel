@@ -12,7 +12,7 @@ An agent harness for legal research. The model decides how to investigate and dr
 | **The approach** | Tools return stored records with source identity (`rec_N`). Citations, quotations and bibliographies are built by code from those records, and each value keeps its origin. The harness scans the final reply and marks unsourced claims. |
 | **What it looks like** | A local chat UI. The model chooses among tools for Canadian case law, federal bills, Crossref, Open Library, file and web extraction, and McGill citation formatting. Result cards and source annotations appear next to the answer. [An example](#example-what-a-check-returns) is below. |
 | **Stack** | Python 3.11+, FastAPI, Pydantic, vanilla JS front end, OpenRouter-compatible models. A plugin system with typed tool contracts. |
-| **How well it works** | 400+ automated tests cover the tool contracts, provenance rules, citation identity, extraction, reply annotations and persistence; CI runs them on Python 3.11 and 3.12. External services are mocked, and there is no accuracy benchmark on live legal research yet. |
+| **How well it works** | 400+ automated tests cover the tool contracts, provenance rules, citation identity, extraction, reply annotations and persistence; CI runs them on Python 3.11 and 3.12. The default run is offline: external services are mocked and a socket guard fails any test that tries to reach the network; 7 LEGISinfo tests call the live service and run only with `RUN_LIVE_TESTS=1`. There is no accuracy benchmark on live legal research yet. |
 | **Run it** | Build the Docker image locally, or set up Python with three commands. See [Quick start](#quick-start). |
 
 > Research aid. Review the original sources, the applicable law and the official McGill Guide before relying on an output. Grounding means traceability here; it does not establish legal correctness.
@@ -214,7 +214,7 @@ To run the tests, install the test dependencies in the same environment:
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-Tests cover tool and plugin contracts, provenance, citation identity, extraction, reply annotations and persistence. Most external services are mocked; passing tests do not establish live API or model availability.
+Tests cover tool and plugin contracts, provenance, citation identity, extraction, reply annotations and persistence. The default run is offline: external services are mocked, and `tests/conftest.py` blocks DNS and outbound sockets and fails any test that tries to use them. Tests marked `live` call real services and run only with `RUN_LIVE_TESTS=1`. Passing tests do not establish live API or model availability.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for plugin and pull request guidelines.
 

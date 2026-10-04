@@ -126,7 +126,9 @@ def test_the_quote_chain_survives_a_restart(tmp_path):
     session, token = h.sessions.start()
     session.loaded.append("a2aj")
     with patch("core.source_tools.search_cases_multi", return_value=[{
-        "id": "c9", "name_en": "R v Sharma", "citation_en": "2022 SCC 39", "verified": True}]):
+        "id": "c9", "name_en": "R v Sharma", "citation_en": "2022 SCC 39", "verified": True}]), \
+         patch("core.quote_check.judgment",
+               return_value={"text": TEXT, "url": URL, "citations": ["2022 SCC 39"]}):
         h._execute(session, {"id": "c1", "type": "function", "function": {
             "name": "a2aj__find_case", "arguments": json.dumps({"query": "Sharma"})}})
         h._execute(session, {"id": "c2", "type": "function", "function": {

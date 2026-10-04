@@ -16,7 +16,7 @@ CI runs the same tests on Python 3.11 and 3.12 and builds the Docker image.
 
 1. Create `plugins/<name>/__init__.py` exporting `PLUGIN`.
 2. Pick the category that matches what the tool returns: `source` (database-origin records), `extract` (content read from files or pages) or `function` (artifacts and findings with derivations). The contracts in [docs/HARNESS.md](docs/HARNESS.md) reject output that does not fit.
-3. Add tests under `tests/`. External services should be mocked.
+3. Add tests under `tests/`. Mock external services: the test run blocks the network and fails a test that tries to use it. A test that must call a real service gets `@pytest.mark.live` and runs only with `RUN_LIVE_TESTS=1`.
 
 ## Pull requests
 

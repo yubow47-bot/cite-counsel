@@ -11,7 +11,9 @@ from local_tools.web_extract import URL_EXTRACT_FETCH_TIMEOUT, extract_from_url
 
 def test_url_extract_fetch_uses_tight_timeout():
     """JS-rendered/blocked pages should not wait on the old 15s timeout."""
-    with patch("curl_cffi.requests.get") as mock_get, \
+    public_ip = [(2, 1, 6, "", ("93.184.216.34", 0))]   # the SSRF guard resolves the host first
+    with patch("socket.getaddrinfo", return_value=public_ip), \
+         patch("curl_cffi.requests.get") as mock_get, \
          patch("local_tools.web_extract.request_with_retry", side_effect=TimeoutError("fallback also fails")):
         mock_get.side_effect = TimeoutError("simulated timeout")
 
