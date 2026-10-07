@@ -4,7 +4,7 @@
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Cite Counsel is an agent harness for legal work: the program around a language model that runs its tools.
+An agent harness for legal work. It checks each tool call against a schema, keeps each result tied to its source, and grounds the reply in those sources. Legal plugins designed for it, such as case law search and McGill citation, extend it into a harness for legal research.
 
 ## Harness architecture
 
@@ -108,7 +108,9 @@ Conversations are sent to the model provider, and plugins contact outside servic
 
 ## Development
 
-[docs/HARNESS.md](docs/HARNESS.md) explains the design and [CONTRIBUTING.md](CONTRIBUTING.md) covers writing plugins. Run the tests with `pip install pytest httpx` and `pytest`.
+[docs/HARNESS.md](docs/HARNESS.md) explains the design and [CONTRIBUTING.md](CONTRIBUTING.md) covers writing plugins.
+
+403 automated tests cover tool contracts, source tracking, citations, extraction, reply grounding and saved sessions. CI runs them on Python 3.11 and 3.12. The default run is offline, with outside services mocked. Run them with `pip install pytest httpx` and `pytest`.
 
 ## License
 
