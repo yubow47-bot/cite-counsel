@@ -10,9 +10,12 @@ from __future__ import annotations
 import hashlib
 import json
 
+from core.schema_migration import upgrade
 from core.tool_contracts import Artifact, Record
 
 SCHEMA = "legal_research.v1"
+# Older schema -> function returning the next schema's dict. Empty until a v2 exists.
+MIGRATIONS: dict = {}
 KINDS = {"excerpt", "claim", "premise", "conclusion", "draft"}
 SCOPE_FIELDS = ("jurisdiction", "as_of", "procedure", "factual_context")
 
@@ -24,8 +27,8 @@ def digest(text: str) -> str:
 def unpack(artifact: Artifact) -> dict:
     if not isinstance(artifact, Artifact) or artifact.kind != "legal_research":
         raise ValueError("Expected a saved legal research object.")
-    data = json.loads(artifact.content)
-    if data.get("schema") != SCHEMA or data.get("type") not in KINDS:
+    data = upgrade(json.loads(artifact.content), SCHEMA, MIGRATIONS, "legal research")
+    if data.get("type") not in KINDS:
         raise ValueError("Unsupported legal research schema.")
     return data
 

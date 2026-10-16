@@ -13,9 +13,12 @@ import json
 from collections.abc import Mapping
 
 from core import research
+from core.schema_migration import upgrade
 from core.tool_contracts import Artifact, Derivation, Field, Record
 
 SCHEMA = "inquiry.v1"
+# Older schema -> function returning the next schema's dict. Empty until a v2 exists.
+MIGRATIONS: dict = {}
 SCOPE_FIELDS = ("jurisdiction", "as_of", "procedure", "factual_context")
 TASK_STATUSES = {"open", "investigating", "resolved", "blocked", "inconclusive"}
 VERDICTS = {"supported", "limited", "disputed", "inconclusive"}
@@ -71,10 +74,7 @@ def _refs(store, values, name, *, claims=False):
 def unpack(artifact):
     if not isinstance(artifact, Artifact) or artifact.kind != "inquiry":
         raise ValueError("Expected a saved inquiry object.")
-    data = json.loads(artifact.content)
-    if not isinstance(data, dict) or data.get("schema") != SCHEMA:
-        raise ValueError("Unsupported inquiry schema.")
-    return data
+    return upgrade(json.loads(artifact.content), SCHEMA, MIGRATIONS, "inquiry")
 
 
 def pack(data):
