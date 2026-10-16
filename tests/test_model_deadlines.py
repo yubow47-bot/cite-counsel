@@ -239,3 +239,39 @@ def test_connect_and_read_timeout_are_both_bounded(monkeypatch):
     llm._post("fixture", [], [], 0.2, include_reasoning=True)
     assert calls[0]["read_timeout"] == 0.2
     assert calls[0]["connect_timeout"] == 0.2
+
+
+def test_rejected_forced_tool_choice_is_retried_unforced(monkeypatch):
+    """Some providers refuse tool_choice that names a tool; the same tools are
+    offered unforced and the caller still checks which tool came back."""
+    import json as _json
+    from core.spend_tracker import spend_tracker
+
+    class Response:
+        def __init__(self, status, body):
+            self.status_code, self._body = status, body
+            self.text = _json.dumps(body)
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(self.status_code)
+
+        def json(self):
+            return self._body
+
+    sent = []
+
+    def post(model, messages, tools, timeout, **kwargs):
+        sent.append((kwargs["include_reasoning"], kwargs.get("tool_choice")))
+        if kwargs.get("tool_choice") != "auto":
+            return Response(400, {"error": {"metadata": {"raw": 'tool_choice: type "tool" and "any" are not supported for this model.'}}})
+        call = {"id": "c1", "type": "function", "function": {"name": "save", "arguments": "{}"}}
+        return Response(200, {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [call]}}]})
+
+    monkeypatch.setattr(spend_tracker, "is_over_cap", lambda: False)
+    monkeypatch.setattr(llm, "_post", post)
+    forced = {"type": "function", "function": {"name": "save"}}
+    message = llm.chat("m", [{"role": "user", "content": "x"}], [{"type": "function", "function": {"name": "save"}}],
+                       tool_choice=forced)
+    assert [c["function"]["name"] for c in message["tool_calls"]] == ["save"]
+    assert sent == [(True, forced), (True, "auto")]

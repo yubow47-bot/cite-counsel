@@ -49,7 +49,9 @@ def _response_events(model, messages, tools, timeout, *, stream, deadline=None, 
     response = None
     data = None
     try:
-        for include_reasoning in (True, False):
+        attempts = [True, False]   # with reasoning first, then without
+        while attempts:
+            include_reasoning = attempts.pop(0)
             if stopped is not None and stopped.is_set():
                 return
             _check_control(deadline, None)
@@ -58,11 +60,19 @@ def _response_events(model, messages, tools, timeout, *, stream, deadline=None, 
                              include_reasoning=include_reasoning, stream=stream, **options)
             if stopped is not None and stopped.is_set():
                 return
-            if include_reasoning and response.status_code == 400:
+            if response.status_code == 400:
                 text = response.text.lower()
-                if "reasoning" in text and "mandatory" not in text:
+                if include_reasoning and "reasoning" in text and "mandatory" not in text:
                     _close_response(response)
                     response = None
+                    continue
+                if options.get("tool_choice") not in (None, "auto") and "tool_choice" in text:
+                    # Some models refuse a forced tool. Offer the same tools
+                    # unforced; callers still check which tool was called.
+                    _close_response(response)
+                    response = None
+                    options = {**options, "tool_choice": "auto"}
+                    attempts.insert(0, include_reasoning)
                     continue
             response.raise_for_status()
             if stream:
