@@ -72,6 +72,10 @@ class RunLogQuery(SessionRef):
     turns: int = Field(default=5, ge=1, le=20)
 
 
+class RunLogEventQuery(SessionRef):
+    offset: int = Field(ge=0)
+
+
 class MaterialRead(SessionRef):
     field: str = Field(default="", max_length=80)
     offset: int = Field(default=0, ge=0)
@@ -277,6 +281,18 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
         store = harness.sessions.store_dir
         events = log.read_events(store / f"{session.id}.events.jsonl") if store else []
         return {"ok": True, "turns": log.summarize(events, turns=body.turns)}
+
+    @app.post("/api/run-log/event")
+    def run_log_event(body: RunLogEventQuery):
+        from harness import run_log as log
+        session, _ = session_for(body, create=False)
+        if session is None:
+            return fail("No such conversation.", 404)
+        store = harness.sessions.store_dir
+        event = log.read_event(store / f"{session.id}.events.jsonl", body.offset) if store else None
+        if event is None:
+            return fail("No complete event exists at this position.", 404)
+        return {"ok": True, "event": event}
 
     @app.post("/api/materials")
     def materials(body: MaterialQuery):

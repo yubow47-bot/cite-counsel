@@ -42,6 +42,27 @@ function setup(initial = null, savedEntries = null) {
 }
 const material = ref => ({ref, field: 'text', text: ref + ' source text', available_fields: ['text'], offset: 0, total_chars: 20, next_offset: null, origin: 'extracted'});
 
+test('run log loads raw content only on expansion and discards it after a conversation switch', async () => {
+  const e = setup('A'); await flush();
+  e.requests[0].resolve({timeline: []}); await flush();
+  e.elements.get('open-run-log').click();
+  const log = e.requests.find(r => r.url === '/api/run-log');
+  log.resolve({turns: [{started: 1, marked: true, seconds: 0, rows: [{at: 0, kind: 'model_request', model: 'm', offset: 40}]}]});
+  await flush();
+  const find = (node, tag) => node.tag === tag ? node : node.children.map(c => find(c, tag)).find(Boolean);
+  const details = find(e.elements.get('run-log'), 'details');
+  assert.ok(details); assert.equal(e.requests.filter(r => r.url === '/api/run-log/event').length, 0);
+  details.open = true; const loading = details.ontoggle();
+  const request = e.requests.find(r => r.url === '/api/run-log/event');
+  assert.deepEqual(JSON.parse(request.body), {session_id: 'A', session_token: 'token-A', offset: 40});
+  e.elements.get('new-chat').click();
+  request.resolve({event: {payload: {content: 'Old raw content'}}}); await loading;
+  assert.equal(e.elements.get('run-log-view').open, false);
+  assert.equal(e.elements.get('run-log').childElementCount, 0);
+  assert.doesNotMatch(find(details, 'pre').textContent, /Old raw content/);
+  assert.equal(e.elements.get('transcript').childElementCount, 0);
+});
+
 test('a delayed resume cannot refill a newly opened conversation', async () => {
   const e = setup('A'); await flush();
   assert.equal(e.requests[0].url, '/api/sessions/resume');

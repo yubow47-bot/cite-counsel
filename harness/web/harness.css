@@ -152,4 +152,7 @@ dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 55vh; o
 .run-at { font-variant-numeric: tabular-nums; color: var(--muted); }
 .run-detail { overflow-wrap: anywhere; }
 .run-budget { grid-column: 3; color: var(--muted); font-size: 12px; }
+.run-raw { grid-column: 1 / -1; }
+.run-raw summary { cursor: pointer; color: var(--muted); }
+.run-raw pre { max-height: 35vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 @media (max-width: 600px) { .run-row { grid-template-columns: 56px 1fr; } .run-detail, .run-budget { grid-column: 1 / -1; } }

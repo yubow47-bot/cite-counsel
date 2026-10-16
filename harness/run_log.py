@@ -16,27 +16,48 @@ def read_events(path: Path, limit: int = 20000) -> list[dict]:
     if not path.is_file():
         return []
     events = []
-    with path.open(encoding="utf-8") as stream:
-        for line in stream:
+    with path.open("rb") as stream:
+        for line in iter(stream.readline, b""):
             try:
                 event = json.loads(line)
             except ValueError:
                 continue
             if isinstance(event, dict) and isinstance(event.get("kind"), str):
+                event["_offset"] = stream.tell() - len(line)
                 events.append(event)
     return events[-limit:]
+
+
+def read_event(path: Path, offset: int) -> dict | None:
+    """Read one exact event at its byte offset, without scanning the log."""
+    try:
+        with path.open("rb") as stream:
+            if offset < 0:
+                return None
+            if offset:
+                stream.seek(offset - 1)
+                if stream.read(1) != b"\n":
+                    return None
+            stream.seek(offset)
+            event = json.loads(stream.readline())
+        return event if isinstance(event, dict) and isinstance(event.get("kind"), str) else None
+    except (OSError, ValueError):
+        return None
 
 
 def _detail(kind: str, payload: dict, pending: dict, at: float) -> dict:
     if kind == "turn_start":
         return {"text": payload.get("text")}
     if kind == "model_request":
+        pending[("model",)] = (at, payload.get("model"))
         return {"model": payload.get("model"), "messages": len(payload.get("messages") or []),
                 "tools": len(payload.get("tools") or [])}
     if kind == "model_response":
+        started, model = pending.pop(("model",), (None, None))
         calls = [((call.get("function") or {}).get("name")) for call in payload.get("tool_calls") or []
                  if isinstance(call, dict)]
-        return {"tool_calls": calls} if calls else {"reply_chars": len(payload.get("content") or "")}
+        return {"model": model, "seconds": round(at - started, 2) if started is not None else None,
+                **({"tool_calls": calls} if calls else {"reply_chars": len(payload.get("content") or "")})}
     if kind == "tool_call":
         pending[payload.get("id")] = at
         return {"tool": (payload.get("function") or {}).get("name"), "call_id": payload.get("id")}
@@ -48,12 +69,22 @@ def _detail(kind: str, payload: dict, pending: dict, at: float) -> dict:
                 "error": content.get("error"), "receipt_status": receipt.get("status"),
                 "receipt_id": receipt.get("id"),
                 "seconds": round(at - started, 2) if started is not None else None}
-    if kind in {"answer_review_request", "answer_review_response"}:
+    if kind == "answer_review_request":
+        pending[("review",)] = (at, payload.get("model"))
         return {"model": payload.get("model"), "mode": payload.get("mode")}
+    if kind == "answer_review_response":
+        started, model = pending.pop(("review",), (None, None))
+        return {"model": model or payload.get("model"), "mode": payload.get("mode"),
+                "seconds": round(at - started, 2) if started is not None else None}
     if kind == "answer_review_result":
-        return {"status": payload.get("status"), "reason": payload.get("reason"), "model": payload.get("model")}
+        started, model = pending.pop(("review",), (None, None))
+        return {"status": payload.get("status"), "reason": payload.get("reason"),
+                "model": payload.get("model") or model,
+                "seconds": round(at - started, 2) if started is not None else None}
     if kind in {"model_interrupted", "answer_unavailable"}:
-        return {"reason": payload.get("reason")}
+        started, model = pending.pop(("model",), (None, None))
+        return {"reason": payload.get("reason"), "model": model,
+                "seconds": round(at - started, 2) if started is not None else None}
     if kind == "answer_delivered":
         return {"chars": len(payload.get("text") or "")}
     return {}
@@ -80,6 +111,7 @@ def summarize(events: list[dict], *, turns: int = 5, rows: int = 300) -> list[di
             current["truncated"] = True
             continue
         current["rows"].append({"at": round(at - current["started"], 2), "kind": kind,
+                                "offset": event.get("_offset"),
                                 "phase": state.get("phase"), "remaining_s": state.get("remaining_s"),
                                 "tool_calls": state.get("tool_calls"), "max_calls": state.get("max_calls"),
                                 **detail})

@@ -252,6 +252,7 @@
     restoring = false; saveSession(value); attachments = []; renderChips();
     $('transcript').replaceChildren(); $('empty').hidden = false;
     $('material-view').close(); materialPage = null; $('material-hits').replaceChildren();
+    $('run-log-view').close(); $('run-log').replaceChildren();
     $('materials').replaceChildren(); $('more-materials').hidden = true; materialCursor = null;
     $('material-search').value = ''; closeDrawers();
     document.dispatchEvent(new Event('harness:new-session'));
@@ -524,6 +525,7 @@
     }
   }
   function renderRunLog(turns) {
+    const owner = sessionRef(), epoch = viewEpoch;
     if (!turns.length) { $('run-log').replaceChildren(el('p', 'hint', 'Nothing has run in this conversation yet.')); return; }
     $('run-log').replaceChildren(...turns.map(turn => {
       const section = el('section', 'run-turn');
@@ -536,7 +538,23 @@
         const budget = row.phase == null ? 'budget not recorded'
           : `${row.phase} · ${row.remaining_s}s left · ${row.tool_calls}/${row.max_calls} calls`;
         item.append(el('span', 'run-at', `+${row.at}s`), el('span', 'run-kind', RUN_KINDS[row.kind] || row.kind),
-                    el('span', 'run-detail', runDetail(row)), el('span', 'run-budget', budget));
+                    el('span', 'run-detail', runDetail(row) + (row.kind !== 'tool_result' && row.seconds != null ? ` · ${row.seconds}s` : '')),
+                    el('span', 'run-budget', budget));
+        if (row.offset != null) {
+          const details = el('details', 'run-raw'), content = el('pre', '', '');
+          details.append(el('summary', '', 'Raw event'), content);
+          let loaded = false, loading = false;
+          details.ontoggle = async () => {
+            if (!details.open || loaded || loading || epoch !== viewEpoch) return;
+            loading = true; content.textContent = 'Loading…';
+            try {
+              const data = await post('/api/run-log/event', {...owner, offset: row.offset});
+              if (epoch === viewEpoch) { content.textContent = JSON.stringify(data.event, null, 2); loaded = true; }
+            } catch (error) { if (epoch === viewEpoch) content.textContent = error.message; }
+            finally { loading = false; }
+          };
+          item.append(details);
+        }
         list.append(item);
       }
       section.append(list);
@@ -547,7 +565,12 @@
   $('open-run-log').onclick = async () => {
     closeDrawers();
     if (!session) { toast('Nothing has run in this conversation yet.'); return; }
-    try { renderRunLog((await post('/api/run-log', sessionRef())).turns); $('run-log-view').showModal(); }
+    const epoch = viewEpoch, owner = sessionRef();
+    try {
+      const data = await post('/api/run-log', owner);
+      if (epoch !== viewEpoch) return;
+      renderRunLog(data.turns); $('run-log-view').showModal();
+    }
     catch (error) { toast(error.message); }
   };
   $('toggle-workspace').onclick = () => {

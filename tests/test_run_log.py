@@ -63,3 +63,25 @@ def test_endpoint_requires_the_conversation_token(tmp_path, monkeypatch):
         body = client.post("/api/run-log", json={"session_id": started["id"], "session_token": started["token"]}).json()
         assert body["ok"] and body["turns"][-1]["text"] == "Hi"
         assert client.post("/api/run-log", json={"session_id": started["id"], "session_token": "wrong"}).status_code == 404
+        owner = {"session_id": started["id"], "session_token": started["token"]}
+        session = h.sessions.get(started["id"], started["token"])
+        before = (list(session.messages), list(session.timeline), list(session.loaded))
+        row = body["turns"][-1]["rows"][0]
+        raw = client.post("/api/run-log/event", json={**owner, "offset": row["offset"]}).json()
+        assert raw["event"]["kind"] == "model_request" and raw["event"]["payload"]["model"] == "m"
+        assert raw["event"]["payload"]["messages"][-1]["content"] == "Hi"
+        assert (session.messages, session.timeline, session.loaded) == before
+        assert client.post("/api/run-log/event", json={**owner, "offset": row["offset"] + 1}).status_code == 404
+        assert client.post("/api/run-log/event", json={**owner, "session_token": "wrong", "offset": row["offset"]}).status_code == 404
+
+
+def test_model_and_review_durations_are_paired_and_missing_starts_stay_unknown():
+    events = [{"time": 1, "kind": "model_request", "payload": {"model": "decide"}},
+              {"time": 4, "kind": "model_response", "payload": {"content": "Draft"}},
+              {"time": 5, "kind": "answer_review_request", "payload": {"model": "review"}},
+              {"time": 7, "kind": "answer_review_result", "payload": {"status": "failed"}},
+              {"time": 8, "kind": "model_response", "payload": {"content": "Unpaired"}}]
+    rows = summarize(events)[0]["rows"]
+    assert rows[1]["seconds"] == 3 and rows[1]["model"] == "decide"
+    assert rows[3]["seconds"] == 2 and rows[3]["model"] == "review"
+    assert rows[4]["seconds"] is None and rows[4]["model"] is None
