@@ -1,0 +1,2 @@
+[1] The application is dismissed.
+Fictional initial source version for a software test.

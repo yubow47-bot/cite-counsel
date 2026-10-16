@@ -1,0 +1,11 @@
+{
+  "title": "Synthetic matter: a revised source invalidates review",
+  "instructions": "Save and review an initial draft. After the source is replaced, preserve the original quoted snapshot and flag the dependent draft for renewed review.",
+  "work_type": "review",
+  "deliverables": ["memo.md", "inspection.json", "diagnostics.json"],
+  "tags": ["synthetic", "source-version", "offline-smoke"],
+  "criteria": [
+    {"id": "invalidation", "title": "Source revision invalidates dependent review", "check": "source_change_invalidates", "deliverables": ["inspection.json", "diagnostics.json"]},
+    {"id": "snapshot", "title": "Original exact passage remains readable", "check": "original_passage_retained", "deliverables": ["inspection.json"]}
+  ]
+}

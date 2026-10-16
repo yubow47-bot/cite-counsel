@@ -1,0 +1,2 @@
+Fictional matter file. No statements here describe real law or a real client.
+The offline runner creates a long DOCX around this introduction and places a crucial notice paragraph in its middle.

@@ -1,0 +1,12 @@
+{
+  "title": "Synthetic matter: retain evidence in the middle of a long document",
+  "instructions": "Read the complete uploaded matter, retain the decisive paragraph beyond the opening excerpt, and save the disputed notice premise with its exact passage.",
+  "work_type": "review",
+  "deliverables": ["memo.md", "inspection.json", "diagnostics.json"],
+  "tags": ["synthetic", "document-coverage", "offline-smoke"],
+  "criteria": [
+    {"id": "retention", "title": "Decisive middle passage survives extraction and bounded reading", "check": "retained_middle", "deliverables": ["inspection.json", "diagnostics.json"]},
+    {"id": "provenance", "title": "Uploaded document retains extracted origin", "check": "extracted_stays_extracted", "deliverables": ["inspection.json"]},
+    {"id": "dispute", "title": "Disputed premise remains visible", "check": "open_dispute", "deliverables": ["inspection.json"]}
+  ]
+}

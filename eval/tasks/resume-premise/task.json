@@ -1,0 +1,12 @@
+{
+  "title": "Synthetic matter: resume after a premise changes",
+  "instructions": "Save a premise, conclusion and draft. Review the draft, revise the premise, restart the session, then discover the saved work and inspect which conclusion needs renewed review.",
+  "work_type": "research",
+  "deliverables": ["memo.md", "inspection.json", "diagnostics.json"],
+  "tags": ["synthetic", "persistence", "premise-revision", "offline-smoke"],
+  "criteria": [
+    {"id": "resumption", "title": "Premise revision still invalidates draft review after restart", "check": "resumed_change_propagates", "deliverables": ["inspection.json", "diagnostics.json"]},
+    {"id": "discovery", "title": "Saved research remains discoverable", "check": "directory_discoverable", "deliverables": ["diagnostics.json"]},
+    {"id": "honesty", "title": "Resumed draft does not claim legal verification", "check": "no_legal_verification", "deliverables": ["inspection.json"]}
+  ]
+}

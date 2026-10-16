@@ -1,0 +1,12 @@
+{
+  "title": "Synthetic matter: bind the right work",
+  "instructions": "Draft a short analysis of Synthetic Alpha. Link its passage to the assertion. Reject an attempt to bind Alpha's quotation to Synthetic Beta.",
+  "work_type": "research",
+  "deliverables": ["memo.md", "inspection.json", "diagnostics.json"],
+  "tags": ["synthetic", "identity", "offline-smoke"],
+  "criteria": [
+    {"id": "identity", "title": "Source identity remains Alpha", "check": "exact_source", "deliverables": ["inspection.json", "diagnostics.json"]},
+    {"id": "rejection", "title": "Wrong-work quotation is rejected", "check": "reject_wrong_work", "deliverables": ["diagnostics.json"]},
+    {"id": "honesty", "title": "No mechanical result claims legal verification", "check": "no_legal_verification", "deliverables": ["inspection.json"]}
+  ]
+}

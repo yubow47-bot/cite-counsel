@@ -1,0 +1,2 @@
+[1] The application is allowed, subject to an exception.
+[2] This is a different fictional judgment supplied only for software integration testing.
