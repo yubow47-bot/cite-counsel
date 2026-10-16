@@ -71,6 +71,61 @@
     const technical = /^(?:#{1,6}\s|>|Research (?:snapshot|draft)\.|Exact-version fingerprint:|Source(?:-version fingerprint)?:|Speaker:|State:|Evidence |Depends on |Assertion versions:|Open checks:|(?:supports|limits|opposes) \(asserted\)|Premise \[|DEPENDENCY SNAPSHOT)/i;
     return clip(String(markdown || '').split('\n').map(line => line.trim()).filter(line => line && !technical.test(line)).slice(0, 2).join(' '));
   };
+  const EXCERPT_STATUS = {same_position: 'Quote unchanged, same position', moved: 'Quote unchanged, moved',
+    ambiguous: 'Quote appears more than once in the new version', missing: 'Quote no longer appears in the new version'};
+  api.registerBlock('research', 'research_compare', block => {
+    const card = api.el('section', 'bubble card research-report research-compare');
+    card.append(api.el('p', 'research-eyebrow', 'Source version comparison'),
+                api.el('h3', '', `${block.ref} → ${block.current_ref}`));
+    if (!block.newer_version) card.append(api.el('p', 'note', 'This is already the latest version.'));
+    for (const field of block.fields || []) {
+      const section = api.el('details', 'research-detail compare-field');
+      section.open = (block.fields || []).length === 1;
+      section.append(api.el('summary', '', `${field.field}: ${field.old_chars} → ${field.new_chars} characters`));
+      const text = api.el('div', 'compare-text');
+      for (const segment of field.segments || []) {
+        if (segment.op === 'too_large') { text.append(api.el('p', 'note', 'Too large to compare here; open both versions as materials.')); continue; }
+        if (segment.op === 'equal') {
+          if (segment.text) text.append(document.createTextNode(segment.text));
+          if (segment.elided) text.append(api.el('span', 'compare-elided', ` … ${segment.elided} unchanged characters … `));
+          if (segment.tail) text.append(document.createTextNode(segment.tail));
+          continue;
+        }
+        if (segment.old) text.append(api.el('del', 'compare-old', segment.old));
+        if (segment.new) text.append(api.el('ins', 'compare-new', segment.new));
+      }
+      section.append(text);
+      card.append(section);
+    }
+    if (!(block.fields || []).length && block.newer_version) card.append(api.el('p', 'note', 'No text field changed.'));
+    if ((block.excerpts || []).length) {
+      const list = api.el('ul', 'compare-excerpts');
+      for (const row of block.excerpts) {
+        list.append(api.el('li', row.new_status === 'missing' ? 'compare-missing' : '',
+          `${row.ref}${row.is_latest ? '' : ' (older version)'}: ${EXCERPT_STATUS[row.new_status] || row.new_status} — “${clip(row.quote, 140)}”`));
+      }
+      card.append(api.el('h4', '', 'Saved excerpts of the old version'), list);
+    }
+    const latest = (block.affected || []).filter(row => row.is_latest);
+    if (latest.length) {
+      const list = api.el('ul', 'compare-affected');
+      for (const row of latest) list.append(api.el('li', '', `${'  '.repeat(row.depth - 1)}${row.type} ${row.ref} (via ${row.via})`));
+      card.append(api.el('h4', '', 'Saved work that depends on it'), list);
+    }
+    card.append(api.el('p', 'note', block.note));
+    if (block.newer_version && (block.excerpts || []).length) {
+      const excerpts = block.excerpts.filter(row => row.is_latest).map(row => row.ref);
+      const claims = latest.filter(row => row.type !== 'excerpt').map(row => row.ref);
+      const button = api.el('button', '', 'Prepare a revision request');
+      button.title = 'Fills the message box only; nothing is sent or changed.';
+      button.onclick = () => api.prepareMessage(`Source ${block.ref} has a newer version ${block.current_ref}. Compare them with research__compare, `
+        + `then for each excerpt ${excerpts.join(', ')} save a new excerpt from ${block.current_ref} only where the passage still says the same thing, `
+        + `and revise the affected work${claims.length ? ' ' + claims.join(', ') : ''} one object at a time with prior_ref, keeping the old versions. `
+        + 'Do not rebind anything whose meaning changed; report it instead.');
+      card.append(button);
+    }
+    return card;
+  });
   api.registerBlock('research', 'research_report', block => {
     const node = block.object || {};
     const issues = block.issues || [], sources = block.sources || [];
@@ -96,6 +151,18 @@
       for (const issue of issues) fullChecks.append(api.el('li', '',
         `${labels[issue.code] || issue.code}: ${(issue.path || [issue.ref]).join(' → ')}${issue.current_ref ? `; current ${issue.current_ref}` : ''}`));
       allChecks.append(fullChecks); card.append(allChecks);
+      // A newer version of a cited source: show old and new text side by side.
+      const revised = [...new Set(issues.filter(issue => issue.code === 'dependency_revised' && /^rec_/.test(issue.ref))
+        .map(issue => issue.ref))];
+      if (revised.length) {
+        const compareControls = api.el('div', 'research-controls');
+        for (const ref of revised) {
+          const button = api.el('button', '', `Compare ${ref} with its newer version`);
+          button.onclick = () => run('compare', {ref});
+          compareControls.append(button);
+        }
+        card.append(compareControls);
+      }
     }
     if (sources.length) {
       const sourceGroup = api.el('details', 'research-detail research-sources');

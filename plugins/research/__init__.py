@@ -75,6 +75,10 @@ class InspectParams(BaseModel):
     ref: Ref
 
 
+class CompareParams(BaseModel):
+    ref: Ref
+
+
 class ListParams(BaseModel):
     query: str = PField(default="", max_length=200)
     limit: int = PField(default=30, ge=1, le=100)
@@ -224,6 +228,17 @@ def inspect_object(ctx, p: InspectParams) -> Result:
     return Result(report, [{"type": "research_report", **report}])
 
 
+def compare(ctx, p: CompareParams) -> Result:
+    """Old and new versions of a cited record, side by side. Writes nothing."""
+    report = research.compare(ctx.records, p.ref)
+    summary = {"ref": report["ref"], "current_ref": report["current_ref"], "newer_version": report["newer_version"],
+               "changed_fields": [row["field"] for row in report["fields"]],
+               "excerpts": [{key: row[key] for key in ("ref", "is_latest", "new_status", "new_start")}
+                            for row in report["excerpts"]],
+               "affected": report["affected"][:60], "note": report["note"]}
+    return Result(summary, [{"type": "research_compare", **report}])
+
+
 def list_objects(ctx, p: ListParams) -> Result:
     matches = []
     for ref, obj in reversed(ctx.records.all(Artifact)):
@@ -293,10 +308,12 @@ PLUGIN = Plugin(
            Tool("claim", "Save or revise a source-based assertion, unverified assumption or inference from saved premises. Preserve reasoning, scope, limitations and counterargument response. Does not verify legal meaning.", ClaimParams, claim),
            Tool("draft", "Compose a saved research draft from exact assertion versions, with evidence and open checks.", DraftParams, draft),
            Tool("inspect", "Read an exact research object and inspect missing support, revisions and review state recursively.", InspectParams, inspect_object),
-           Tool("list", "Find saved research excerpts, assertions and drafts in this conversation.", ListParams, list_objects)],
+           Tool("list", "Find saved research excerpts, assertions and drafts in this conversation.", ListParams, list_objects),
+           Tool("compare", "Compare a cited record version with its newer version: changed text, where each saved excerpt now stands, and which research objects depend on it. Read-only; rebinding is done by saving new excerpts and revising objects.", CompareParams, compare)],
     actions={"list": lambda ctx, payload: list_objects(ctx, ListParams.model_validate(payload)),
              "inspect": lambda ctx, payload: inspect_object(ctx, InspectParams.model_validate(payload)),
-             "review": review_action, "export": export_action},
+             "review": review_action, "export": export_action,
+             "compare": lambda ctx, payload: compare(ctx, CompareParams.model_validate(payload))},
     ui=Path(__file__).parent, category="function", default_enabled=True,
-    readonly_actions=("list", "inspect", "export"),
+    readonly_actions=("list", "inspect", "export", "compare"),
 )

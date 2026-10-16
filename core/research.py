@@ -261,3 +261,104 @@ def inspect(store, ref: str, reviews: dict | None = None) -> dict:
                     "An assumption remains unverified, and a complete inference records reasoning without proving it. "
                     "User review records acknowledgement of this snapshot, not a correctness guarantee.",
             "assertions": assertions, "sources": sources, "object": data}
+
+
+DIFF_CONTEXT = 240
+DIFF_LIMIT = 200_000
+
+
+def _text_diff(old: str, new: str) -> list[dict]:
+    """Word-level changes with a little unchanged context; long equal runs are elided."""
+    import difflib
+    import re
+    if len(old) > DIFF_LIMIT or len(new) > DIFF_LIMIT:
+        return [{"op": "too_large", "old_chars": len(old), "new_chars": len(new)}]
+    split = re.compile(r"\s+|\w+|[^\w\s]")
+    old_tokens, new_tokens = split.findall(old), split.findall(new)
+    old_at = [0]
+    for token in old_tokens:
+        old_at.append(old_at[-1] + len(token))
+    new_at = [0]
+    for token in new_tokens:
+        new_at.append(new_at[-1] + len(token))
+    codes = difflib.SequenceMatcher(None, old_tokens, new_tokens, autojunk=False).get_opcodes()
+    segments = []
+    for index, (op, i1, i2, j1, j2) in enumerate(codes):
+        if op != "equal":
+            segments.append({"op": op, "old": "".join(old_tokens[i1:i2]), "new": "".join(new_tokens[j1:j2]),
+                             "old_offset": old_at[i1], "new_offset": new_at[j1]})
+            continue
+        text = "".join(old_tokens[i1:i2])
+        # Keep context only on the sides that touch a change.
+        keep_head = text[:DIFF_CONTEXT] if index > 0 else ""
+        keep_tail = text[-DIFF_CONTEXT:] if index < len(codes) - 1 else ""
+        if len(codes) == 1 or len(text) <= len(keep_head) + len(keep_tail):
+            segments.append({"op": "equal", "text": text})
+        else:
+            segments.append({"op": "equal", "text": keep_head, "elided": len(text) - len(keep_head) - len(keep_tail),
+                             "tail": keep_tail})
+    return segments
+
+
+def compare(store, record_ref: str) -> dict:
+    """What changed between a cited record version and its latest version.
+
+    Read-only. Shows each changed text field, where every saved excerpt of the
+    old version stands in the new one, and which research objects depend on
+    it. It never rebinds anything: a revision is made by saving a new excerpt
+    from the new version and revising each affected object explicitly.
+    """
+    old = store.get_exact(record_ref, Record)
+    current_ref = store.current_ref(record_ref)
+    new = store.get_exact(current_ref, Record)
+    fields = []
+    for name in sorted(set(old.fields) | set(new.fields)):
+        before, after = old.fields.get(name), new.fields.get(name)
+        old_text = before.value if before is not None and isinstance(before.value, str) else ""
+        new_text = after.value if after is not None and isinstance(after.value, str) else ""
+        if old_text != new_text:
+            fields.append({"field": name, "old_chars": len(old_text), "new_chars": len(new_text),
+                           "segments": _text_diff(old_text, new_text)})
+    # Reverse dependency graph over every saved research object version.
+    dependents, nodes = {}, {}
+    for ref, obj in store.all(Artifact):
+        if obj.kind != "legal_research":
+            continue
+        try:
+            node = unpack(obj)
+        except ValueError:
+            continue
+        nodes[ref] = node
+        for dep in node.get("dependencies", []):
+            dependents.setdefault(dep["ref"], []).append(ref)
+    excerpts = []
+    for ref in dependents.get(record_ref, []):
+        node = nodes[ref]
+        if node["type"] != "excerpt":
+            continue
+        source = node["source"]
+        field = new.fields.get(source["field"])
+        text = field.value if field is not None and isinstance(field.value, str) else ""
+        hits, at = [], text.find(node["quote"])
+        while at >= 0 and len(hits) < 3:
+            hits.append(at)
+            at = text.find(node["quote"], at + 1)
+        status = ("missing" if not hits else "ambiguous" if len(hits) > 1
+                  else "same_position" if hits[0] == source["start"] else "moved")
+        excerpts.append({"ref": ref, "is_latest": store.current_ref(ref) == ref, "field": source["field"],
+                         "quote": node["quote"], "old_start": source["start"], "new_status": status,
+                         "new_start": hits[0] if len(hits) == 1 else None})
+    affected, queue, seen = [], [(record_ref, 0)], {record_ref}
+    while queue and len(affected) < 400:
+        ref, depth = queue.pop(0)
+        for parent in dependents.get(ref, []):
+            if parent in seen:
+                continue
+            seen.add(parent)
+            affected.append({"ref": parent, "type": nodes[parent]["type"], "depth": depth + 1, "via": ref,
+                             "is_latest": store.current_ref(parent) == parent})
+            queue.append((parent, depth + 1))
+    return {"ref": record_ref, "current_ref": current_ref, "newer_version": current_ref != record_ref,
+            "fields": fields, "excerpts": excerpts, "affected": affected,
+            "note": "Text comparison is mechanical. Whether a change matters to an assertion needs review; "
+                    "nothing has been rebound to the new version."}

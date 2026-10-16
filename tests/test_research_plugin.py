@@ -149,3 +149,41 @@ def test_research_and_review_survive_session_disk_roundtrip(ctx, tmp_path):
     assert report["review_status"] == "user_reviewed"
     assert report["sources"][0]["ref"].startswith("rec_")
     assert plugin.list_objects(restored, plugin.ListParams(query="Persisted")).content["total"] == 1
+
+
+def test_compare_shows_changes_excerpt_positions_and_affected_work_without_rebinding(ctx):
+    old = source(ctx, "[1] Background. [2] The application is dismissed. [3] Costs to the respondent.")
+    kept = excerpt(ctx, old)
+    dropped = excerpt(ctx, old, "Costs to the respondent.")
+    claim = assertion(ctx, kept)
+    draft = plugin.draft(ctx, plugin.DraftParams(title="Memo", claim_refs=[claim])).content["ref"]
+    new = source(ctx, "[1] Background, revised at length. [2] The application is dismissed. [3] No costs.",
+                 supersedes=old)
+    before = {ref: ctx.records.fingerprint(ref) for ref in (kept, dropped, claim, draft)}
+    result = plugin.compare(ctx, plugin.CompareParams(ref=old))
+    report = result.blocks[0]
+    assert report["current_ref"] == new and report["newer_version"]
+    [field] = report["fields"]
+    assert field["field"] == "full_text"
+    changes = [s for s in field["segments"] if s["op"] != "equal"]
+    removed, added = " ".join(s["old"] for s in changes), " ".join(s["new"] for s in changes)
+    assert "Costs" in removed and "respondent" in removed and "No" in added and "revised at length" in added
+    assert "dismissed" not in removed + added       # unchanged text is not reported as changed
+    status = {row["ref"]: row["new_status"] for row in report["excerpts"]}
+    assert status == {kept: "moved", dropped: "missing"}
+    affected = {row["ref"]: row["depth"] for row in report["affected"]}
+    assert affected[kept] == 1 and affected[claim] == 2 and affected[draft] == 3
+    # Read-only: nothing was rebound or re-saved.
+    assert {ref: ctx.records.fingerprint(ref) for ref in before} == before
+    assert all(ctx.records.current_ref(ref) == ref for ref in before)
+    assert result.content["changed_fields"] == ["full_text"]
+
+
+def test_compare_on_the_latest_version_reports_no_change(ctx):
+    ref = source(ctx)
+    report = plugin.compare(ctx, plugin.CompareParams(ref=ref)).blocks[0]
+    assert not report["newer_version"] and report["fields"] == []
+
+
+def test_compare_is_a_readonly_action(ctx):
+    assert "compare" in plugin.PLUGIN.readonly_actions
