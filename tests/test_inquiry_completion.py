@@ -330,7 +330,8 @@ def test_completion_uses_shared_call_budget_and_records_recoverable_tool_history
     assert session.messages[-1]["content"] == params().answer
     # Persisted history contains the same exchange; ephemeral budget is absent.
     h.sessions.save(session)
-    archived = json.loads((h.sessions.store_dir / (session.id + ".json")).read_text(encoding="utf-8"))
+    from session_db import parts
+    archived = parts(h.sessions, session.id)
     assert "runtime" not in archived and archived["messages"][-2]["role"] == "tool"
 
 

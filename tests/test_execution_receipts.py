@@ -91,10 +91,8 @@ def test_saved_investigation_survives_expiry_and_disk_limit(tmp_path):
     session, token = store.start()
     session.retained = True
     store.save(session)
-    path = store.store_dir / (session.id + ".json")
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["wall_expires"] = 0
-    path.write_text(json.dumps(payload), encoding="utf-8")
+    from session_db import set_wall_expires
+    set_wall_expires(store, session.id, 0)
     store.start()
     revived = SessionStore(store_dir=tmp_path / "sessions", limit=1).get(session.id, token)
     assert revived is not None and revived.retained

@@ -55,7 +55,9 @@ def test_disk_failure_is_visible_and_retry_clears_warning(tmp_path, monkeypatch)
     store = SessionStore(store_dir=tmp_path / "sessions")
     session, _ = store.start()
     with monkeypatch.context() as patch:
-        patch.setattr("harness.session.os.replace", lambda *_, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
+        import sqlite3
+        session.messages.append({"role": "user", "content": "unsaved"})
+        patch.setattr(store, "_write", lambda *_, **kwargs: (_ for _ in ()).throw(sqlite3.OperationalError("disk I/O error")))
         store.save(session)
         assert "could not be saved to disk" in session.persistence_error
     store.save(session)

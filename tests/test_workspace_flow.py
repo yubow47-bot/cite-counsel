@@ -109,10 +109,8 @@ def test_deleted_worker_cannot_recreate_a_session_or_log(tmp_path):
 def test_expired_session_is_not_revived_in_same_process(tmp_path):
     store = SessionStore(store_dir=tmp_path)
     session, token = store.start()
-    path = tmp_path / f"{session.id}.json"
-    data = json.loads(path.read_text())
-    data["wall_expires"] = 0
-    path.write_text(json.dumps(data))
+    from session_db import set_wall_expires
+    set_wall_expires(store, session.id, 0)
     session.expires = 0
     assert store.get(session.id, token) is None
 

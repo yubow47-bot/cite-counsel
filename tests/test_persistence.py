@@ -76,12 +76,14 @@ def test_deleting_a_session_removes_it_from_memory_and_disk(tmp_path):
     session, token = h.sessions.start()
     session.messages.append({"role": "user", "content": "some prior research"})
     h.sessions.save(session)
-    on_disk = h.sessions.store_dir / f"{session.id}.json"
-    assert on_disk.exists()
+    from session_db import exists
+    events = h.sessions.store_dir / f"{session.id}.events.jsonl"
+    h.sessions.append_event(session, "note", {})
+    assert exists(h.sessions, session.id) and events.exists()
 
     h.sessions.delete(session.id)
 
-    assert not on_disk.exists()
+    assert not exists(h.sessions, session.id) and not events.exists()
     assert h.sessions.get(session.id, token) is None    # gone from memory
     other = Harness(discover(), model="m", config_path=config)
     assert other.sessions.get(session.id, token) is None   # and cannot be revived from disk either
@@ -92,15 +94,12 @@ def test_expired_sessions_are_swept_from_disk(tmp_path):
     h = Harness(discover(), model="m", config_path=config)
     session, token = h.sessions.start()
     h.sessions.save(session)
-    # Age the session past its wall-clock expiry (the sweep reads the file).
-    import json as _json
-    old = h.sessions.store_dir / f"{session.id}.json"
-    payload = _json.loads(old.read_text(encoding="utf-8"))
-    payload["wall_expires"] = 0
-    old.write_text(_json.dumps(payload), encoding="utf-8")
+    # Age the session past its wall-clock expiry (the sweep reads the database).
+    from session_db import exists, set_wall_expires
+    set_wall_expires(h.sessions, session.id, 0)
     fresh = Harness(discover(), model="m", config_path=config)   # sweeps on init
     assert fresh.sessions.get(session.id, token) is None
-    assert not old.exists()
+    assert not exists(fresh.sessions, session.id)
 
 
 def test_attachments_live_in_the_session_directory(tmp_path):

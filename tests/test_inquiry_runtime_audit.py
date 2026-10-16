@@ -76,10 +76,8 @@ def test_retained_investigation_keeps_attachments_and_events_past_expiry_and_dis
     session.attachments["attachment-1"] = {"path": str(attachment), "name": "material.txt"}
     store.append_event(session, "tool_result", {"fixture": True})
     store.save(session)
-    target = root / (session.id + ".json")
-    payload = json.loads(target.read_text(encoding="utf-8"))
-    payload["wall_expires"] = 0
-    target.write_text(json.dumps(payload), encoding="utf-8")
+    from session_db import set_wall_expires
+    set_wall_expires(store, session.id, 0)
     # Both stale age and a newer unretained cache entry must leave retained
     # work intact, including the associated directory and execution log.
     store.start()
