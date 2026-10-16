@@ -104,9 +104,10 @@ def test_colliding_short_forms_and_reversed_ranges_are_refused():
 @pytest.fixture
 def ctx(tmp_path):
     h = Harness(discover(), model="m", config_path=tmp_path / "h.json")
-    session, _ = h.sessions.start()
+    session, token = h.sessions.start()
     session.messages.append({"role": "user", "content": "Cite Gladue at para 64 please."})
     context = h.context(session, "footnotes")
+    context.token = token
     context.cases = {
         "gladue": session.records.put(Record(plugin.CASE_TYPE, {
             "style_of_cause": Field("R v Gladue", "database"), "reporter": Field("[1999] 1 SCR 688", "database")},
@@ -159,6 +160,28 @@ def test_stale_revision_is_refused_and_retries_are_idempotent(ctx):
     with pytest.raises(ValueError, match="Revision conflict"):
         edit(ctx, doc, "r2", "insert", citations=[cite(ctx, "ipeelee")])
     assert create(ctx, "new") == doc       # creating is idempotent too
+
+
+def test_saved_document_identity_occurrences_and_retries_survive_restart(ctx):
+    doc = create(ctx)
+    first = edit(ctx, doc, "insert", "insert", citations=[cite(ctx, "gladue")])
+    occurrence = first["notes"][0]["citations"][0]["id"]
+    changed = edit(ctx, first["document"], "update", "update", note_id=first["notes"][0]["id"],
+                   citations=[cite(ctx, "gladue", "at para 64")])
+    assert changed["document_id"] == first["document_id"]
+    assert changed["notes"][0]["citations"][0]["id"] == occurrence
+    assert ctx.session.retained
+    ctx._harness.sessions.save(ctx.session)
+    again = Harness(discover(), model="m", config_path=ctx._harness.config_path)
+    revived = again.sessions.get(ctx.session.id, ctx.token)
+    rc = again.context(revived, "footnotes")
+    report = plugin.render_document(rc, changed["document"])
+    assert report["document_id"] == first["document_id"] and report["notes"] == changed["notes"]
+    replay = plugin.edit(rc, plugin.EditParams(document=doc, request_id="insert", op="insert",
+                                             citations=[cite(ctx, "gladue")])).content
+    assert replay["replayed"] and replay["document"] == first["document"]
+    with pytest.raises(ValueError, match="Revision conflict"):
+        plugin.edit(rc, plugin.EditParams(document=doc, request_id="another", op="delete", note_id=report["notes"][0]["id"]))
 
 
 def test_verification_and_pinpoint_origin_stay_visible(ctx):

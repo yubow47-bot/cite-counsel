@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from pathlib import Path
 from typing import Literal
 
@@ -31,7 +32,6 @@ from harness.plugin import Plugin, Result, Tool
 
 SCHEMA = "footnotes.v1"
 CASE_TYPE = "jurisprudence"
-MAX_REQUESTS = 200
 
 
 class Citation(BaseModel):
@@ -71,7 +71,24 @@ def _unpack(artifact) -> dict:
     data = json.loads(artifact.content)
     if data.get("schema") != SCHEMA:
         raise ValueError("Unsupported footnote document schema.")
+    for note in data["notes"]:
+        for index, citation in enumerate(note["citations"], 1):
+            citation.setdefault("id", f"{note['id']}:c{index}")
     return data
+
+
+def _document_id(ctx, ref: str, data: dict) -> str:
+    if data.get("document_id"):
+        return data["document_id"]
+    # Legacy documents use the initial saved revision as a stable identity.
+    seen = set()
+    while ref not in seen:
+        seen.add(ref)
+        prior = ctx.records.meta(ref).get("supersedes")
+        if not prior:
+            break
+        ref = prior
+    return f"doc_{ref}"
 
 
 def _current(ctx, ref: str) -> tuple[str, dict]:
@@ -79,6 +96,7 @@ def _current(ctx, ref: str) -> tuple[str, dict]:
     current = ctx.records.current_ref(ref)
     if current != ref:
         raise ValueError(f"Revision conflict: the document is now {current}. Render it and redo this edit on that revision.")
+    data["document_id"] = _document_id(ctx, ref, data)
     return ref, data
 
 
@@ -104,11 +122,12 @@ def _check_pinpoint(record: Record, pinpoint: str) -> str:
     return pinpoint
 
 
-def _note_citations(ctx, data: dict, citations: list[Citation]) -> list[dict]:
+def _note_citations(ctx, data: dict, citations: list[Citation], existing=()) -> list[dict]:
     """Validate a note's citations, registering newly cited records at their exact version."""
     if len({c.ref for c in citations}) != len(citations):
         raise ValueError("Cite each case once per note.")
     result = []
+    identifiers = {c["source"]: c["id"] for c in existing}
     for citation in citations:
         record, fingerprint = _source(ctx, citation.ref)
         pinned = data["sources"].get(citation.ref)
@@ -119,7 +138,8 @@ def _note_citations(ctx, data: dict, citations: list[Citation]) -> list[dict]:
             mcgill_format.render_fields(CASE_TYPE, _values(record))  # renderable before it is saved
             data["sources"][citation.ref] = {"fingerprint": fingerprint, "short_form": ""}
         pinpoint = _check_pinpoint(record, citation.pinpoint)
-        result.append({"source": citation.ref, "pinpoint": pinpoint,
+        result.append({"id": identifiers.get(citation.ref) or f"c_{uuid.uuid4().hex}",
+                       "source": citation.ref, "pinpoint": pinpoint,
                        "pinpoint_origin": "user" if pinpoint and ctx.user_said(citation.pinpoint) else
                                           ("model" if pinpoint else "")})
     return result
@@ -146,7 +166,8 @@ def _apply(ctx, data: dict, p: EditParams) -> None:
     elif p.op == "update":
         if not p.citations:
             raise ValueError("update needs the note's full list of citations; use delete to remove a note.")
-        notes[_index(data, p.note_id)]["citations"] = _note_citations(ctx, data, p.citations)
+        note = notes[_index(data, p.note_id)]
+        note["citations"] = _note_citations(ctx, data, p.citations, note["citations"])
     elif p.op == "move":
         if not 1 <= p.position <= len(notes):
             raise ValueError(f"position must be between 1 and {len(notes)}.")
@@ -187,14 +208,14 @@ def _apply(ctx, data: dict, p: EditParams) -> None:
 def _save(ctx, data: dict, prior: str | None) -> str:
     content = json.dumps(data, ensure_ascii=False, sort_keys=True)
     artifact = Artifact("footnote_document", content, Derivation((Field(content, "model"),), "footnotes.document.v1"))
-    return ctx.save(artifact, meta={"footnotes": {"title": data["title"][:180]}}, supersedes=prior)
+    ref = ctx.save(artifact, meta={"footnotes": {"title": data["title"][:180]}}, supersedes=prior)
+    ctx.session.retained = True
+    return ref
 
 
 def _remember(ctx, request_id: str, digest: str, ref: str) -> None:
     requests = ctx.state.setdefault("requests", {})
     requests[request_id] = {"digest": digest, "ref": ref}
-    while len(requests) > MAX_REQUESTS:
-        requests.pop(next(iter(requests)))
 
 
 def _replayed(ctx, request_id: str, digest: str) -> str | None:
@@ -222,7 +243,7 @@ def render_document(ctx, ref: str) -> dict:
 
     notes = footnotes.resolve(data["notes"], {k: v["short_form"] for k, v in data["sources"].items() if v["short_form"]},
                               render)
-    origins = {(note["id"], c["source"]): c.get("pinpoint_origin", "") for note in data["notes"] for c in note["citations"]}
+    occurrences = {(note["id"], c["source"]): c for note in data["notes"] for c in note["citations"]}
     issues = []
     for key, pinned in data["sources"].items():
         record = records[key]
@@ -237,10 +258,13 @@ def render_document(ctx, ref: str) -> dict:
             record = records[citation["source"]]
             citation["source_verified"] = all(field.origin == "database" for field in record.fields.values()
                                               if field.value)
-            citation["pinpoint_origin"] = origins[(note["id"], citation["source"])]
+            occurrence = occurrences[(note["id"], citation["source"])]
+            citation["id"] = occurrence["id"]
+            citation["pinpoint_origin"] = occurrence.get("pinpoint_origin", "")
             citation["reference_valid"] = True
     current = ctx.records.current_ref(ref)
     return {"ref": ref, "current_ref": current, "title": data["title"], "mode": "academic",
+            "document_id": _document_id(ctx, ref, data),
             "rule_version": footnotes.RULE_VERSION, "rules_reviewed": False,
             "notes": notes, "issues": issues,
             "text": "\n".join(f"{note['number']} {note['text']}" for note in notes)}
@@ -251,7 +275,8 @@ def create(ctx, p: CreateParams) -> Result:
     existing = _replayed(ctx, p.request_id, digest)
     if existing:
         return Result({"document": existing, "replayed": True})
-    ref = _save(ctx, {"schema": SCHEMA, "title": p.title, "mode": "academic", "rule_version": footnotes.RULE_VERSION,
+    ref = _save(ctx, {"schema": SCHEMA, "document_id": f"doc_{uuid.uuid4().hex}",
+                      "title": p.title, "mode": "academic", "rule_version": footnotes.RULE_VERSION,
                       "sources": {}, "notes": [], "next_note": 0}, None)
     _remember(ctx, p.request_id, digest, ref)
     return Result({"document": ref, "notes": []})
