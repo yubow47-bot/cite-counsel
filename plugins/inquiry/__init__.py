@@ -121,7 +121,7 @@ class KeyCheck(BaseModel):
     passages: list[Passage] = Field(min_length=1, max_length=8, description="Prefer 1–3 decisive primary passages actually retrieved (maximum 8); exact quotes, not paraphrases.")
     reasoning: str = Field(min_length=1, max_length=4000, description="Explain the inferential step or calculation and distinguish source facts from user reports and assumptions.")
     objection: str = Field(min_length=1, max_length=2000, description="The strongest relevant exception, alternative explanation or counterargument checked.")
-    response: str = Field(min_length=1, max_length=3000, description="What the actual material establishes about that objection and what remains untested; do not claim an exhaustive search.")
+    response: str = Field(default="", max_length=3000, description="What the actual material establishes about that objection and what remains untested; do not claim an exhaustive search. If omitted, the objection is saved as unanswered and the claim cannot be supported.")
     verdict: Literal["supported", "limited", "disputed", "inconclusive"] = "limited"
     task_ids: list[str] = Field(default_factory=list, max_length=10, description="Existing subquestion IDs addressed. Omit for a new inquiry or an inquiry with only one task. Unmentioned tasks remain open.")
     claim_kind: Literal["direct", "inference", "hypothesis"] = Field(default="inference", description="direct: a literal source statement (a paraphrase remains model interpretation); inference: a conclusion needing premises; hypothesis: a possible explanation, never an established fact. Use calculations for arithmetic.")
@@ -604,9 +604,13 @@ def _delivery(ctx, p, review, premise_ids, premise_states, observations, calcula
         zh = any("一" <= ch <= "鿿" for ch in p.answer)
         delivered += "\n\n" + ("尚未取得的指定来源（相关结论需保留）：" if zh else "Requested sources still unavailable (related conclusions remain provisional):") + "\n\n" + "\n".join("- " + gap for gap in source_gaps)
     effective_verdicts = ["limited" if check.verdict == "supported" and (
-        check.claim_kind == "hypothesis" or any(premise_states[identifier]["effective_status"] != "supported" for identifier in ids))
+        check.claim_kind == "hypothesis" or not check.response.strip()
+        or any(premise_states[identifier]["effective_status"] != "supported" for identifier in ids))
         else check.verdict for check, ids in zip(p.checks, premise_ids)]
-    gaps = list(dict.fromkeys(p.gaps + premise_gaps + source_gaps))
+    # An omitted response is accepted, not invented: the objection stays open.
+    unanswered = [("未回应的反论点：" if any("一" <= ch <= "鿿" for ch in p.answer) else "Objection not yet answered: ")
+                  + check.objection for check in p.checks if not check.response.strip()]
+    gaps = list(dict.fromkeys(p.gaps + premise_gaps + source_gaps + unanswered))
     inquiry._strings(gaps, "gaps")
     if delivered != p.answer:
         review = {**review, "conditional_gate": True, "draft_sha256": research.digest(p.answer),

@@ -384,3 +384,24 @@ def test_review_context_names_actual_source_url_without_treating_requested_list_
     contexts = plugin._review_contexts(ctx, [{"ref": ref, "field": "text", "offset": 0,
         "text": "A separately retrieved rule has its own URL."}])
     assert contexts and all(row["source_url"] == url for row in contexts if row["ref"] == ref)
+
+
+def test_omitted_objection_response_is_saved_as_unanswered_not_supported(ctx):
+    check = params().model_dump()["checks"][0]
+    del check["response"]
+    result = plugin.conclude(ctx, params(checks=[check]))
+    report = saved(ctx, result)
+    answer = report["object"]["answer"]
+    assert result.final and any(gap.startswith("Objection not yet answered: Other causes") for gap in answer["gaps"])
+    claim = next(iter(report["object"]["assessments"].values())) if isinstance(report["object"]["assessments"], dict) \
+        else report["object"]["assessments"][0]
+    assert claim["response"] == ""
+    assert any(issue["code"] in {"countercheck_not_recorded", "unhandled_counterevidence"} and issue["blocking"]
+               for issue in report["issues"])
+    assert report["readiness"] == "open"
+
+
+def test_calculation_error_lists_quote_numbers_and_rejects_derived_inputs(ctx):
+    with pytest.raises(ValueError) as exc:
+        plugin.conclude(ctx, params(calculations=[{"operation": "difference", "before": 20, "after": 15, "quote": QUOTE}]))
+    assert "Numbers in this quote: ['120', '100']" in str(exc.value) and "not derived" in str(exc.value)

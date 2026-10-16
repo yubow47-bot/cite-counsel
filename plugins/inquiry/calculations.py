@@ -62,7 +62,10 @@ def _numeric_bindings(spec):
     for name in ("before", "after"):
         match = next((item for item in tokens if item[0] == getattr(spec, name)), None)
         if match is None:
-            raise ValueError(f"Calculation {name} must appear as a whole numeric token in the exact quote.")
+            found = [token for _, token, _, _ in tokens][:12]
+            raise ValueError(f"Calculation {name}={getattr(spec, name)} must appear as a whole numeric token in the exact quote. "
+                             f"Numbers in this quote: {found}. Inputs must be copied from the quote, not derived "
+                             "(to compare two changes, calculate each change separately from its own quote).")
         _, token, start, end = match
         result[name] = {"token": token, "quote_start": start, "quote_end": end}
     return result
