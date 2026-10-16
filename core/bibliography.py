@@ -74,11 +74,11 @@ def _sort_key(text: str) -> str:
 
 def render_entry(entry: dict) -> tuple[str, str, str | None]:
     """(entry text with *italic* markers, sort key, section id or None for residual)."""
-    from core.mcgill_format import render_fields
+    from core.mcgill_format import mcgill_clean, render_fields
     config = rules()
     source_type = entry.get("source_type") or ""
     section = next((s for s in config["sections"] if source_type in s["source_types"]), None)
-    values = {name: field["value"] for name, field in entry["fields"].items()
+    values = {name: mcgill_clean(name, field["value"]) for name, field in entry["fields"].items()
               if name not in config["omit_fields"]}
     if entry.get("base") is not None:
         # An opaque string from the original formatter: listed as issued.
@@ -104,8 +104,9 @@ def entry_verified(entry: dict) -> bool:
     if entry.get("base") is not None:
         return False
     omitted = set(rules()["omit_fields"])
-    kept = [field for name, field in entry["fields"].items() if name not in omitted]
-    return bool(kept) and all(field.get("origin") == "database" for field in kept)
+    kept = [Field(field["value"], field["origin"], source_id=field.get("source_id"))
+            for name, field in entry["fields"].items() if name not in omitted]
+    return is_grounded(Derivation(tuple(kept), "cite.render.v1"))
 
 
 def build(entries: list) -> dict:
@@ -119,7 +120,6 @@ def build(entries: list) -> dict:
     titles = {s["id"]: s["title"] for s in config["sections"]}
     titles[config["residual_section"]["id"]] = config["residual_section"]["title"]
     grouped: dict[str, dict[str, dict]] = {section_id: {} for section_id in order}
-    derivations = []
     for raw in entries:
         entry = raw
         if not isinstance(entry, dict) or not isinstance(entry.get("fields"), dict):
@@ -127,19 +127,23 @@ def build(entries: list) -> dict:
         text, key, section_id = render_entry(entry)
         section_id = section_id or config["residual_section"]["id"]
         verified = entry_verified(entry)
-        existing = grouped[section_id].get(_plain(text))
-        # The same source added twice (e.g. once with a pinpoint) is one entry.
-        if existing is None or (verified and not existing["verified"]):
-            grouped[section_id][_plain(text)] = {"text": text, "key": key, "verified": verified}
         fields = {name: Field(value=f["value"], origin=f["origin"], source_id=f.get("source_id"))
                   for name, f in entry["fields"].items() if name not in config["omit_fields"]}
         if entry.get("base") is not None:
             fields["legacy_base"] = Field(value=entry["base"], origin="extracted")
-        derivations.append(Derivation(tuple(fields.values()), "cite.render.v1", tuple(fields)))
+        derivation = Derivation(tuple(fields.values()), "cite.render.v1", tuple(fields))
+        existing = grouped[section_id].get(_plain(text))
+        # Keep exactly the chosen entry's proof. A discarded duplicate must
+        # not silently change the verification of the rendered bibliography.
+        if existing is None or (verified and not existing["verified"]):
+            grouped[section_id][_plain(text)] = {"text": text, "key": key, "verified": verified,
+                                               "derivation": derivation}
     sections = []
+    derivations = []
     for section_id in order:
         items = sorted(grouped[section_id].values(), key=lambda e: (e["key"], e["text"]))
         if items:
+            derivations.extend(e["derivation"] for e in items)
             sections.append({"id": section_id, "title": titles[section_id],
                              "entries": [{"text": e["text"], "verified": e["verified"]} for e in items]})
     plain = "\n\n".join(s["title"].upper() + "\n\n" + "\n".join(_plain(e["text"]) for e in s["entries"])

@@ -7,8 +7,16 @@
   const decorators = new Map();    // "plugin:type" -> [fn(block, node, api)]
   const listeners = new Map();     // "plugin:type" -> [fn(block)]
   const SESSION_KEY = 'citecounsel.session.v1';
+  const SAVED_KEY = 'citecounsel.saved.v1';
+  const loadedUis = new Set();
   let session = null, busy = false, config = null, attachments = [];
+  let saved = [], pendingTitle = '', materialCursor = null, materialPage = null;
+  let streamController = null;
+  let viewEpoch = 0, restoring = false, uploadsPending = 0;
+  let materialGeneration = 0, directoryGeneration = 0, findGeneration = 0;
+  let uploadQueue = Promise.resolve();
   try { session = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch { session = null; }
+  try { saved = JSON.parse(localStorage.getItem(SAVED_KEY) || '[]'); if (!Array.isArray(saved)) saved = []; } catch { saved = []; }
 
   // ── Helpers exposed to plugins ────────────────────────────────────
   function el(tag, className, text) {
@@ -24,12 +32,28 @@
   function saveSession(value) {
     session = value;
     try { value ? localStorage.setItem(SESSION_KEY, JSON.stringify(value)) : localStorage.removeItem(SESSION_KEY); } catch { /* private window */ }
+    if (value) {
+      const old = saved.find(s => s.id === value.id);
+      saved = [{...value, title: old?.title || pendingTitle.slice(0, 60) || 'Saved conversation'}, ...saved.filter(s => s.id !== value.id)];
+      storeSaved();
+    }
+    renderSaved();
+  }
+  function storeSaved() { try { localStorage.setItem(SAVED_KEY, JSON.stringify(saved)); } catch { /* private window */ } }
+  function renderSaved() {
+    $('saved-chats').replaceChildren();
+    const first = el('option', '', 'Select a conversation'); first.value = ''; $('saved-chats').append(first);
+    for (const item of saved) { const option = el('option', '', item.title || 'Saved conversation'); option.value = item.id; $('saved-chats').append(option); }
+    $('saved-chats').value = session?.id || '';
+    $('conversation-title').textContent = saved.find(item => item.id === session?.id)?.title || 'New conversation';
+    updateControls();
   }
   function sessionRef() { return session ? {session_id: session.id, session_token: session.token} : {}; }
   async function post(url, body) {
     const response = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
     const data = await response.json().catch(() => ({}));
-    if (data.session) saveSession(data.session);
+    // Callers own session transitions. A delayed response must never switch
+    // the global conversation after the user has already opened another one.
     if (!response.ok || data.ok === false) throw new Error(data.message || 'The request did not complete.');
     return data;
   }
@@ -38,7 +62,8 @@
   // buffered until the whole response is in, which is the point of this
   // over post() for a turn (thinking shown live, not just the final reply).
   async function postStream(url, body, onEvent) {
-    const response = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    streamController = new AbortController();
+    const response = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body), signal: streamController.signal});
     if (!response.ok || !response.body) {
       const data = await response.json().catch(() => ({}));
       throw new Error(data.message || 'The request did not complete.');
@@ -46,6 +71,7 @@
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let completed = false;
     for (;;) {
       const {value, done} = await reader.read();
       if (done) break;
@@ -55,9 +81,13 @@
         const frame = buffer.slice(0, split); buffer = buffer.slice(split + 2);
         const line = frame.split('\n').find(l => l.startsWith('data:'));
         if (!line) continue;
-        try { onEvent(JSON.parse(line.slice(5).trim())); } catch { /* malformed frame, skip it */ }
+        let event;
+        try { event = JSON.parse(line.slice(5).trim()); } catch { throw new Error('The server sent a malformed stream frame.'); }
+        if (event.type === 'done') completed = true;
+        onEvent(event);
       }
     }
+    if (!completed) throw new Error('The connection ended before this run completed. Saved results can be resumed.');
   }
 
   // ── Rendering ─────────────────────────────────────────────────────
@@ -157,8 +187,13 @@
         const card = el('section', 'bubble card record');
         const head = el('h3', 'record-head');
         head.append(el('span', 'record-type', block.source_type || 'record'), el('span', 'record-ref', block.ref || ''));
-        if (typeof block.verified === 'boolean') head.append(el('span', 'badge ' + (block.verified ? 'ok' : 'warn'),
-                                                                 block.verified ? 'verified' : 'unverified'));
+        const sourceGrounded = block.source_grounded ?? block.verified;
+        if (typeof sourceGrounded === 'boolean') {
+          const badge = el('span', 'badge ' + (sourceGrounded ? 'ok' : 'warn'),
+                           sourceGrounded ? 'Database-sourced fields' : 'Non-database fields');
+          badge.title = 'Field provenance only. Legal accuracy, authority and applicability have not been assessed.';
+          head.append(badge);
+        }
         card.append(head);
         const table = el('dl', 'rows');
         for (const [k, v] of Object.entries(block.fields || {})) {
@@ -191,13 +226,53 @@
     if (turn.childElementCount) { $('transcript').append(turn); turn.scrollIntoView({block: 'end', behavior: 'smooth'}); }
   }
   function setBusy(value) {
-    busy = value; $('send').disabled = value; $('input').disabled = value;
-    document.body.classList.toggle('busy', value);
+    busy = value; updateControls();
+  }
+  function updateControls() {
+    const loading = restoring || uploadsPending > 0;
+    $('send').disabled = busy || loading; $('input').disabled = busy || loading;
+    document.body.classList.toggle('busy', busy);
+    $('stop').hidden = !busy;
+    $('new-chat').disabled = busy || uploadsPending > 0;
+    $('saved-chats').disabled = busy || uploadsPending > 0;
+    $('delete-chat').disabled = busy || loading || !session;
+    $('attach').disabled = busy || restoring;
+    $('session-state').textContent = restoring ? 'Opening saved conversation…' : uploadsPending ? `Uploading ${uploadsPending} file${uploadsPending > 1 ? 's' : ''}…` : busy ? 'Research in progress. Saved results stay in this workspace.' : 'Materials and research stay with this conversation.';
+  }
+  function closeDrawers() {
+    document.body.classList.remove('show-workspace', 'show-panels');
+    $('workspace').inert = window.innerWidth <= 900;
+    $('panels').inert = window.innerWidth <= 900 || document.body.classList.contains('research-collapsed');
+    $('drawer-backdrop').hidden = true;
+    $('toggle-workspace').setAttribute('aria-expanded', 'false');
+    $('toggle-research').setAttribute('aria-expanded', String(!document.body.classList.contains('research-collapsed') && window.innerWidth > 900));
+  }
+  function beginSession(value) {
+    viewEpoch += 1; materialGeneration += 1; directoryGeneration += 1; findGeneration += 1;
+    restoring = false; saveSession(value); attachments = []; renderChips();
+    $('transcript').replaceChildren(); $('empty').hidden = false;
+    $('material-view').close(); materialPage = null; $('material-hits').replaceChildren();
+    $('materials').replaceChildren(); $('more-materials').hidden = true; materialCursor = null;
+    $('material-search').value = ''; closeDrawers();
+    document.dispatchEvent(new Event('harness:new-session'));
+    return viewEpoch;
   }
 
   // ── The plugin API ────────────────────────────────────────────────
   const api = {
     el, toast, post,
+    // Prepare an editable next step. Plugins never send it or replace a draft.
+    prepareMessage(text) {
+      const input = $('input'), value = String(text || '').trim();
+      if (busy || restoring || uploadsPending) { toast('当前操作尚未完成，请稍后再准备下一步。'); return false; }
+      if (input.value.trim()) { toast('输入框已有草稿，已保留。请先处理草稿，再选择下一步。'); input.focus(); return false; }
+      if (!value || (input.maxLength > 0 && value.length > input.maxLength)) { toast('这条操作说明过长，请在输入框中简要说明下一步。'); return false; }
+      input.value = value; grow(); closeDrawers(); input.focus();
+      input.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+      toast('已填入输入框，可编辑后发送。');
+      return true;
+    },
+    openMaterial: (ref, field = '', offset = 0, exact = false) => openMaterial(ref, field, offset, exact),
     async openSource(ref) {
       if (!session) throw new Error('No conversation yet.');
       const tab = window.open('about:blank', '_blank');
@@ -230,9 +305,11 @@
     },
     // A button in a plugin's UI: deterministic, no model. Returned blocks are
     // shown in the conversation unless {quiet: true}.
-    async action(plugin, name, payload = {}, {quiet = false} = {}) {
+    async action(plugin, name, payload = {}, {quiet = false, isCurrent = () => true} = {}) {
       if (!session) throw new Error('No conversation yet.');
+      const owner = session.id, epoch = viewEpoch;
       const data = await post(`/api/actions/${plugin}/${name}`, {...sessionRef(), payload});
+      if (session?.id !== owner || viewEpoch !== epoch || !isCurrent()) return [];
       if (quiet) (data.blocks || []).forEach(block => (listeners.get((block.plugin || '') + ':' + block.type) || []).forEach(fn => fn(block)));
       else show(data.blocks);
       return data.blocks || [];
@@ -269,8 +346,9 @@
   }
   async function send() {
     const text = $('input').value.trim();
-    if (busy || (!text && !attachments.length)) return;
+    if (busy || restoring || uploadsPending || (!text && !attachments.length)) return;
     const used = attachments; attachments = []; renderChips();
+    pendingTitle = text || used[0]?.name || 'Saved conversation';
     $('input').value = ''; grow();
     userBubble(text, used.map(a => a.name));
     setBusy(true);
@@ -308,20 +386,35 @@
       });
     } catch (error) {
       typing.remove();
-      if (!placed) { turn.append(generic({type: 'notice', level: 'error', text: error.message})); place(); }
-    } finally { setBusy(false); $('input').focus(); }
+      turn.append(generic({type: 'notice', level: 'error', text: error.name === 'AbortError' ? 'Stopped. Saved work can be continued.' : error.message})); place();
+    } finally {
+      typing.remove();
+      if (!placed) { turn.append(generic({type: 'notice', level: 'info', text: 'The run ended without a reply. Saved results can be reviewed and continued.'})); place(); }
+      streamController = null; setBusy(false); refreshMaterials().catch(() => {});
+      document.dispatchEvent(new Event('harness:materials-changed')); $('input').focus();
+    }
   }
-  async function upload(file) {
-    if (!file) return;
-    const body = new FormData(); body.append('file', file);
-    if (session) { body.append('session_id', session.id); body.append('session_token', session.token); }
-    try {
-      const response = await fetch('/api/files', {method: 'POST', body});
-      const data = await response.json();
-      if (data.session) saveSession(data.session);
-      if (!response.ok || data.ok === false) throw new Error(data.message || 'Upload failed.');
-      attachments.push(data.attachment); renderChips();
-    } catch (error) { toast(error.message); }
+  function upload(file) {
+    if (!file || busy || restoring) return;
+    const epoch = viewEpoch;
+    uploadsPending += 1; updateControls();
+    // The first upload can create a session. Serializing subsequent uploads
+    // ensures they use that session rather than creating independent ones.
+    uploadQueue = uploadQueue.catch(() => {}).then(async () => {
+      if (viewEpoch !== epoch) return;
+      const body = new FormData(); body.append('file', file);
+      if (session) { body.append('session_id', session.id); body.append('session_token', session.token); }
+      try {
+        const response = await fetch('/api/files', {method: 'POST', body});
+        const data = await response.json();
+        if (!response.ok || data.ok === false) throw new Error(data.message || 'Upload failed.');
+        if (viewEpoch !== epoch) return;
+        if (data.session) saveSession(data.session);
+        attachments.push(data.attachment); renderChips();
+        if (data.blocks?.length) show(data.blocks);
+      } catch (error) { if (viewEpoch === epoch) toast(error.message); }
+    }).finally(() => { uploadsPending -= 1; updateControls(); });
+    return uploadQueue;
   }
   function renderChips() {
     $('chips').replaceChildren(...attachments.map((a, i) => {
@@ -342,7 +435,7 @@
       const head = el('label', 'plugin-head');
       const toggle = el('input'); toggle.type = 'checkbox'; toggle.checked = plugin.enabled;
       toggle.onchange = async () => {
-        try { config = {...config, ...(await post('/api/settings/plugins/' + plugin.name, {enabled: toggle.checked}))}; location.reload(); }
+        try { config = {...config, ...(await post('/api/settings/plugins/' + plugin.name, {enabled: toggle.checked}))}; renderSettings(); await loadPluginUi(); }
         catch (error) { toggle.checked = !toggle.checked; toast(error.message); }
       };
       head.append(toggle, el('b', '', plugin.title));
@@ -375,18 +468,26 @@
     if (setting.help) row.append(el('small', '', setting.help));
     return row;
   }
-  function loadPluginUi() {
+  async function loadPluginUi() {
+    const pending = [];
     for (const plugin of config.plugins) {
-      if (!plugin.enabled || !plugin.ui) continue;
+      for (const panel of document.querySelectorAll('.panel[data-plugin]')) if (panel.dataset.plugin === plugin.name) panel.hidden = !plugin.enabled;
+      if (!plugin.enabled || !plugin.ui || loadedUis.has(plugin.name)) continue;
+      loadedUis.add(plugin.name);
       const style = el('link'); style.rel = 'stylesheet'; style.href = `/plugins/${plugin.name}/ui.css`; document.head.append(style);
-      const script = el('script'); script.src = `/plugins/${plugin.name}/ui.js`; document.body.append(script);
+      const script = el('script'); script.src = `/plugins/${plugin.name}/ui.js`;
+      pending.push(new Promise(resolve => { script.onload = resolve; script.onerror = () => { loadedUis.delete(plugin.name); toast(`Could not load ${plugin.title}.`); resolve(); }; }));
+      document.body.append(script);
     }
+    await Promise.all(pending);
+    const visible = [...document.querySelectorAll('.panel[data-plugin]')].some(p => !p.hidden);
+    $('panels').hidden = !visible; document.body.classList.toggle('has-panels', visible);
   }
   async function loadConfig() {
     try {
       const response = await fetch('/api/config');
       config = await response.json();
-      renderSettings(); loadPluginUi();
+      renderSettings(); await loadPluginUi();
     } catch { $('llm-status').textContent = 'Cannot reach the local server'; }
   }
 
@@ -396,15 +497,34 @@
   $('attach').onclick = () => $('file').click();
   $('file').onchange = () => { upload($('file').files[0]); $('file').value = ''; };
   $('new-chat').onclick = () => {
-    // No chat-history feature exists yet: the old session is deleted on the
-    // server, not just abandoned in the browser, so nothing from it can
-    // resurface in a later "new" conversation. Best-effort -- the UI moves
-    // on to a fresh chat either way.
-    const old = session;
-    saveSession(null); $('transcript').replaceChildren(); $('empty').hidden = false;
-    document.dispatchEvent(new Event('harness:new-session'));
-    if (old) post('/api/sessions/close', {session_id: old.id, session_token: old.token}).catch(() => {});
+    if (busy || uploadsPending) return;
+    pendingTitle = ''; beginSession(null); $('input').value = ''; grow(); $('input').focus();
   };
+  $('open-settings').onclick = $('workspace-settings').onclick = () => { closeDrawers(); $('settings-view').showModal(); };
+  $('toggle-workspace').onclick = () => {
+    const open = !document.body.classList.contains('show-workspace'); closeDrawers();
+    document.body.classList.toggle('show-workspace', open); $('drawer-backdrop').hidden = !open;
+    $('workspace').inert = !open;
+    $('toggle-workspace').setAttribute('aria-expanded', String(open));
+  };
+  $('toggle-research').onclick = () => {
+    if (window.innerWidth > 900) {
+      document.body.classList.toggle('research-collapsed'); closeDrawers();
+    } else {
+      const open = !document.body.classList.contains('show-panels'); closeDrawers();
+      document.body.classList.toggle('show-panels', open); $('drawer-backdrop').hidden = !open;
+      $('panels').inert = !open;
+      $('toggle-research').setAttribute('aria-expanded', String(open));
+    }
+  };
+  $('drawer-backdrop').onclick = closeDrawers;
+  $('close-workspace').onclick = () => { closeDrawers(); $('toggle-workspace').focus(); };
+  $('close-research').onclick = () => { closeDrawers(); $('toggle-research').focus(); };
+  $('panels').addEventListener('click', event => {
+    if (window.innerWidth <= 900 && event.target.closest('.research-item')) closeDrawers();
+  });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') closeDrawers(); });
+  window.addEventListener('resize', closeDrawers);
   $('model-form').onsubmit = async event => {
     event.preventDefault();
     try { config = {...config, ...(await post('/api/settings/model', {model: $('model').value.trim()}))}; renderSettings(); toast('Model saved.'); }
@@ -417,14 +537,114 @@
   };
   document.addEventListener('dragover', event => event.preventDefault());
   document.addEventListener('drop', event => { event.preventDefault(); upload(event.dataTransfer.files[0]); });
-  // No chat-history feature exists yet, so a page load starts a fresh chat:
-  // a session left in localStorage would otherwise stay live on the server
-  // (the model still reading turns the empty page no longer shows). Same
-  // path as New chat: delete it server-side, best-effort, then forget it.
-  if (session) {
-    const stale = session;
-    saveSession(null);
-    post('/api/sessions/close', {session_id: stale.id, session_token: stale.token}).catch(() => {});
+  $('stop').onclick = async () => {
+    try { if (session) await post('/api/sessions/cancel', sessionRef()); streamController?.abort(); toast('Stopping; the current request may take time to return.'); }
+    catch (error) { toast(error.message); }
+  };
+  $('delete-chat').onclick = async () => {
+    if (!session || busy || restoring || uploadsPending) return;
+    const id = session.id, epoch = viewEpoch;
+    try {
+      await post('/api/sessions/close', sessionRef()); saved = saved.filter(s => s.id !== id); storeSaved();
+      if (viewEpoch === epoch) $('new-chat').click(); else renderSaved();
+    } catch (error) { toast(error.message); }
+  };
+  async function restoreSession(value) {
+    const epoch = beginSession(value); restoring = true; updateControls();
+    try {
+      const data = await post('/api/sessions/resume', {session_id: value.id, session_token: value.token});
+      if (viewEpoch !== epoch) return;
+      const label = (data.timeline || []).find(turn => turn.role === 'user')?.text?.slice(0, 60);
+      const entry = saved.find(item => item.id === value.id);
+      if (entry && label && entry.title === 'Saved conversation') { entry.title = label; storeSaved(); renderSaved(); }
+      for (const turn of data.timeline || []) {
+        if (turn.role === 'user') userBubble(turn.text || '', turn.attachments || []);
+        else show(turn.blocks || []);
+      }
+      if (data.persistence_warning) show([{type: 'notice', level: 'warning', text: data.persistence_warning}]);
+      if (data.running) show([{type: 'notice', level: 'info', text: 'A previous request is stopping or finishing. Refresh the saved conversation after it returns.'}]);
+      await refreshMaterials();
+      if (viewEpoch !== epoch) return;
+      document.dispatchEvent(new Event('harness:session-restored'));
+    } catch (error) {
+      if (viewEpoch !== epoch) return;
+      show([{type: 'notice', level: 'error', text: error.message}]);
+      toast(error.message);
+    } finally { if (viewEpoch === epoch) { restoring = false; updateControls(); } }
   }
-  loadConfig();
+  $('saved-chats').onchange = async () => {
+    const value = saved.find(s => s.id === $('saved-chats').value);
+    if (!value || busy || uploadsPending) return;
+    try { await restoreSession(value); } catch (error) { toast(error.message); }
+  };
+  async function refreshMaterials(append = false) {
+    if (!session) return;
+    const owner = session.id, epoch = viewEpoch, generation = ++directoryGeneration;
+    const query = $('material-search').value, kind = $('material-kind').value;
+    $('more-materials').disabled = true;
+    let data;
+    try { data = await post('/api/materials', {...sessionRef(), query, kind, offset: append ? materialCursor || 0 : 0}); }
+    finally { if (directoryGeneration === generation) $('more-materials').disabled = false; }
+    if (session?.id !== owner || viewEpoch !== epoch || directoryGeneration !== generation || $('material-search').value !== query || $('material-kind').value !== kind) return;
+    if (!append) $('materials').replaceChildren();
+    for (const item of data.items) {
+      const fields = item.fields || {};
+      const title = item.meta?.research?.title || fields.style_of_cause || fields.title || item.artifact_kind || item.detail || item.record_type || item.kind;
+      const button = el('button', 'material-item');
+      button.append(el('span', '', String(title).slice(0, 100)), el('small', '', `${item.ref} · ${item.provider || item.artifact_kind || item.kind}`));
+      button.onclick = () => openMaterial(item.ref).catch(error => toast(error.message)); $('materials').append(button);
+    }
+    materialCursor = data.next_offset; $('more-materials').hidden = materialCursor == null;
+    if (!data.total) $('materials').append(el('small', 'hint', query ? 'No matches in this category.' : 'No saved items in this category yet.'));
+  }
+  async function openMaterial(ref, field = '', offset = 0, exact = false) {
+    if (!session) throw new Error('No conversation yet.');
+    const epoch = viewEpoch, owner = session.id, generation = ++materialGeneration;
+    const data = await post(`/api/materials/${encodeURIComponent(ref)}`, {...sessionRef(), field, offset, exact});
+    if (viewEpoch !== epoch || session?.id !== owner || materialGeneration !== generation) return;
+    if (materialPage?.ref !== data.ref || materialPage?.field !== data.field) { $('material-hits').replaceChildren(); $('material-find').value = ''; }
+    materialPage = {...data, exact};
+    $('material-title').textContent = data.ref;
+    $('material-field').replaceChildren(...data.available_fields.map(name => { const option = el('option', '', name); option.value = name; return option; }));
+    $('material-field').value = data.field;
+    $('material-text').textContent = data.text;
+    let coverage = '';
+    if (data.coverage) {
+      try { const c = typeof data.coverage === 'string' ? JSON.parse(data.coverage) : data.coverage; coverage = ` · ${c.status} coverage` + (c.total_units ? ` · ${(c.processed_units || []).length}/${c.total_units} units read` : '') + (c.missing_units?.length ? ` · missing: ${c.missing_units.slice(0, 20).join(', ')}` : '') + (c.stale ? ' · cached source may be stale' : ''); }
+      catch { coverage = ' · extraction coverage unavailable'; }
+    }
+    $('material-status').textContent = `${data.origin} · characters ${data.offset}–${data.offset + data.text.length} of ${data.total_chars}${coverage}`;
+    $('material-prev').disabled = data.offset === 0; $('material-next').disabled = data.next_offset == null;
+    if (!$('material-view').open) $('material-view').showModal();
+  }
+  $('material-find-go').onclick = async () => {
+    if (!materialPage || $('material-find').value.trim().length < 2) return;
+    const epoch = viewEpoch, owner = materialPage, query = $('material-find').value.trim(), generation = ++findGeneration;
+    try {
+      const data = await post(`/api/materials/${encodeURIComponent(owner.ref)}/search`, {...sessionRef(), field: owner.field, query});
+      if (viewEpoch !== epoch || materialPage !== owner || findGeneration !== generation || $('material-find').value.trim() !== query) return;
+      $('material-hits').replaceChildren();
+      for (const hit of data.matches) {
+        const button = el('button', 'material-hit', `${hit.start}: ${hit.text.slice(0, 180)}`);
+        button.onclick = () => openMaterial(hit.ref, hit.field, Math.max(0, hit.start - 200), true).catch(error => toast(error.message));
+        $('material-hits').append(button);
+      }
+      if (!data.matches.length) $('material-hits').append(el('p', 'hint', 'No matching words in this saved text.'));
+    } catch (error) { toast(error.message); }
+  };
+  $('material-view').addEventListener('close', () => { materialGeneration += 1; findGeneration += 1; });
+  $('material-field').onchange = () => openMaterial(materialPage.ref, $('material-field').value, 0, materialPage.exact).catch(error => toast(error.message));
+  $('material-prev').onclick = () => openMaterial(materialPage.ref, materialPage.field, Math.max(0, materialPage.offset - 4000), materialPage.exact).catch(error => toast(error.message));
+  $('material-next').onclick = () => openMaterial(materialPage.ref, materialPage.field, materialPage.next_offset, materialPage.exact).catch(error => toast(error.message));
+  $('refresh-materials').onclick = () => refreshMaterials().catch(error => toast(error.message));
+  $('more-materials').onclick = () => refreshMaterials(true).catch(error => toast(error.message));
+  $('material-search').oninput = () => refreshMaterials().catch(error => toast(error.message));
+  $('material-kind').onchange = () => refreshMaterials().catch(error => toast(error.message));
+  closeDrawers(); renderSaved();
+  loadConfig().then(async () => {
+    if (session) {
+      if (!saved.some(s => s.id === session.id)) saveSession(session);
+      await restoreSession(session);
+    }
+  });
 })();

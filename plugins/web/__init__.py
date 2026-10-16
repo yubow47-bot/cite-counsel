@@ -16,7 +16,7 @@ import html
 import os
 import re
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field
 
@@ -161,6 +161,76 @@ def _is_challenge(title: str, text: str) -> bool:
     return any(marker in head for marker in _CHALLENGE_MARKERS)
 
 
+def _is_empty_app_shell(text: str) -> bool:
+    """Recognize short JS-enablement boilerplate with no substantive residue.
+
+    The words JavaScript/enable alone are not a failure: articles discussing
+    them, and real content next to a browser hint, remain readable sources.
+    """
+    value = re.sub(r"\s+", " ", text).strip().casefold().replace("’", "'")
+    if len(value) > 1200:
+        return False
+    prompts = (
+        r"(?:you need to|please) enable javascript to (?:run (?:this|the) app|(?:view|use) (?:this|the) (?:page|site|website))\.?",
+        r"[\w-]{1,40} needs javascript to function properly and provide you with a fast, stable experience\.?",
+        r"le site [^.!?]{1,80} exige javascript pour fonctionner comme il faut, avec rapidité et stabilité\.?",
+    )
+    if not any(re.search(pattern, value) for pattern in prompts):
+        return False
+    for pattern in prompts:
+        value = re.sub(pattern, "", value)
+    for instruction in (
+        "to have a better experience, you need to:", "go to your browser's settings", "enable javascript",
+        "pour avoir une meilleure expérience, vous devez :", "accéder aux paramètres de votre navigateur", "activer javascript",
+        "javascript is disabled in your browser.", "javascript is disabled.",
+    ):
+        value = value.replace(instruction, "")
+    return not value.strip(" .,:;!?-–—")
+
+
+def _source_url(value: str) -> str:
+    """Conservative HTTP identity; a fragment never selects another response.
+
+    Keep path and query spelling/order intact. A redirect's actual final URL,
+    not a page's title or canonical-link assertion, identifies the material.
+    """
+    try:
+        parts = urlsplit(str(value).strip())
+        if parts.scheme.lower() not in {"http", "https"} or not parts.hostname or parts.username or parts.password:
+            return ""
+        host = parts.hostname.lower()
+        if ":" in host:
+            host = "[" + host + "]"
+        port = parts.port
+        if port is not None and (parts.scheme.lower(), port) not in {("http", 80), ("https", 443)}:
+            host += ":" + str(port)
+        return urlunsplit((parts.scheme.lower(), host, parts.path or "/", parts.query, ""))
+    except (TypeError, ValueError):
+        return ""
+
+
+def _source_heads(ctx, identity):
+    """Include legacy independent fetches so all old source branches age out."""
+    from core.tool_contracts import Record
+    if not identity:
+        return []
+    matches = []
+    for ref, record in ctx.records.all(Record):
+        meta = ctx.records.meta(ref)
+        field = record.fields.get("text")
+        if (record.provider != "web" or record.source_type != "website" or not field
+                or field.origin != "extracted" or meta.get("composed")
+                or ctx.records.current_ref(ref) != ref):
+            continue
+        snapshot = meta.get("source_snapshot") or {}
+        # Old saved web records have no web_source metadata. Their response
+        # snapshot, or the adapter's actual request ID, remains usable.
+        url = (meta.get("web_source") or {}).get("url") or snapshot.get("final_url") or record.record_id
+        if _source_url(url) == identity:
+            matches.append((ref, record))
+    return matches
+
+
 def fetch(ctx, p: FetchParams) -> Result:
     from core.tool_contracts import Field, Record
     from local_tools.web_extract import extract_from_url
@@ -175,6 +245,8 @@ def fetch(ctx, p: FetchParams) -> Result:
     text = page["raw_text"].strip()
     if _is_challenge(str(page.get("page_title") or ""), text):
         raise ValueError("the site answered with a bot-check page, not the requested content")
+    if _is_empty_app_shell(text):
+        raise ValueError("the page returned only a JavaScript-enablement notice; the requested content was not obtained")
     site = str(page.get("site_name") or "").strip()
     title = str(page.get("page_title") or p.url).strip()
     if site and " | " in title:
@@ -191,26 +263,51 @@ def fetch(ctx, p: FetchParams) -> Result:
         if value:
             fields[name] = Field(value, "extracted")
     record = Record("website", fields, "web", p.url)
-    meta = None
-    if fetched:
-        expected_ref = ctx.records.next_ref(record)
-        snapshot = ctx._harness.sessions.save_source(ctx.session, expected_ref, fetched["body"],
-                                                      requested_url=p.url, response=fetched["response"])
-        meta = {"source_snapshot": snapshot}
-    ref = ctx.save(record, meta=meta)
-    if fetched and ref != expected_ref:
-        raise RuntimeError("The saved source and record references differ.")
+    identity = _source_url((fetched.get("response") or {}).get("final_url") or p.url)
+    heads = _source_heads(ctx, identity)
+    changed = [ref for ref, previous in heads if previous.fields["text"].value != text]
+
+    def save_version(value, *, prior=None, material_ref=None):
+        expected_ref = ctx.records.next_ref(value)
+        meta = {"web_source": {"url": identity}}
+        if material_ref:
+            meta["web_source"]["material_ref"] = material_ref
+        snapshot = None
+        if fetched:
+            snapshot = ctx._harness.sessions.save_source(ctx.session, expected_ref, fetched["body"],
+                        requested_url=p.url, response=fetched["response"])
+            meta["source_snapshot"] = snapshot
+        saved_ref = ctx.save(value, meta=meta, supersedes=prior)
+        if saved_ref != expected_ref:
+            raise RuntimeError("The saved source and record references differ.")
+        return saved_ref, snapshot
+
+    if changed or not heads:
+        # Legacy sessions can contain several independent refs for one URL.
+        # Advance each changed head; do not leave an older cited branch fresh.
+        for previous in changed or [None]:
+            ref, snapshot = save_version(record, prior=previous)
+        retrieval_ref = ref
+    else:
+        ref = heads[-1][0]
+        snapshot, retrieval_ref = None, ref
+        if fetched:
+            # Reusing the original ref for save_source would overwrite its raw
+            # response. Keep a separate fetch receipt without duplicating the
+            # text into another source branch that could escape future updates.
+            retrieval = Record("web_fetch", {"url": fields["url"]}, "web", p.url)
+            retrieval_ref, snapshot = save_version(retrieval, material_ref=ref)
     content = {"url": p.url, "title": title, "text": text[:5000], "truncated": len(text) > 5000,
                "record": {"ref": ref}}
-    if meta:
-        content["source_snapshot"] = {"sha256": snapshot["sha256"],
+    if snapshot:
+        content["source_snapshot"] = {"ref": retrieval_ref, "sha256": snapshot["sha256"],
                                        "retrieved_at": snapshot["retrieved_at"],
                                        "version_as_of": snapshot["version_as_of"]}
     for name in ("date", "author"):
         if name in fields:
             content[name] = fields[name].value
     block = {"type": "web_page", "url": p.url, "title": title, "chars": len(text),
-             "ref": ref, "snapshot": bool(meta)}
+             "ref": retrieval_ref, "material_ref": ref, "snapshot": bool(snapshot)}
     if "date" in fields:
         block["date"] = fields["date"].value
     return Result(content, [block])
@@ -220,7 +317,9 @@ PLUGIN = Plugin(
     name="web",
     title="Web search",
     description="Search public web results and extract text and metadata from public pages.",
-    tools=[Tool("search", "Search the web (Exa; supports a latest-N-days filter).", SearchParams, search),
+    tools=[Tool("search", "Search the web with the configured provider; supports a latest-N-days filter.", SearchParams, search,
+                available=lambda ctx: bool(ctx.settings.get("provider") in {"exa", "duckduckgo_lite"}
+                     and (ctx.settings.get("provider") != "exa" or ctx.settings.get("exa_api_key") or os.getenv("EXA_API_KEY", "").strip()))),
            Tool("fetch", "Read the text of one public web page.", FetchParams, fetch)],
     settings=[Setting("provider", "Search service", "choice", tuple(PROVIDERS), "",
                       "Web search only sends requests once one is chosen.", labels=PROVIDERS),

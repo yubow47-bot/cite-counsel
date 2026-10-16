@@ -117,7 +117,7 @@ def test_nothing_is_loaded_until_the_model_asks(monkeypatch, harness):
     assert plugin_tools == ["load_plugin", "read_skill"]
     assert "alpha: Echoes text." in script.calls[0]["messages"][0]["content"]
     assert "record__compose" in script.calls[0]["tools"]          # harness-owned, always on
-    assert script.calls[1]["tools"] == ["alpha__echo", "record__compose", "read_skill", "record__read"]
+    assert script.calls[1]["tools"] == ["alpha__echo", "record__compose", "read_skill", "record__read", "record__list", "record__search"]
     assert [b["type"] for b in blocks] == ["activity", "echo", "text"] and blocks[1]["plugin"] == "alpha"
     # The echo result was final: the model is told it is on screen, but keeps
     # its tools -- the request may need a next step; here it just replies.
@@ -340,7 +340,7 @@ def test_event_log_captures_exact_model_request_and_result(monkeypatch, harness)
     path = harness.sessions.store_dir / f"{session.id}.events.jsonl"
     events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     assert [event["kind"] for event in events] == [
-        "model_request", "model_response", "tool_call", "tool_result", "model_request", "model_response"]
+        "model_request", "model_response", "tool_call", "tool_result", "model_request", "model_response", "answer_delivered"]
     request = events[0]["payload"]
     assert "Available tool plugins:" in request["messages"][0]["content"]
     assert "- alpha: Echoes text." in request["messages"][0]["content"]

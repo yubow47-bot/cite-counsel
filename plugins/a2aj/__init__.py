@@ -11,6 +11,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from core.source_tools import SourceContractError, source_cases, source_legislation
+from local_tools.source_status import SourceRequestError
 from harness.plugin import Plugin, Result, Tool
 
 CASE_FACTS = (r"\b\d{4}\s+[A-Z]{2,6}\s+\d+\b", r"\[\d{4}\]\s*\d*\s*[A-Z]{2,6}\s*\d+")
@@ -22,13 +23,20 @@ class CaseParams(BaseModel):
 
 
 def find_case(ctx, p: CaseParams) -> Result:
-    records = source_cases(p.query)
-    refs = [_ref(ctx, r) for r in records]
+    try:
+        records = source_cases(p.query)
+    except SourceRequestError as exc:
+        return Result(exc.content(), [{"type": "notice", "level": "warning", "text": str(exc)}])
+    coverage = getattr(records, "coverage", {"status": "complete", "source": "a2aj", "query": p.query})
+    refs = [ctx.save(r, {"source_coverage": coverage}) for r in records]
     blocks = [{"type": "record_card", "ref": ref, "source_type": r.source_type,
                "fields": {k: f.value for k, f in r.fields.items()},
                "verified": True} for ref, r in zip(refs, records)]
-    return Result({"found": len(records), "records": [ctx.records.summary(ref) for ref in refs],
-                   "note": ("records are stored; refer to them by ref" if records else
+    if coverage.get("status") != "complete":
+        blocks.append({"type": "notice", "level": "warning", "text": "Search coverage is incomplete; results may be missing."})
+    return Result({"found": len(records), "records": [ctx.records.summary(ref) for ref in refs], "coverage": coverage,
+                   "note": ("search incomplete; inspect coverage before relying on results" if coverage.get("status") != "complete" else
+                            "records are stored; refer to them by ref" if records else
                             "no match in the Canadian databases searched; this does not mean it does not exist")},
                   blocks + ([{"type": "notice", "level": "info",
                               "text": "No matching case found. A2AJ searches Canadian case law by name and "
@@ -41,13 +49,20 @@ class LegislationParams(BaseModel):
 
 
 def find_legislation(ctx, p: LegislationParams) -> Result:
-    records = source_legislation(p.query)
-    refs = [_ref(ctx, r) for r in records]
+    try:
+        records = source_legislation(p.query)
+    except SourceRequestError as exc:
+        return Result(exc.content(), [{"type": "notice", "level": "warning", "text": str(exc)}])
+    coverage = getattr(records, "coverage", {"status": "complete", "source": "a2aj", "query": p.query})
+    refs = [ctx.save(r, {"source_coverage": coverage}) for r in records]
     blocks = [{"type": "record_card", "ref": ref, "source_type": r.source_type,
                "fields": {k: f.value for k, f in r.fields.items()},
                "verified": True} for ref, r in zip(refs, records)]
-    return Result({"found": len(records), "records": [ctx.records.summary(ref) for ref in refs],
-                   "note": "records are stored; refer to them by ref" if records else "no match"},
+    if coverage.get("status") != "complete":
+        blocks.append({"type": "notice", "level": "warning", "text": "Search coverage is incomplete; results may be missing."})
+    return Result({"found": len(records), "records": [ctx.records.summary(ref) for ref in refs], "coverage": coverage,
+                   "note": "search incomplete; inspect coverage before relying on results" if coverage.get("status") != "complete" else
+                           "records are stored; refer to them by ref" if records else "no match"},
                   blocks, final=bool(records))
 
 
@@ -59,29 +74,32 @@ def full_text(ctx, p: FullTextParams) -> Result:
     """Fetch the judgment's (unofficial) full text and attach it as a database field."""
     from core import quote_check
     from core.tool_contracts import Field, Record
-    record = ctx.records.get(p.ref)
+    previous = ctx.records.current_ref(p.ref)
+    record = ctx.records.get_exact(previous, Record)
     citation = (record.fields.get("neutral_citation") or record.fields.get("reporter"))
     if citation is None or citation.origin != "database" or not citation.value:
         raise ValueError("Only a case record the database returned can have its full text fetched; the "
                          "citation must come from a database field.")
-    found = quote_check.judgment(citation.value)
+    try:
+        # This is an explicit fetch, including a user's request to refresh a
+        # source. Quote matching may reuse cached text; fetching must not.
+        found = quote_check.judgment(citation.value, refresh=True)
+    except SourceRequestError as exc:
+        return Result(exc.content(), [{"type": "notice", "level": "warning", "text": str(exc)}])
     if found is None:
         raise ValueError("The database has no full text for this judgment; it cannot be fetched.")
     version = Record(record.source_type,
                      {**record.fields, "full_text": Field(found["text"], "database",
                                                           source_id=found["url"] or f"a2aj:{citation.value}")},
                      record.provider, record.record_id)
-    ref = _ref(ctx, version)
-    return Result({"ref": ref, "replaces": p.ref, "chars": len(found["text"]),
+    ref = ctx.save(version, {"source_coverage": found.get("coverage", {"status": "complete", "source": "a2aj"})},
+                   supersedes=previous)
+    return Result({"ref": ref, "replaces": previous, "chars": len(found["text"]),
                    "note": "the full text is a database field on the new record version"},
                   [{"type": "card", "title": "Full text fetched",
                     "rows": [["Record", ref], ["Characters", str(len(found["text"]))],
                              ["Source", found["url"] or f"a2aj:{citation.value}"]],
                     "note": "The full text is A2AJ's unofficial text; the quote check tool uses it."}])
-
-
-def _ref(ctx, record) -> str:
-    return ctx.save(record)
 
 
 PLUGIN = Plugin(

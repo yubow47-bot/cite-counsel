@@ -56,13 +56,31 @@ class Result:
     """What a tool or action hands back.
 
     ``content`` goes to the model (keep it small); ``blocks`` go to the user,
-    rendered by the plugin's UI. ``final`` says the blocks already answer the
-    user, so the turn ends without another model call.
+    rendered by the plugin's UI. ``final`` says the blocks are a usable output;
+    the model may still continue researching or provide a final reply.
+    ``reply`` explicitly delivers a completed answer when this is the batch's
+    last call; it bypasses a redundant model summarization round.
     """
 
     content: Any = None
     blocks: list[dict] = field(default_factory=list)
     final: bool = False
+    reply: str | None = None  # explicit user-facing answer; last call can finish without another model round
+
+
+@dataclass(frozen=True)
+class CompletionRequest:
+    """Pure completion proposal; only the harness may request/execute it.
+
+    Exactly one registered tool may be called, under the current turn budget.
+    The request and returned tool exchange are recorded before delivery.
+    ``failure_reply`` is optional, already safe user-facing text supplied by
+    the plugin. It replaces the uncompleted draft if the requested completion
+    cannot run or fails. It must not perform or imply hidden verification.
+    """
+    messages: list[dict]
+    tool_name: str
+    failure_reply: str | None = None
 
 
 @dataclass
@@ -71,6 +89,7 @@ class Tool:
     description: str
     params: type[BaseModel]
     handler: Callable[..., Result]  # handler(ctx, params_instance) -> Result
+    available: Callable[..., bool] | None = None  # optional configuration readiness, checked on offer and execution
 
 
 @dataclass
@@ -98,7 +117,11 @@ class Plugin:
     api: Any = None
     category: str = "function"     # "source" | "extract" | "function": what origins it may produce
     fact_patterns: tuple = ()      # regexes for fact-shaped strings this domain uses (grounding)
+    readonly_actions: tuple[str, ...] = ()  # view refreshes do not add conversation history
+    context_provider: Callable[..., str] | None = None  # compact saved task state, not hidden instructions
+    final_response_checks: Callable[..., list[dict]] | None = None  # user-visible checks of saved work
     skill: Path | None = None       # optional Markdown method note; readable separately from tools
+    prepare_completion: Callable[..., CompletionRequest | None] | None = None  # data only; no model/tool execution
 
     def validate(self) -> None:
         if not NAME_RE.match(self.name):

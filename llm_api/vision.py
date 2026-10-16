@@ -69,7 +69,13 @@ def _call_vision(image_paths: list[str]) -> dict | None:
         data = resp.json()
         text = choice_text(data)
         track_usage(model, data)
-        return parse_llm_json(text)
+        result = parse_llm_json(text)
+        if not isinstance(result, dict):
+            return None
+        choices = data.get("choices") or []
+        finish = choices[0].get("finish_reason") if choices else None
+        result["_vision_finish_reason"] = finish
+        return result
     except Exception:
         return None
 
@@ -81,7 +87,7 @@ def _align_fields(vision_result: dict) -> dict:
     """
     date_raw = (vision_result.get("date") or "").strip()
     newspaper_raw = (vision_result.get("newspaper") or "").strip()
-    title_raw = (vision_result.get("page_title") or "").strip()
+    title_raw = (vision_result.get("title") or vision_result.get("page_title") or "").strip()
     raw_text = (vision_result.get("raw_text") or "").strip()
 
     # Keep the publication name exactly as extracted — it is a REAL name read
@@ -91,6 +97,7 @@ def _align_fields(vision_result: dict) -> dict:
     fields = {
         "url": (vision_result.get("url") or "").strip() or None,
         "page_title": title_raw or None,
+        "title": title_raw or None,
         "author": (vision_result.get("author") or "").strip() or None,
         "date": date_raw or None,
         "newspaper": newspaper,
@@ -100,7 +107,13 @@ def _align_fields(vision_result: dict) -> dict:
         "statute_title": None,
         "jurisdiction": None,
         "year": date_raw[:4] if date_raw else None,
-        "raw_text": raw_text[:3000] if raw_text else None,
+        "raw_text": raw_text or None,
+        "coverage": {"status": "complete" if vision_result.get("_vision_finish_reason") == "stop" else "partial",
+                     "format": "image", "total_units": 1,
+                     "processed_units": [1] if vision_result.get("_vision_finish_reason") == "stop" else [],
+                     "missing_units": [] if vision_result.get("_vision_finish_reason") == "stop" else [1],
+                     "method": "vision", "finish_reason": vision_result.get("_vision_finish_reason"),
+                     "transcription_verified": False},
     }
 
     # The vision schema has no hostname; absent values stay None/empty.

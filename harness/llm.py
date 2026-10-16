@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
+import queue
 import re
+import threading
+import time
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -13,6 +18,130 @@ logger = logging.getLogger(__name__)
 
 class LLMError(RuntimeError):
     pass
+
+
+class LLMDeadline(LLMError):
+    """The caller's wall-clock budget expired; no final message is accepted."""
+
+
+class LLMCancelled(LLMError):
+    """The caller cancelled this model request."""
+
+
+def _check_control(deadline: float | None, cancelled: Callable[[], bool] | None) -> None:
+    if cancelled is not None and cancelled():
+        raise LLMCancelled("The model request was cancelled.")
+    if deadline is not None and time.monotonic() >= deadline:
+        raise LLMDeadline("The model request reached its time limit.")
+
+
+def _close_response(response) -> None:
+    if response is not None:
+        try:
+            getattr(response, "close", lambda: None)()
+        except Exception:
+            logger.debug("Could not close the model response.", exc_info=True)
+
+
+def _response_events(model, messages, tools, timeout, *, stream, deadline=None, stopped=None,
+                     **options):
+    """Only HTTP I/O runs here; interpretation and accounting stay with the caller."""
+    response = None
+    data = None
+    try:
+        for include_reasoning in (True, False):
+            if stopped is not None and stopped.is_set():
+                return
+            _check_control(deadline, None)
+            remaining = timeout if deadline is None else min(timeout, deadline - time.monotonic())
+            response = _post(model, messages, tools, max(0.001, remaining),
+                             include_reasoning=include_reasoning, stream=stream, **options)
+            if stopped is not None and stopped.is_set():
+                return
+            if include_reasoning and response.status_code == 400:
+                text = response.text.lower()
+                if "reasoning" in text and "mandatory" not in text:
+                    _close_response(response)
+                    response = None
+                    continue
+            response.raise_for_status()
+            if stream:
+                # OpenRouter SSE has no charset; requests otherwise guesses Latin-1.
+                response.encoding = "utf-8"
+                for line in response.iter_lines(decode_unicode=True):
+                    if stopped is not None and stopped.is_set():
+                        return
+                    yield line
+            else:
+                data = response.json()
+            break
+    finally:
+        _close_response(response)
+    if not stream:
+        yield data
+
+
+def _model_io(model, messages, tools, timeout, *, stream, deadline=None, cancelled=None,
+              **options) -> Iterator:
+    """Bound caller latency even while HTTP blocks or dribbles tokens forever.
+
+    The optional guard owns a small queue and an I/O-only daemon. Stopping the
+    consumer discards late data; it never lets that worker touch session state,
+    interpret tool calls, or record usage. The worker closes its response in
+    ``finally`` once the underlying read/connect returns. Python cannot kill a
+    blocked HTTP/DNS operation, and socket timeouts are idle/per-operation limits,
+    so transport cleanup may outlive the caller's deadline.
+    """
+    if deadline is None and cancelled is None:
+        yield from _response_events(model, messages, tools, timeout, stream=stream, **options)
+        return
+    _check_control(deadline, cancelled)
+    # A timed-out request must not serialize a subsequently edited conversation.
+    messages, tools = copy.deepcopy((messages, tools))
+    events = queue.Queue(maxsize=8)
+    stopped = threading.Event()
+
+    def send(kind, value=None):
+        while not stopped.is_set():
+            try:
+                events.put((kind, value), timeout=0.05)
+                return True
+            except queue.Full:
+                pass
+        return False
+
+    def produce():
+        source = _response_events(model, messages, tools, timeout, stream=stream,
+                                  deadline=deadline, stopped=stopped, **options)
+        try:
+            for value in source:
+                if not send("value", value):
+                    return
+        except BaseException as exc:
+            send("error", exc)
+        else:
+            send("end")
+        finally:
+            source.close()
+
+    threading.Thread(target=produce, name="model-http", daemon=True).start()
+    try:
+        while True:
+            _check_control(deadline, cancelled)
+            wait = 0.05 if deadline is None else min(0.05, max(0.001, deadline - time.monotonic()))
+            try:
+                kind, value = events.get(timeout=wait)
+            except queue.Empty:
+                continue
+            # The result may have arrived just as the deadline/cancellation fired.
+            _check_control(deadline, cancelled)
+            if kind == "error":
+                raise value
+            if kind == "end":
+                return
+            yield value
+    finally:
+        stopped.set()
 
 
 @dataclass(frozen=True)
@@ -163,7 +292,8 @@ def plain_schema(schema: dict) -> dict:
 
 
 def _post(model: str, messages: list[dict], tools: list[dict], timeout: float, *,
-          include_reasoning: bool, stream: bool = False):
+          include_reasoning: bool, stream: bool = False, reasoning_effort: str | None = None,
+          max_tokens: int | None = None, tool_choice=None):
     from llm_api.openrouter_api import post_chat_completion
     body = {"model": model, "messages": messages, "temperature": 0}
     # Reasoning is requested on every call so the user can see how the model
@@ -171,39 +301,52 @@ def _post(model: str, messages: list[dict], tools: list[dict], timeout: float, *
     # support the field ignores it; one that rejects it is retried below
     # with the field left out.
     if include_reasoning:
-        body["reasoning"] = {"enabled": True}
+        effort = reasoning_effort or ("low" if tools else None)
+        body["reasoning"] = {"enabled": True, **({"effort": effort} if effort else {})}
+    if max_tokens is not None:
+        body["max_tokens"] = max_tokens
     if tools:
         body["tools"] = tools
+        if tool_choice is not None:
+            body["tool_choice"] = tool_choice
     if stream:
         body["stream"] = True
         body["stream_options"] = {"include_usage": True}
-    return post_chat_completion(body, read_timeout=timeout, stream=stream)
+    return post_chat_completion(body, connect_timeout=min(2.7, timeout), read_timeout=timeout, stream=stream)
 
 
-def chat(model: str, messages: list[dict], tools: list[dict], *, timeout: float = 60) -> dict:
-    """Return the assistant message (may carry ``tool_calls`` and ``reasoning``)."""
+def chat(model: str, messages: list[dict], tools: list[dict], *, timeout: float = 60,
+         reasoning_effort: str | None = None, max_tokens: int | None = None, tool_choice=None,
+         deadline: float | None = None, cancelled: Callable[[], bool] | None = None) -> dict:
+    """Return a complete assistant message; ``deadline`` uses ``time.monotonic()``."""
     from core.spend_tracker import spend_tracker
     from llm_api.openrouter_api import track_usage
     if spend_tracker.is_over_cap():
         raise LLMError("Today's model spend cap has been reached.")
+    io = _model_io(model, messages, tools, timeout, stream=False, deadline=deadline, cancelled=cancelled,
+                   reasoning_effort=reasoning_effort, max_tokens=max_tokens, tool_choice=tool_choice)
     try:
-        response = _post(model, messages, tools, timeout, include_reasoning=True)
-        text = response.text.lower()
-        if response.status_code == 400 and "reasoning" in text and "mandatory" not in text:
-            response = _post(model, messages, tools, timeout, include_reasoning=False)
-        response.raise_for_status()
-        data = response.json()
+        data = next(io)
     except ValueError as exc:
         raise LLMError("No model API key is configured.") from exc
+    except LLMError:
+        raise
     except Exception as exc:
         logger.error("llm.chat failed for model %s: %s", model, exc)
         raise LLMError("The model service is temporarily unavailable.") from exc
+    finally:
+        io.close()
+    _check_control(deadline, cancelled)
     track_usage(model, data)
     try:
+        if data["choices"][0].get("finish_reason") not in {None, "stop", "tool_calls", "function_call"}:
+            raise LLMError("The model response did not complete; its partial response was not committed.")
         message = data["choices"][0]["message"]
     except (KeyError, IndexError, TypeError) as exc:
         raise LLMError("The model returned an unexpected format.") from exc
-    return _finalize(message, tools, profile_for(model))
+    message = _finalize(message, tools, profile_for(model))
+    _check_control(deadline, cancelled)
+    return message
 
 
 def _finalize(message: dict, tools: list[dict], profile: ModelProfile | None = None) -> dict:
@@ -216,38 +359,35 @@ def _finalize(message: dict, tools: list[dict], profile: ModelProfile | None = N
     return message
 
 
-def chat_stream(model: str, messages: list[dict], tools: list[dict], *, timeout: float = 60):
+def chat_stream(model: str, messages: list[dict], tools: list[dict], *, timeout: float = 60,
+                deadline: float | None = None, cancelled: Callable[[], bool] | None = None):
     """Same call as ``chat``, but a generator: ``("reasoning" | "content", delta)``
     events as tokens arrive, then one final ``("done", message)`` with the
     same assembled message ``chat()`` would have returned (usable for the
     tool-calling pipeline exactly as before). Lets the page show the model's
-    thinking as it happens instead of only once the whole turn is done."""
+    thinking as it happens instead of only once the whole turn is done.
+    ``deadline`` is absolute monotonic time; cancellation/deadlines never emit
+    ``done`` for a partial message, even if the HTTP transport is stalled."""
     from core.spend_tracker import spend_tracker
     from llm_api.openrouter_api import track_usage
     if spend_tracker.is_over_cap():
         raise LLMError("Today's model spend cap has been reached.")
+    io = _model_io(model, messages, tools, timeout, stream=True, deadline=deadline, cancelled=cancelled)
+    usage = None
     try:
-        response = _post(model, messages, tools, timeout, include_reasoning=True, stream=True)
-        if response.status_code == 400:
-            text = response.text.lower()
-            if "reasoning" in text and "mandatory" not in text:
-                response.close()
-                response = _post(model, messages, tools, timeout, include_reasoning=False, stream=True)
-        response.raise_for_status()
-        # requests guesses the encoding from Content-Type; OpenRouter's SSE
-        # response carries no charset, so it falls back to Latin-1 and every
-        # multi-byte character (em dashes, curly quotes, Chinese text) comes
-        # out as mojibake. The body is UTF-8 -- say so explicitly.
-        response.encoding = "utf-8"
         reasoning_parts: list[str] = []
         content_parts: list[str] = []
         tool_calls: dict[int, dict] = {}
         usage = None
-        for line in response.iter_lines(decode_unicode=True):
+        completed = False
+        finish_reason = None
+        saw_choice = False
+        for line in io:
             if not line or not line.startswith("data:"):
                 continue
             payload = line[len("data:"):].strip()
             if payload == "[DONE]":
+                completed = True
                 break
             try:
                 chunk = json.loads(payload)
@@ -255,12 +395,26 @@ def chat_stream(model: str, messages: list[dict], tools: list[dict], *, timeout:
                 raise LLMError("The model returned malformed stream data.") from exc
             if not isinstance(chunk, dict):
                 raise LLMError("The model returned malformed stream data.")
+            if chunk.get("error"):
+                raise LLMError("The model stream reported an error; this partial response was not committed.")
             if isinstance(chunk.get("usage"), dict):
                 usage = chunk["usage"]
             choices = chunk.get("choices") or []
             if not choices:
                 continue
+            if not isinstance(choices, list) or not isinstance(choices[0], dict):
+                raise LLMError("The model returned malformed stream choices.")
+            saw_choice = True
+            reason = choices[0].get("finish_reason")
+            if reason is not None:
+                finish_reason = reason
+                if reason not in {"stop", "tool_calls", "function_call"}:
+                    raise LLMError(f"The model response did not complete ({str(reason)[:60]}). "
+                                   "Its partial tool calls were not executed.")
+                completed = True
             delta = choices[0].get("delta") or {}
+            if not isinstance(delta, dict):
+                raise LLMError("The model returned malformed stream data.")
             reasoning = delta.get("reasoning")
             if isinstance(reasoning, str) and reasoning:
                 reasoning_parts.append(reasoning)
@@ -270,6 +424,8 @@ def chat_stream(model: str, messages: list[dict], tools: list[dict], *, timeout:
                 content_parts.append(content)
                 yield "content", content
             for call in delta.get("tool_calls") or []:
+                if not isinstance(call, dict) or type(call.get("index", 0)) is not int:
+                    raise LLMError("The model returned malformed tool call data.")
                 index = call.get("index", 0)
                 slot = tool_calls.setdefault(index, {"id": "", "type": "function",
                                                       "function": {"name": "", "arguments": ""}})
@@ -280,6 +436,8 @@ def chat_stream(model: str, messages: list[dict], tools: list[dict], *, timeout:
                     slot["function"]["name"] += function["name"]
                 if function.get("arguments"):
                     slot["function"]["arguments"] += function["arguments"]
+        if not completed or not saw_choice:
+            raise LLMError("The model stream ended before completion; its partial response was not committed.")
     except ValueError as exc:
         raise LLMError("No model API key is configured.") from exc
     except LLMError:
@@ -287,8 +445,10 @@ def chat_stream(model: str, messages: list[dict], tools: list[dict], *, timeout:
     except Exception as exc:
         logger.error("llm.chat_stream failed for model %s: %s", model, exc)
         raise LLMError("The model service is temporarily unavailable.") from exc
-    if usage:
-        track_usage(model, {"usage": usage})
+    finally:
+        io.close()
+        if usage:
+            track_usage(model, {"usage": usage})
     message = {"role": "assistant", "content": "".join(content_parts)}
     if reasoning_parts:
         message["reasoning"] = "".join(reasoning_parts)
@@ -296,7 +456,10 @@ def chat_stream(model: str, messages: list[dict], tools: list[dict], *, timeout:
     if ordered:
         message["tool_calls"] = [{"id": c["id"] or f"call_{n}", "type": "function", "function": c["function"]}
                                  for n, c in enumerate(ordered)]
-    yield "done", _finalize(message, tools, profile_for(model))
+    message["finish_reason"] = finish_reason or "stream_done"
+    message = _finalize(message, tools, profile_for(model))
+    _check_control(deadline, cancelled)
+    yield "done", message
 
 
 # GLM sometimes writes a tool call in its own text format instead of the
@@ -321,6 +484,12 @@ def _leaked_value(text: str):
 def _recover_leaked_calls(message: dict) -> dict:
     content = message.get("content")
     if message.get("tool_calls") or not isinstance(content, str) or "<tool_call>" not in content:
+        return message
+    # Recover only a complete protocol message. A model may quote a source's
+    # tool markup while explaining why it is untrusted; extracting calls out
+    # of that ordinary prose would turn the explanation into an execution.
+    # Code fences, labels and other surrounding text therefore remain data.
+    if _LEAKED_CALL.sub("", content).strip():
         return message
     calls = []
     for n, match in enumerate(_LEAKED_CALL.finditer(content)):

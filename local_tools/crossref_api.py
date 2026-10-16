@@ -2,6 +2,7 @@
 
 import re
 from local_tools.utils import crossref_session, request_with_retry
+from local_tools.source_status import SourceRequestError, failure_reason
 from profiling import timing as prof
 
 CROSSREF_HEADERS = {
@@ -29,13 +30,18 @@ def extract_doi(text: str) -> str | None:
 
 
 def fetch_crossref(doi: str) -> dict | None:
-    """Fetch CrossRef metadata for a DOI. Returns the 'message' dict, or None."""
+    """Fetch DOI metadata; only a successful lookup miss returns None."""
     url = f"https://api.crossref.org/works/{doi}"
     try:
         with prof.measure("http.crossref", endpoint="api.crossref.org"):
             resp = request_with_retry(crossref_session, "GET", url, headers=CROSSREF_HEADERS, read_timeout=15)
+        if getattr(resp, "status_code", None) == 404:
+            return None
         resp.raise_for_status()
-        return resp.json().get("message")
-    except Exception:
-        return None
+        payload = resp.json()
+        if not isinstance(payload, dict) or not isinstance(payload.get("message"), dict):
+            raise ValueError("Invalid metadata envelope")
+        return payload["message"]
+    except Exception as exc:
+        raise SourceRequestError("crossref", "DOI metadata", reason=failure_reason(exc)) from exc
 

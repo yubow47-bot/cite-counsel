@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 from dataclasses import replace
 from typing import Literal
 
@@ -11,6 +12,7 @@ from pydantic import BaseModel, Field, model_validator
 from core import mcgill_format
 from core.evidence_text import find_text, normalize
 from core.tool_contracts import Field as EvidenceField, Record
+from core.work_identity import identity_fields
 from harness.plugin import Result
 
 # ── Harness-owned record tool (§4.2 of the blueprint) ─────────────────
@@ -57,10 +59,10 @@ class Compose(BaseModel):
 
 
 _FIELD_STATUS = {
-    "database": "Verified (traces to the database)",
-    "extracted": "Unverified (extracted from a page or file)",
-    "user": "Unverified (added by you)",
-    "model": "Unverified (written by the model, not checked)",
+    "database": "Database-sourced field",
+    "extracted": "Extracted from a page or file",
+    "user": "User-supplied field",
+    "model": "Model-supplied field",
 }
 
 
@@ -122,6 +124,11 @@ def compose(ctx, p: Compose) -> Result:
                       [{"type": "notice", "level": "warning",
                         "text": "No record was written: " + "; ".join(f"{k}: {v}" for k, v in rejected.items())}])
     render_names = {f["name"] for f in mcgill_format.schema_fields(record_type)}
+    base_sources = {field.source_id for name, field in (base.fields.items() if base else ())
+                    if name in identity_fields(record_type) and field.origin == "database" and field.source_id}
+    foreign_identity = bool(base and base_sources and any(
+        name in identity_fields(record_type) and fields[name].origin == "database"
+        and fields[name].source_id not in base_sources for name in written))
     database_sources = {f.source_id for name, f in fields.items()
                         if name in render_names and f.origin == "database"}
     if len(database_sources) > 1:
@@ -131,10 +138,30 @@ def compose(ctx, p: Compose) -> Result:
                 if name in written:
                     written[name].update(origin="extracted",
                                          unverified_because="fields do not identify one database work")
-    record = Record(record_type, fields, base.provider if base else "user", base.record_id if base else "blank")
-    ref = ctx.save(record, meta={"composed": True}, supersedes=p.base_ref)
+    identity_changed = bool(base and any(
+        name in written and name in base.fields and fields[name].value != base.fields[name].value
+        for name in identity_fields(record_type)))
+    # An added identity field from another work is unsafe too, even when the
+    # base did not have that field. Never keep A's body while assembling B.
+    identity_changed = identity_changed or foreign_identity
+    cleared = []
+    if identity_changed:
+        for name in ("full_text", "text", "content", "pinpoint"):
+            if name in fields and name not in written:
+                fields.pop(name)
+                cleared.append(name)
+        for name, field in list(fields.items()):
+            if name not in written and field.origin == "database":
+                fields[name] = replace(field, origin="extracted")
+    record = Record(record_type, fields,
+                    base.provider if base and not identity_changed else "user",
+                    base.record_id if base and not identity_changed else uuid.uuid4().hex)
+    ref = ctx.save(record, meta={"composed": True, "identity_changed": identity_changed}, supersedes=p.base_ref)
     missing = mcgill_format.missing_summary(record_type, {n: f.value for n, f in fields.items()})
     warnings = []
+    if identity_changed:
+        warnings.append("Work identity changed. Previous full text and locations were detached; "
+                        "retrieve the new work's text and check quotations again.")
     if record_type in _AUTHORITY_TYPES and not any(f.origin in ("database", "user") for f in fields.values()):
         sources = sorted({w["from_ref"] for w in written.values() if w["from_ref"]})
         if not sources:
@@ -154,8 +181,8 @@ def compose(ctx, p: Compose) -> Result:
         rows.append(["Still missing", missing])
     return Result(
         {"ref": ref, "record_type": record_type, "written": written, "rejected": rejected, "missing": missing,
-         "warnings": warnings,
+         "warnings": warnings, "identity_changed": identity_changed, "cleared_fields": cleared,
          "note": "Rejected fields were not written. Each accepted field retains its recorded origin."},
         [{"type": "card", "title": f"Composed record · {record_type} · {ref}", "rows": rows,
-          "note": " ".join(warnings) or "Each field shows where it came from. Citations still render; one with "
-                                       "a non-database field is not marked verified."}])
+          "note": " ".join(warnings) or "Each field shows its recorded source. Field provenance does not "
+                                       "establish legal accuracy, authority or applicability."}])

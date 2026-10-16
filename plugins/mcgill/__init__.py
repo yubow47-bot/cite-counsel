@@ -15,6 +15,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field as PField, model_validator
 
 from core.tool_contracts import Artifact, Derivation, Field, Record, is_grounded
+from core.work_identity import text_field, text_fingerprint, work_identity
 from harness.plugin import Plugin, Result, Tool, UserText
 
 RENDER_RULE = "cite.render.v1"
@@ -60,10 +61,23 @@ def cite(ctx, p: CiteParams) -> Result:
         artifact = ctx.records.get(p.pinpoint_from)
         if not isinstance(artifact, Artifact) or artifact.kind != "pinpoint":
             raise ValueError("pinpoint_from must be a pinpoint artifact from the quote plugin (art_N).")
-        identity = {"provider": record.provider, "record_id": record.record_id,
-                    "source_type": record.source_type}
-        if ctx.records.meta(p.pinpoint_from).get("work") != identity:
+        binding = ctx.records.meta(p.pinpoint_from)
+        if not binding.get("work", {}).get("identity_sha256") or not binding.get("source_ref") or not binding.get("text_sha256"):
+            raise ValueError("This old pinpoint is not bound to a stored text version; run the quote check again.")
+        if binding.get("work") != work_identity(record):
             raise ValueError("The pinpoint was not located in this cited work.")
+        source_ref = binding.get("source_ref")
+        source = ctx.records.get(source_ref, Record)
+        original = ctx.records.get_exact(source_ref, Record)
+        original_text = text_field(original)
+        source_text = text_field(source)
+        target_text = text_field(record)
+        if (work_identity(source) != binding["work"] or original_text is None or source_text is None
+                or original_text[0] != binding.get("text_field")
+                or text_fingerprint(original_text[1].value) != binding["text_sha256"]
+                or text_fingerprint(source_text[1].value) != binding["text_sha256"]
+                or (target_text is not None and text_fingerprint(target_text[1].value) != binding["text_sha256"])):
+            raise ValueError("The pinpoint's stored text version has changed; run the quote check again.")
         values["pinpoint"] = mcgill_format.mcgill_clean("pinpoint", artifact.content)
         derivation_inputs.append(artifact.derivation)
         derivation_names.append("pinpoint")
@@ -86,7 +100,7 @@ def cite(ctx, p: CiteParams) -> Result:
                         Derivation(tuple(derivation_inputs), RENDER_RULE, tuple(derivation_names)))
     ref = ctx.save(artifact, meta={"source_type": record.source_type,
                                    "base": mcgill_format.render_fixed_form(p.title) if fixed else None,
-                                   "fields": {name: {"value": values.get(name, field.value),
+                                   "fields": {name: {"value": field.value,
                                                      "origin": field.origin, "source_id": field.source_id}
                                               for name, field in used.items()}})
     # From the stored artifact: the store downgrades any leaf it cannot back.
@@ -95,11 +109,14 @@ def cite(ctx, p: CiteParams) -> Result:
     audited = ctx.records.get(ref).derivation
     for name, node in zip(audited.input_names, audited.inputs):
         if name in metadata["fields"] and isinstance(node, Field):
-            metadata["fields"][name].update(origin=node.origin, source_id=node.source_id)
-    state = "Verified" if verified else "Unverified (not every field comes from a database)"
+            metadata["fields"][name].update(value=node.value, origin=node.origin, source_id=node.source_id)
+    state = ("All rendered fields trace to database records" if verified else
+             "Not every rendered field traces to a database record")
     rows = [["Citation", content], ["Status", state]]
-    reply = {"ref": ref, "citation": content, "verified": verified, "format_checked": True,
-             "note": "The citation is stored as an artifact for bibliography inputs."}
+    reply = {"ref": ref, "citation": content, "verified": verified, "source_grounded": verified,
+             "legal_verification": False, "format_checked": True,
+             "note": "The citation is stored for bibliography inputs. Source grounding describes field provenance, "
+                     "not legal accuracy, authority or applicability."}
     if fixed:
         reply["note"] = "Fixed citation form from the local McGill rules; statute text and pinpoint were not verified."
     if added_pinpoint:
@@ -109,8 +126,8 @@ def cite(ctx, p: CiteParams) -> Result:
     return Result(
         reply,
         [{"type": "card", "title": "Citation", "rows": rows,
-          "note": "The citation is rendered by rule from the record's fields; the status is derived from "
-                  "the fields' sources, never decided by the model."}],
+          "note": "The citation is rendered by rule. Status describes field provenance only; legal accuracy, "
+                  "authority and applicability have not been assessed."}],
         final=True)
 
 
@@ -132,8 +149,8 @@ def missing(ctx, p: MissingParams) -> Result:
                       [{"type": "card", "title": "Fields still missing",
                         "rows": [["Record", p.ref], ["Missing", gap],
                                  ["Status", "Required fields are absent from this record"]],
-                        "note": "Fields are recorded with their true source; a citation with a non-database "
-                                "field is not marked verified."}])
+                        "note": "Fields retain their recorded sources. Field presence and database sourcing "
+                                "do not establish legal accuracy or applicability."}])
     return Result({"ref": p.ref, "missing": [], "note": "The record has every required field for this rendering rule."},
                   [{"type": "card", "title": "All fields present", "rows": [["Ref", p.ref]],
                     "note": "Every required field is present; the citation can be rendered now."}])

@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from harness.core import Harness
+from harness.core import Harness, ReadRecord, SearchRecords, _read_record, _search_records
 from harness.llm import LLMError
 from harness.rate_limiter import RateLimiter
 
@@ -59,6 +59,25 @@ class Turn(SessionRef):
 
 class Action(SessionRef):
     payload: dict = Field(default_factory=dict)
+
+
+class MaterialQuery(SessionRef):
+    query: str = Field(default="", max_length=200)
+    kind: str = Field(default="all", pattern="^(all|record|artifact|finding)$")
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=20, ge=1, le=50)
+
+
+class MaterialRead(SessionRef):
+    field: str = Field(default="", max_length=80)
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=4000, ge=1, le=4000)
+    exact: bool = False
+
+
+class MaterialSearch(SessionRef):
+    query: str = Field(min_length=2, max_length=200)
+    field: str = Field(default="text", max_length=80)
 
 
 class ModelChoice(BaseModel):
@@ -123,10 +142,14 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
         return harness.sessions.start()
 
     def envelope(session, token, blocks):
-        body = {"ok": True, "blocks": blocks}
+        body = {"ok": True, "blocks": [*blocks, *persistence_notice(session)]}
         if token:
             body["session"] = {"id": session.id, "token": token}
         return body
+
+    def persistence_notice(session):
+        return ([{"type": "notice", "level": "warning", "text": session.persistence_error}]
+                if session.persistence_error else [])
 
     @app.get("/")
     def page():
@@ -198,16 +221,78 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
             return fail(str(exc), 409)
         return {"ok": True, **harness.describe()}
 
+    @app.post("/api/sessions/resume")
+    def resume_session(body: SessionRef):
+        session, _ = session_for(body, create=False)
+        if session is None:
+            return fail("This saved conversation is unavailable or has expired.", 404)
+        if not session.running:
+            harness.sessions.save(session)
+        return {"ok": True, "timeline": list(session.timeline), "running": session.running,
+                "persistence_warning": session.persistence_error,
+                "materials": session.records.catalog(),
+                "attachments": [{"id": aid, "name": a["name"]} for aid, a in session.attachments.items()]}
+
+    @app.post("/api/sessions/cancel")
+    def cancel_session(body: SessionRef):
+        session, _ = session_for(body, create=False)
+        if session is None:
+            return fail("No such conversation.", 404)
+        session.cancel()
+        return {"ok": True, "message": "Stopping at the next safe boundary; an in-flight request may take time to return."}
+
+    @app.post("/api/materials")
+    def materials(body: MaterialQuery):
+        session, _ = session_for(body, create=False)
+        if session is None:
+            return fail("No such conversation.", 404)
+        return {"ok": True, **session.records.catalog(query=body.query, kind=body.kind,
+                                                      offset=body.offset, limit=body.limit)}
+
+    @app.post("/api/materials/{ref}")
+    def material_text(ref: str, body: MaterialRead):
+        session, _ = session_for(body, create=False)
+        if session is None:
+            return fail("No such conversation.", 404)
+        try:
+            record = session.records.get_exact(ref) if body.exact else session.records.get(ref)
+            available = sorted(record.fields) if hasattr(record, "fields") else ["detail"] if hasattr(record, "detail") else ["content"]
+            if not available:
+                return fail("This material has no readable text fields.", 400)
+            field = body.field or next((n for n in ("full_text", "text", "content") if n in available), available[0])
+            result = _read_record(harness.context(session, "harness"),
+                                  ReadRecord(ref=ref, field=field, offset=body.offset, limit=body.limit, exact=body.exact))
+            if isinstance(result.content, dict) and "error" in result.content:
+                return fail(result.content["error"], 400)
+            return {"ok": True, **result.content, "available_fields": available}
+        except (ValueError, KeyError):
+            return fail("No such material or text field.", 404)
+
+    @app.post("/api/materials/{ref}/search")
+    def search_material(ref: str, body: MaterialSearch):
+        session, _ = session_for(body, create=False)
+        if session is None:
+            return fail("No such conversation.", 404)
+        try:
+            result = _search_records(harness.context(session, "harness"),
+                                     SearchRecords(ref=ref, query=body.query, field=body.field))
+            return {"ok": True, **result.content}
+        except ValueError as exc:
+            return fail(str(exc), 400)
+
     @app.post("/api/turns")
     async def turn(body: Turn):
         text = body.input.strip()
         if not text and not body.attachments:
             return fail("Please enter a message.")
         session, token = session_for(body)
+        generation = session.cancel_generation
+        def execute():
+            return harness.run_turn(session, text or "Please process the attachment.", body.attachments,
+                                    request_generation=generation)
         try:
             async with slots:
-                blocks = await run_in_threadpool(_locked, session, harness.run_turn, session,
-                                                 text or "Please process the attachment.", body.attachments)
+                blocks = await run_in_threadpool(_locked, session, execute)
         except LLMError as exc:
             return JSONResponse(status_code=502, content={**envelope(session, token, []), "ok": False,
                                                           "message": str(exc)})
@@ -223,13 +308,17 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
         if not text and not body.attachments:
             return fail("Please enter a message.")
         session, token = session_for(body)
+        generation = session.cancel_generation
 
         def frames():
             if token:
                 yield _sse("session", {"session": {"id": session.id, "token": token}})
+            def execute():
+                return harness.run_turn_stream(session, text or "Please process the attachment.", body.attachments,
+                                               request_generation=generation)
+            bridge = _stream_locked(session, execute)
             try:
-                for kind, payload in _stream_locked(session, harness.run_turn_stream, session,
-                                                    text or "Please process the attachment.", body.attachments):
+                for kind, payload in bridge:
                     if kind == "thinking_delta":
                         yield _sse("thinking_delta", {"text": payload})
                     elif kind == "block":
@@ -239,6 +328,10 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
             except Exception as exc:
                 logger.warning("Streamed turn failed: %s", type(exc).__name__, exc_info=True)
                 yield _sse("error", {"message": "This turn did not complete -- please try again shortly."})
+            finally:
+                bridge.close()
+            for block in persistence_notice(session):
+                yield _sse("block", {"block": block})
             yield _sse("done", {})
 
         return StreamingResponse(frames(), media_type="text/event-stream",
@@ -246,10 +339,7 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
 
     @app.post("/api/sessions/close")
     def close_session(body: SessionRef):
-        # No chat-history feature exists yet, so "New chat" deletes the old
-        # session outright instead of leaving it to expire on its own --
-        # the token proves the caller actually owns it (session_for with
-        # create=False returns None for a wrong or already-gone one).
+        # Explicit deletion only. New chat and page reload preserve saved work.
         session, _ = session_for(body, create=False)
         if session is not None:
             harness.sessions.delete(session.id)
@@ -260,16 +350,18 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
         session, _ = session_for(body, create=False)
         if session is None:
             return fail("This conversation has expired -- please start a new one.", 409)
+        generation = session.cancel_generation
+        def execute():
+            return harness.run_action(session, plugin, action, body.payload, request_generation=generation)
         try:
             async with slots:
-                blocks = await run_in_threadpool(_locked, session, harness.run_action, session,
-                                                 plugin, action, body.payload)
+                blocks = await run_in_threadpool(_locked, session, execute)
         except ValueError as exc:
             return fail(str(exc), 409)
         except Exception as exc:
             logger.warning("Action %s.%s failed: %s", plugin, action, type(exc).__name__, exc_info=True)
             return fail("The action did not complete -- please try again shortly.", 502)
-        return {"ok": True, "blocks": blocks}
+        return {"ok": True, "blocks": [*blocks, *persistence_notice(session)]}
 
     @app.post("/api/files")
     async def upload(file: UploadFile = File(...), session_id: str = Form(default=""),
@@ -283,15 +375,20 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
         if not _magic_byte_ok(contents[:16], suffix):
             return fail("The file content does not match its extension.")
         session, token = session_for(SessionRef(session_id=session_id or None, session_token=session_token or None))
-        attachment_id = "att_" + secrets.token_hex(4)
-        # The file lives inside the session's own directory, so it survives
-        # a restart together with the record that points at it.
-        path = harness.sessions.attachment_dir(session) / (attachment_id + suffix)
-        path.write_bytes(contents)
-        session.attachments[attachment_id] = {"path": str(path), "name": Path(file.filename or "file").name[:120]}
-        harness.sessions.save(session)
-        return {**envelope(session, token, []), "attachment": {"id": attachment_id,
-                                                               "name": session.attachments[attachment_id]["name"]}}
+        def attach():
+            if session.deleted:
+                raise ValueError("This conversation was deleted.")
+            attachment_id = "att_" + secrets.token_hex(4)
+            path = harness.sessions.attachment_dir(session) / (attachment_id + suffix)
+            path.write_bytes(contents)
+            session.attachments[attachment_id] = {"path": str(path), "name": Path(file.filename or "file").name[:120]}
+            harness.sessions.save(session)
+            return {**envelope(session, token, []), "attachment": {"id": attachment_id,
+                                                                   "name": session.attachments[attachment_id]["name"]}}
+        try:
+            return await run_in_threadpool(_locked, session, attach)
+        except ValueError as exc:
+            return fail(str(exc), 409)
 
     return app
 
@@ -318,13 +415,20 @@ def _stream_locked(session, gen_fn, *args):
     handed to the caller as soon as it is produced instead of all collected
     first. Starlette runs a sync generator's ``next()`` in a threadpool, so
     the blocking ``queue.get()`` below does not stall the event loop."""
+    generation = session.cancel_generation
+    was_cancelled = session.cancelled.is_set()
     events: queue.Queue = queue.Queue()
     DONE = object()
 
     def worker():
         with _STREAM_SLOTS, session.lock:
             try:
+                if (session.deleted or session.cancel_generation != generation
+                        or (session.cancelled.is_set() and not was_cancelled)):
+                    raise LLMError("This queued run was stopped before it started. Saved work remains available.")
                 for item in gen_fn(*args):
+                    if session.cancelled.is_set() or session.deleted:
+                        break
                     events.put(("item", item))
             except BaseException as exc:  # noqa: BLE001 -- re-raised on the caller's side below
                 events.put(("error", exc))
@@ -332,10 +436,17 @@ def _stream_locked(session, gen_fn, *args):
                 events.put(("end", DONE))
 
     threading.Thread(target=worker, daemon=True).start()
-    while True:
-        kind, payload = events.get()
-        if kind == "end":
-            return
-        if kind == "error":
-            raise payload
-        yield payload
+    completed = False
+    try:
+        while True:
+            kind, payload = events.get()
+            if kind == "end":
+                completed = True
+                return
+            if kind == "error":
+                completed = True
+                raise payload
+            yield payload
+    finally:
+        if not completed and session.cancel_generation == generation:
+            session.cancel()

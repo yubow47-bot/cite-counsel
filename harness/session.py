@@ -27,11 +27,12 @@ from pathlib import Path
 
 from core.tool_contracts import Field, decode, encode
 from harness.records import Store
+from harness.runtime import TurnBudget
 
 logger = logging.getLogger(__name__)
 
 HISTORY_LIMIT = 40          # model-visible messages kept per session
-IDLE_TTL = 4 * 3600
+IDLE_TTL = 30 * 24 * 3600  # saved local workspaces, refreshed on use
 FILE_VERSION = 1
 
 
@@ -45,8 +46,22 @@ class Session:
     read_skills: list[str] = field(default_factory=list)  # method notes opened by the model
     state: dict[str, dict] = field(default_factory=dict)  # plugin name -> its state
     attachments: dict[str, dict] = field(default_factory=dict)
+    timeline: list[dict] = field(default_factory=list)  # user-visible turns and plugin cards
     records: Store = field(default_factory=Store)         # numbered evidence objects
     lock: threading.Lock = field(default_factory=threading.Lock)
+    cancelled: threading.Event = field(default_factory=threading.Event)
+    deleted: bool = False
+    running: bool = False
+    persistence_error: str = ""
+    cancel_generation: int = 0
+    active_generation: int = 0
+    tool_receipts: list[dict] = field(default_factory=list)
+    retained: bool = False  # an explicitly saved investigation survives chat cache expiry
+    runtime: TurnBudget | None = field(default=None, repr=False)  # never persisted or reused across turns
+
+    def cancel(self) -> None:
+        self.cancel_generation += 1
+        self.cancelled.set()
 
     def user_texts(self) -> list[str]:
         """What the person typed. Notes about on-screen actions are not their words."""
@@ -59,6 +74,7 @@ class SessionStore:
         self.ttl, self.limit = ttl, limit
         self.store_dir = Path(store_dir) if store_dir else None
         self._sessions: dict[str, Session] = {}
+        self._deleted: set[str] = set()
         self._lock = threading.Lock()
         if self.store_dir is not None:
             self._sweep()
@@ -79,27 +95,36 @@ class SessionStore:
         return session, token
 
     def get(self, session_id: str | None, token: str | None) -> Session | None:
-        if not session_id or not token:
+        if not session_id or not token or not re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
             return None
         digest = hashlib.sha256(token.encode()).digest()
         with self._lock:
+            if session_id in self._deleted:
+                return None
             session = self._sessions.get(session_id)
             if (session is not None and session.expires > time.monotonic()
                     and hmac.compare_digest(session.token_hash, digest)):
                 session.expires = time.monotonic() + self.ttl
                 return session
-        revived = self._revive(session_id, digest)
-        if revived is None:
-            return None
-        with self._lock:
+            # Revival shares the same lock as deletion and cache lookup: two
+            # requests must never acquire different session execution locks.
+            revived = self._revive(session_id, digest)
+            if revived is None:
+                return None
             self._sessions[session_id] = revived
-        revived.expires = time.monotonic() + self.ttl
-        return revived
+            revived.expires = time.monotonic() + self.ttl
+            return revived
 
     # ── Persistence ───────────────────────────────────────────────────
 
     def append_event(self, session: Session, kind: str, payload: dict) -> None:
         """Append the exact model/tool exchange independently of session snapshots."""
+        with self._lock:
+            if session.deleted or session.id in self._deleted:
+                return
+            self._append_event(session, kind, payload)
+
+    def _append_event(self, session: Session, kind: str, payload: dict) -> None:
         if self.store_dir is None:
             return
         self.store_dir.mkdir(parents=True, exist_ok=True)
@@ -113,6 +138,13 @@ class SessionStore:
     def save_source(self, session: Session, ref: str, body: bytes, *, requested_url: str,
                     response: dict) -> dict:
         """Save the fetched response bytes beside the record that used them."""
+        with self._lock:
+            if session.deleted or session.id in self._deleted:
+                raise ValueError("This conversation was deleted.")
+            return self._save_source(session, ref, body, requested_url=requested_url, response=response)
+
+    def _save_source(self, session: Session, ref: str, body: bytes, *, requested_url: str,
+                     response: dict) -> dict:
         if self.store_dir is None:
             raise ValueError("Source snapshots require a persistent session store.")
         if not re.fullmatch(r"[A-Za-z0-9_-]+", session.id) or not re.fullmatch(r"rec_\d+", ref):
@@ -136,6 +168,12 @@ class SessionStore:
 
     def save(self, session: Session) -> None:
         """Write the whole session out; a failure never takes the turn down."""
+        with self._lock:
+            if session.deleted or session.id in self._deleted:
+                return
+            self._save(session)
+
+    def _save(self, session: Session) -> None:
         if self.store_dir is None:
             return
         try:
@@ -149,6 +187,10 @@ class SessionStore:
                 "state": session.state,
                 "attachments": [{"id": aid, "name": att["name"], "file": Path(att["path"]).name}
                                 for aid, att in session.attachments.items()],
+                "timeline": session.timeline,
+                "running": session.running,
+                "tool_receipts": session.tool_receipts,
+                "retained": session.retained,
                 "records": [{"ref": ref, "data": encode(obj), "meta": meta or None}
                             for ref, obj, meta in session.records.entries()],
             }
@@ -157,7 +199,9 @@ class SessionStore:
             tmp = target.with_suffix(f".json.{os.getpid()}.tmp")
             tmp.write_text(json.dumps(payload, ensure_ascii=False, default=str), encoding="utf-8")
             os.replace(tmp, target)
+            session.persistence_error = ""
         except (OSError, TypeError, ValueError) as exc:
+            session.persistence_error = "Changes are in memory but could not be saved to disk. Keep this page open and retry saving before closing the app."
             logger.warning("Could not persist session %s: %s", session.id, type(exc).__name__)
 
     def _revive(self, session_id: str, digest: bytes) -> Session | None:
@@ -170,6 +214,8 @@ class SessionStore:
             return None
         if not isinstance(payload, dict) or payload.get("v") != FILE_VERSION:
             return None
+        if not payload.get("retained") and (not isinstance(payload.get("wall_expires"), (int, float)) or payload["wall_expires"] <= time.time()):
+            return None
         try:
             token_hash = bytes.fromhex(payload["token_hash"])
         except (KeyError, ValueError):
@@ -181,6 +227,19 @@ class SessionStore:
         session.loaded = list(payload.get("loaded") or [])
         session.read_skills = list(payload.get("read_skills") or [])
         session.state = dict(payload.get("state") or {})
+        session.tool_receipts = list(payload.get("tool_receipts") or [])
+        session.retained = payload.get("retained") is True
+        session.timeline = list(payload.get("timeline") or [])
+        if not session.timeline:
+            # Older snapshots predate card persistence. Restore honest text
+            # history; do not fabricate cards or reasoning for old tool calls.
+            for message in session.messages:
+                if message.get("_note") or message.get("role") not in {"user", "assistant"}:
+                    continue
+                if message.get("content"):
+                    role = message["role"]
+                    session.timeline.append({"role": role, "text": message["content"]} if role == "user"
+                                            else {"role": role, "blocks": [{"type": "text", "text": message["content"]}]})
         attachments_dir = self.store_dir / session_id / "attachments"
         for att in payload.get("attachments") or []:
             path = attachments_dir / str(att.get("file") or "")
@@ -189,6 +248,19 @@ class SessionStore:
         session.records.restore([
             (entry["ref"], decode(entry["data"]), entry.get("meta") or None)
             for entry in payload.get("records") or []])
+        pending = {}
+        for message in session.messages:
+            if message.get("role") == "assistant":
+                pending.update({call["id"]: call for call in message.get("tool_calls") or [] if call.get("id")})
+            elif message.get("role") == "tool":
+                pending.pop(message.get("tool_call_id"), None)
+        for call_id in pending:
+            session.messages.append({"role": "tool", "tool_call_id": call_id, "content": json.dumps({
+                "error": "The previous process stopped before this call completed. Inspect saved materials before retrying.",
+                "kind": "interrupted", "retryable": None})})
+        if pending or payload.get("running"):
+            session.timeline.append({"role": "assistant", "blocks": [{"type": "notice", "level": "warning",
+                "text": "The previous run was interrupted. Completed materials were restored; review them before continuing."}]})
         return session
 
     def _sweep(self) -> None:
@@ -200,17 +272,14 @@ class SessionStore:
         now = time.time()
         kept = 0
         for path in files:
-            if kept >= self.limit:
-                path.unlink(missing_ok=True)
-                path.with_suffix(".events.jsonl").unlink(missing_ok=True)
-                self._drop_session_dir(path)
-                continue
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
+                if payload.get("retained") is True:
+                    continue
                 expired = payload.get("wall_expires", 0) < now
             except (OSError, ValueError):
                 expired = True
-            if expired:
+            if expired or kept >= self.limit:
                 path.unlink(missing_ok=True)
                 path.with_suffix(".events.jsonl").unlink(missing_ok=True)
                 self._drop_session_dir(path)
@@ -218,19 +287,19 @@ class SessionStore:
                 kept += 1
 
     def delete(self, session_id: str) -> None:
-        """Forget a session for good: dropped from memory, its file and
-        uploaded attachments removed from disk. No chat-history feature
-        exists yet, so a "New chat" click deletes the old session outright
-        rather than leaving it to expire on its own -- nothing lingers for
-        a later turn to accidentally inherit."""
+        """Explicit deletion cancels the run and prevents stale workers saving it again."""
         with self._lock:
-            self._sessions.pop(session_id, None)
-        if self.store_dir is None:
-            return
-        path = self.store_dir / f"{session_id}.json"
-        path.unlink(missing_ok=True)
-        path.with_suffix(".events.jsonl").unlink(missing_ok=True)
-        self._drop_session_dir(path)
+            self._deleted.add(session_id)
+            session = self._sessions.pop(session_id, None)
+            if session is not None:
+                session.deleted = True
+                session.cancelled.set()
+            if self.store_dir is None:
+                return
+            path = self.store_dir / f"{session_id}.json"
+            path.unlink(missing_ok=True)
+            path.with_suffix(".events.jsonl").unlink(missing_ok=True)
+            self._drop_session_dir(path)
 
     def _drop_session_dir(self, session_file: Path) -> None:
         try:
@@ -243,6 +312,8 @@ class SessionStore:
 
     def attachment_dir(self, session: Session) -> Path:
         """Where this session's uploads live (stable across restarts)."""
+        if session.deleted:
+            raise ValueError("This conversation was deleted.")
         directory = self.store_dir / session.id / "attachments"
         directory.mkdir(parents=True, exist_ok=True)
         return directory
@@ -259,6 +330,18 @@ class Context:
         # parameter values. Direct calls (tests) start from nothing.
         self.user_values: frozenset[str] = frozenset()
         self.param_values: frozenset[str] = frozenset()
+        self.call_id: str | None = None
+
+    @property
+    def completion_review(self) -> dict | None:
+        runtime = self.session.runtime
+        if runtime and self.call_id and runtime.reviewed_call_id == self.call_id:
+            return dict(runtime.review_audit)
+        return None
+
+    def request_review(self, messages: list[dict], *, tools=(), tool_choice=None, mode="candidate"):
+        """Use the harness's one bounded review allowance, never a private loop."""
+        return self._harness.request_review(self.session, messages, list(tools), tool_choice=tool_choice, mode=mode)
 
     @property
     def records(self) -> Store:
@@ -278,6 +361,8 @@ class Context:
 
         ``supersedes`` marks this as a newer version of an earlier ref, so a
         caller that still cites the old one lands on this version instead."""
+        if self.session.deleted or self.session.cancelled.is_set():
+            raise ValueError("This run was stopped; no new material was saved.")
         if self.plugin != "harness":
             category = getattr(self._harness.plugins[self.plugin], "category", "function")
             obj = self.session.records.check_output(category, [obj], self.claimable_user_values)[0]

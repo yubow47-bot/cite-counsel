@@ -2,6 +2,7 @@
 
 import re
 from local_tools.utils import openlibrary_session, request_with_retry
+from local_tools.source_status import SourceRequestError, failure_reason
 from profiling import timing as prof
 
 
@@ -80,40 +81,57 @@ def fetch_openlibrary(isbn: str) -> dict | None:
     """Fetch Open Library book metadata for an ISBN.
 
     GET https://openlibrary.org/api/books?bibkeys=ISBN:…&format=json&jscmd=data
-    Returns the per-book dict, or None on any failure.
+    Returns the per-book dict, or None on a successful lookup miss. Source
+    failures remain distinct, including failure of both lookup endpoints.
 
     The Books API has started answering 404 for every key (2026-09); the
     plain edition endpoint still works, so a miss falls through to it and is
     converted to the same ``jscmd=data`` shape callers already read.
     """
     url = f"https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&format=json&jscmd=data"
+    primary_error = None
     try:
         with prof.measure("http.openlibrary", endpoint="openlibrary.org"):
             resp = request_with_retry(openlibrary_session, "GET", url, read_timeout=15)
         resp.raise_for_status()
-        found = resp.json().get(f"ISBN:{isbn}")
+        payload = resp.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Invalid book envelope")
+        found = payload.get(f"ISBN:{isbn}")
         if found:
+            if not isinstance(found, dict) or not found.get("title"):
+                raise ValueError("Invalid book metadata")
             return found
-    except Exception:
-        pass
-    return fetch_edition_data(f"isbn/{isbn}")
+    except Exception as exc:
+        # The edition endpoint can still resolve a book when the older Books
+        # API is unavailable. If both fail, retain an observable failure.
+        if getattr(getattr(exc, "response", None), "status_code", None) != 404:
+            primary_error = SourceRequestError("openlibrary", "ISBN metadata", reason=failure_reason(exc))
+    edition = fetch_edition_data(f"isbn/{isbn}")
+    if edition is None and primary_error is not None:
+        raise primary_error
+    return edition
 
 
 def fetch_edition_data(path: str) -> dict | None:
-    """``isbn/<isbn>`` or ``books/<OLID>`` as a ``jscmd=data``-shaped dict, or None."""
+    """Edition metadata, or None on a lookup miss; failures are observable."""
     if not re.fullmatch(r"isbn/[0-9Xx]{10,13}|books/OL\d+M", path):
         return None
     try:
         with prof.measure("http.openlibrary", endpoint="openlibrary.org"):
             resp = request_with_retry(openlibrary_session, "GET", f"https://openlibrary.org/{path}.json",
                                       read_timeout=15)
+        if getattr(resp, "status_code", None) == 404:
+            return None
         resp.raise_for_status()
         edition = resp.json()
         if not isinstance(edition, dict) or not edition.get("title"):
-            return None
+            raise ValueError("Invalid edition metadata")
         return edition_to_data(edition, _author_names(edition))
-    except Exception:
-        return None
+    except SourceRequestError:
+        raise
+    except Exception as exc:
+        raise SourceRequestError("openlibrary", "edition metadata", reason=failure_reason(exc)) from exc
 
 
 def _author_names(edition: dict) -> list[str]:
@@ -128,8 +146,8 @@ def _author_names(edition: dict) -> list[str]:
                                       read_timeout=10)
             resp.raise_for_status()
             name = resp.json().get("name")
-        except Exception:
-            name = None
+        except Exception as exc:
+            raise SourceRequestError("openlibrary", "author metadata", reason=failure_reason(exc)) from exc
         if isinstance(name, str) and name.strip():
             names.append(name.strip())
     return names

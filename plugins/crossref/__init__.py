@@ -12,6 +12,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from core.source_tools import source_article_title, source_doi
+from local_tools.source_status import SourceRequestError
 from harness.plugin import Plugin, Result, Tool
 
 DOI_FACTS = (r"\b10\.\d{4,9}/\S+",)
@@ -22,7 +23,10 @@ class DoiParams(BaseModel):
 
 
 def find_doi(ctx, p: DoiParams) -> Result:
-    return _result(ctx, source_doi(p.doi))
+    try:
+        return _result(ctx, source_doi(p.doi))
+    except SourceRequestError as exc:
+        return Result(exc.content(), [{"type": "notice", "level": "warning", "text": str(exc)}])
 
 
 class ArticleParams(BaseModel):
@@ -31,7 +35,10 @@ class ArticleParams(BaseModel):
 
 
 def find_article(ctx, p: ArticleParams) -> Result:
-    return _result(ctx, source_article_title(p.title))
+    try:
+        return _result(ctx, source_article_title(p.title))
+    except SourceRequestError as exc:
+        return Result(exc.content(), [{"type": "notice", "level": "warning", "text": str(exc)}])
 
 
 def _result(ctx, records):

@@ -22,6 +22,7 @@ import unicodedata
 from typing import Any
 
 from local_tools.utils import crossref_session, openlibrary_session, request_with_retry
+from local_tools.source_status import SourceRequestError, failure_reason
 
 _STOPWORDS = {"the", "and", "for", "with", "from", "into", "des", "les", "une", "und", "der", "die"}
 _OL_FIELDS = ("key,title,subtitle,author_name,editions,editions.key,editions.title,editions.subtitle,"
@@ -112,11 +113,19 @@ def _full_title(title: str, subtitle: str) -> str:
 
 def search_books(query: str, limit: int = 3) -> list[dict]:
     """Book candidates for a free-text title (optionally with author)."""
-    response = request_with_retry(openlibrary_session, "GET", "https://openlibrary.org/search.json",
-                                  params={"q": query, "limit": 6, "fields": _OL_FIELDS}, read_timeout=12)
-    response.raise_for_status()
+    try:
+        response = request_with_retry(openlibrary_session, "GET", "https://openlibrary.org/search.json",
+                                      params={"q": query, "limit": 6, "fields": _OL_FIELDS}, read_timeout=12)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or not isinstance(payload.get("docs"), list):
+            raise ValueError("Invalid search envelope")
+    except Exception as exc:
+        raise SourceRequestError("openlibrary", "title search", reason=failure_reason(exc)) from exc
     candidates = []
-    for doc in response.json().get("docs") or []:
+    for doc in payload["docs"]:
+        if not isinstance(doc, dict):
+            continue
         editions = ((doc.get("editions") or {}).get("docs") or [])
         edition = editions[0] if editions else {}
         olid = str(edition.get("key") or "").rsplit("/", 1)[-1]
@@ -194,13 +203,22 @@ def book_values(record: dict) -> dict[str, str]:
 
 def search_articles(query: str, limit: int = 3) -> list[dict]:
     """Journal-article candidates for a free-text title (optionally with author)."""
-    response = request_with_retry(
-        crossref_session, "GET", "https://api.crossref.org/works", headers=_CROSSREF_HEADERS,
-        params={"query.bibliographic": query, "rows": 6, "filter": "type:journal-article",
-                "select": "DOI,title,author,container-title,published"}, read_timeout=12)
-    response.raise_for_status()
+    try:
+        response = request_with_retry(
+            crossref_session, "GET", "https://api.crossref.org/works", headers=_CROSSREF_HEADERS,
+            params={"query.bibliographic": query, "rows": 6, "filter": "type:journal-article",
+                    "select": "DOI,title,author,container-title,published"}, read_timeout=12)
+        response.raise_for_status()
+        payload = response.json()
+        message = payload.get("message") if isinstance(payload, dict) else None
+        if not isinstance(message, dict) or not isinstance(message.get("items"), list):
+            raise ValueError("Invalid search envelope")
+    except Exception as exc:
+        raise SourceRequestError("crossref", "title search", reason=failure_reason(exc)) from exc
     candidates = []
-    for item in (response.json().get("message") or {}).get("items") or []:
+    for item in message["items"]:
+        if not isinstance(item, dict):
+            continue
         title, doi = _first(item.get("title")), str(item.get("DOI") or "").strip()
         if not doi.startswith("10.") or not title_matches(title, query):
             continue

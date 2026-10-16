@@ -12,11 +12,13 @@ Run: pytest tests/test_input_shape_guards.py -v
 import os
 import sys
 from unittest.mock import MagicMock, patch
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 from local_tools.a2aj_api import _map_fields, fetch_by_citation, search_cases_multi
+from local_tools.source_status import SourceRequestError
 
 _TIMING_PATCH = patch("profiling.timing.ENABLED", False)
 _A2AJ_TIMING_PATCHES = (
@@ -41,13 +43,14 @@ def _http_response(json_data):
 # ═════════════════════════════════════════════════════════════════════════════
 
 def test_fetch_by_citation_non_dict_result_element():
-    """results[0] being a string must degrade to raw_input, not AttributeError."""
+    """A malformed record remains an explicit source failure, never no-match."""
     with patch("local_tools.a2aj_api.request_with_retry",
                return_value=_http_response({"results": ["just-a-string"]})), \
          _A2AJ_TIMING_PATCHES[0], _A2AJ_TIMING_PATCHES[1]:
         result = fetch_by_citation("2022 SCC 39", doc_type="cases")
 
-    assert result == {"raw_input": "2022 SCC 39"}
+    assert result["kind"] == "source_unavailable"
+    assert result["reason"] == "invalid_records"
 
 
 def test_fetch_by_citation_null_result_element():
@@ -56,17 +59,17 @@ def test_fetch_by_citation_null_result_element():
          _A2AJ_TIMING_PATCHES[0], _A2AJ_TIMING_PATCHES[1]:
         result = fetch_by_citation("2022 SCC 39")
 
-    assert result == {"raw_input": "2022 SCC 39"}
+    assert result["kind"] == "source_unavailable"
+    assert result["reason"] == "invalid_records"
 
 
-def test_search_cases_multi_array_envelope_returns_empty():
-    """A valid-JSON array (not an object) must yield [], not AttributeError."""
+def test_search_cases_multi_array_envelope_reports_failure():
+    """A JSON array where an envelope is required cannot establish no-match."""
     with patch("local_tools.a2aj_api.request_with_retry",
                return_value=_http_response(["unexpected", "array"])), \
          _A2AJ_TIMING_PATCHES[0], _A2AJ_TIMING_PATCHES[1]:
-        result = search_cases_multi("R v Gladue")
-
-    assert result == []
+        with pytest.raises(SourceRequestError, match="invalid_response"):
+            search_cases_multi("R v Gladue")
 
 
 def test_search_cases_multi_filters_non_dict_elements():

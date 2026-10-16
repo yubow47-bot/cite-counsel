@@ -8,6 +8,7 @@ Run:  pytest tests/test_bill_historical_session.py -v
 import sys
 import os
 import pytest
+from local_tools.source_status import SourceRequestError
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -147,16 +148,17 @@ class TestPartialFailureResilience:
             assert len(results) == 1
             assert results[0].get("ParlSessionCode") == "36-1"
 
-    def test_both_sessions_fail_returns_empty(self):
-        """When all candidate sessions fail, return empty list (not-found)."""
+    def test_both_sessions_fail_reports_unavailable(self):
+        """When every session fails, coverage is failed rather than no-match."""
         def fake_fetch(session=None):
             return None
 
         with patch("local_tools.legisinfo_api.fetch_legisinfo_bills", side_effect=fake_fetch), \
              patch("local_tools.legisinfo_api._CACHE", {}), \
              patch("local_tools.legisinfo_api._CACHE_TIME", {}):
-            results = find_bills("C-32", year=1997)
-            assert results == []
+            with pytest.raises(SourceRequestError) as caught:
+                find_bills("C-32", year=1997)
+            assert set(caught.value.coverage["failed_sessions"]) == {"35-2", "36-1"}
 
 
 class TestCrossSessionBoundary:

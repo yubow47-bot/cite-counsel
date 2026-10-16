@@ -4,6 +4,7 @@ import logging
 
 import requests
 from local_tools.utils import a2aj_session, request_with_retry
+from local_tools.source_status import SourceRequestError, SourceResults, failure_reason
 
 from local_tools import timing_util as timing
 from profiling import timing as prof
@@ -51,69 +52,53 @@ def _mark_first_a2aj() -> bool:
     return False
 
 
-def fetch_by_citation(citation: str, doc_type: str = "cases") -> dict:
-    """按 citation 直接查询，返回结构化字段。"""
+def _request_results(endpoint: str, params: dict) -> SourceResults:
+    """Validate the service envelope; malformed payloads are never no-match."""
+    operation = f"{endpoint} {params.get('doc_type', '')}".strip()
     try:
-        _is_first = _mark_first_a2aj()
-        if _is_first:
-            logger.debug("[DUR] A2AJ fetch_by_citation — FIRST call (DNS + TCP setup expected)")
-        _http_t0 = time.perf_counter()
-        with prof.measure("http.a2aj_fetch", endpoint="/fetch", doc_type=doc_type):
-            response = request_with_retry(
-                a2aj_session, "GET",
-                f"{A2AJ_BASE}/fetch",
-                params={"citation": citation, "doc_type": doc_type},
-                read_timeout=15,
-            )
-        _http_elapsed = time.perf_counter() - _http_t0
-        logger.debug("[DUR] A2AJ fetch_by_citation — %.1fms  first=%s", _http_elapsed * 1000, _is_first)
-        if timing.ENABLE_TIMING:
-            timing.report().add_a2aj(f"fetch({doc_type}) {citation[:40]}", _http_elapsed)
+        response = request_with_retry(a2aj_session, "GET", f"{A2AJ_BASE}{endpoint}",
+                                      params=params, read_timeout=15)
         response.raise_for_status()
         data = response.json()
-        # Guard: A2AJ must return a JSON object; a bare array/string would crash .get()
-        results = data.get("results", []) if isinstance(data, dict) else []
-        if not results and doc_type == "cases":
-            # 查询串含 " v. " 或 " v " 的是案件引用，跳过 legislation fallback
-            if " v. " in citation or " v " in citation:
-                results = []
-            else:
-                try:
-                    t0 = time.time()
-                    # doc_type must be "laws" — A2AJ answers 422 to
-                    # doc_type="legislation", so this whole fallback used to be
-                    # dead: every statute citation that reached the
-                    # citation_number route (e.g. "Criminal Code, RSC 1985,
-                    # c C-46, s 718.2(e)") failed here.
-                    with prof.measure("http.a2aj_fetch_fallback", endpoint="/fetch", doc_type="laws"):
-                        response = request_with_retry(
-                            a2aj_session, "GET",
-                            f"{A2AJ_BASE}/fetch",
-                            params={"citation": citation, "doc_type": "laws"},
-                            read_timeout=15,
-                        )
-                    if timing.ENABLE_TIMING:
-                        timing.report().add_a2aj(f"fetch(laws fallback) {citation[:40]}", time.time() - t0)
-                    response.raise_for_status()
-                    fallback_data = response.json()
-                    results = (
-                        fallback_data.get("results", [])
-                        if isinstance(fallback_data, dict)
-                        else []
-                    )
-                except requests.exceptions.RequestException:
-                    results = []
+        if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+            raise ValueError("Invalid result envelope")
+    except (requests.exceptions.RequestException, ValueError, TypeError) as exc:
+        raise SourceRequestError("a2aj", operation, reason=failure_reason(exc),
+                                 coverage={"status": "failed", "source": "a2aj", "endpoint": endpoint,
+                                           "query": params.get("query") or params.get("citation"),
+                                           "doc_type": params.get("doc_type")}) from exc
+    records = [r for r in data["results"] if isinstance(r, dict)]
+    rejected = len(data["results"]) - len(records)
+    if data["results"] and not records:
+        raise SourceRequestError("a2aj", operation, reason="invalid_records")
+    return SourceResults(records, coverage={"status": "partial" if rejected else "complete",
+                                           "source": "a2aj", "endpoint": endpoint,
+                                           "doc_type": params.get("doc_type"),
+                                           "query": params.get("query") or params.get("citation"),
+                                           "returned": len(records), "rejected_records": rejected})
+
+
+def fetch_by_citation(citation: str, doc_type: str = "cases") -> dict:
+    """Resolve a citation; errors remain structured for legacy dict callers."""
+    try:
+        results = _request_results("/fetch", {"citation": citation, "doc_type": doc_type})
+        searched = [doc_type]
+        if not results and doc_type == "cases" and " v. " not in citation and " v " not in citation:
+            try:
+                results = _request_results("/fetch", {"citation": citation, "doc_type": "laws"})
+            except SourceRequestError as exc:
+                exc.coverage["completed_doc_types"] = searched
+                raise
+            searched.append("laws")
         if not results:
-            return {"raw_input": citation}
-        # Guard: an element of a misbehaving payload may be a string/null —
-        # only dict records are mappable.
-        first = results[0] if isinstance(results[0], dict) else None
-        if first is None:
-            return {"raw_input": citation}
-        return _map_fields(first)
-    except requests.exceptions.RequestException as e:
-        logger.warning("A2AJ fetch failed: %s", e)
-        return {"raw_input": citation, "error": "A2AJ database lookup failed. Try again or enter the citation manually."}
+            return {"raw_input": citation, "_source_coverage": {**results.coverage, "searched_doc_types": searched}}
+        mapped = _map_fields(results[0])
+        mapped["_source_coverage"] = {**results.coverage, "searched_doc_types": searched}
+        return mapped
+    except SourceRequestError as exc:
+        logger.warning("A2AJ lookup failed: %s", exc.reason)
+        return {"raw_input": citation, **exc.content()}
+
 
 
 def _same_citation(a: str, b: str) -> bool:
@@ -245,92 +230,34 @@ def _extract_year(text: str) -> tuple[str, str | None]:
 
 
 def search_laws_by_name(name: str, size: int = 6) -> list:
-    """按名称搜索法规（A2AJ /search, doc_type=laws），返回结果列表。
-
-    Covers statutes AND regulations across every jurisdiction, which is the one
-    lookup that answers a title-only query with no jurisdiction to go on
-    ("Rules of Civil Procedure" → RRO 1990, Reg 194).  Nothing used this endpoint
-    before: the legislation route only ever searched by citation, and with no
-    citation it had nothing to search with.
-    """
+    """Search statutes and regulations; unavailable services raise a retryable error."""
     if not name or not name.strip():
-        return []
-    try:
-        with prof.measure("http.a2aj_search_laws", endpoint="/search", doc_type="laws"):
-            resp = request_with_retry(
-                a2aj_session, "GET",
-                f"{A2AJ_BASE}/search",
-                params={
-                    "query": name.strip(),
-                    "doc_type": "laws",
-                    "size": size,
-                    "search_type": "name",
-                },
-                read_timeout=15,
-            )
-        resp.raise_for_status()
-        data = resp.json()
-        results = data.get("results", []) if isinstance(data, dict) else []
-        return [r for r in results if isinstance(r, dict)]
-    except requests.exceptions.RequestException:
-        return []
+        return SourceResults()
+    with prof.measure("http.a2aj_search_laws", endpoint="/search", doc_type="laws"):
+        return _request_results("/search", {"query": name.strip(), "doc_type": "laws",
+                                           "size": size, "search_type": "name"})
 
 
-def search_cases_multi(query: str, size: int = 45,
-                       search_type: str = "name",
-                       start_date: str | None = None,
-                       end_date: str | None = None) -> list:
-    """按名称搜索案件（A2AJ /search），返回结果列表。
-
-    A query that carries both the case name and its citation
-    ("R v Jordan, 2016 SCC 27") is a name search that /search itself cannot
-    match: the citation text is not part of the case's name field. Pull the
-    citation out and resolve it directly first; /search runs only if that
-    lookup comes up empty.
-    """
+def search_cases_multi(query: str, size: int = 45, search_type: str = "name",
+                       start_date: str | None = None, end_date: str | None = None) -> list:
+    """Search cases by name, resolving an embedded citation first."""
     embedded = _extract_case_citation(query)
     if embedded and embedded != query.strip():
         direct = fetch_by_citation(embedded)
+        if direct.get("error"):
+            raise SourceRequestError("a2aj", "citation lookup", reason=direct.get("reason", "request_failed"),
+                                     coverage=direct.get("coverage"))
         if direct.get("style_of_cause"):
-            return [direct]
-    _is_first = _mark_first_a2aj()
-    if _is_first:
-        logger.debug("[DUR] A2AJ search_cases_multi — FIRST call (DNS + TCP setup expected)")
-    _http_t0 = time.perf_counter()
-    # 从 query 中提取年份并清洗
+            return SourceResults([direct], coverage=direct.get("_source_coverage"))
     clean_query, year = _extract_year(query)
     if year and not start_date and not end_date:
-        start_date = f"{year}-01-01"
-        end_date = f"{year}-12-31"
-
-    params = {
-        "query": clean_query,
-        "doc_type": "cases",
-        "size": size,
-        "search_type": search_type,
-    }
+        start_date, end_date = f"{year}-01-01", f"{year}-12-31"
+    params = {"query": clean_query, "doc_type": "cases", "size": size, "search_type": search_type}
     if start_date:
         params["start_date"] = start_date
     if end_date:
         params["end_date"] = end_date
-    try:
-        with prof.measure("http.a2aj_search_query", endpoint="/search"):
-            resp = request_with_retry(
-                a2aj_session, "GET",
-                f"{A2AJ_BASE}/search",
-                params=params,
-                read_timeout=15,
-            )
-        _http_elapsed = time.perf_counter() - _http_t0
-        logger.debug("[DUR] A2AJ search_cases_multi — %.1fms  first=%s", _http_elapsed * 1000, _is_first)
-        if timing.ENABLE_TIMING:
-            timing.report().add_a2aj(f"search_cases_multi /search ({clean_query[:30]})", _http_elapsed)
-        resp.raise_for_status()
-        data = resp.json()
-        # Guard: envelope must be a JSON object of dict records (same contract
-        # as fetch_by_citation — an array/scalar envelope or junk elements
-        # degrade to an empty result instead of raising).
-        results = data.get("results", []) if isinstance(data, dict) else []
-        return [r for r in results if isinstance(r, dict)]
-    except requests.exceptions.RequestException:
-        return []
+    with prof.measure("http.a2aj_search_query", endpoint="/search"):
+        results = _request_results("/search", params)
+    results.coverage.update(start_date=start_date, end_date=end_date)
+    return results

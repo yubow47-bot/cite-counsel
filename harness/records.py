@@ -31,12 +31,14 @@ misuse -- notably of anything that could fake the "verified" verdict.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import threading
 from dataclasses import replace
 from typing import Any
 
-from core.tool_contracts import Artifact, Derivation, Field, Finding, Record, derivation_leaves
+from core.tool_contracts import Artifact, Derivation, Field, Finding, Record, derivation_leaves, encode
 from core.evidence_text import find_text
 
 CATEGORY_ORIGIN = {"source": {"database"}, "extract": {"extracted"}}
@@ -70,24 +72,28 @@ class Store:
         # text from the same source (a fact read out of a fetched page, say).
         self._contained: dict[tuple[str, str], list[str]] = {}
         self._superseded_by: dict[str, str] = {}
+        self._fingerprints: dict[str, str] = {}
         self._lock = threading.Lock()
 
     # ── Storage ───────────────────────────────────────────────────────
 
     def put(self, obj: Any, meta: dict | None = None, *, supersedes: str | None = None) -> str:
         with self._lock:
+            previous = self._current_ref(str(supersedes).strip()) if supersedes else None
+            if previous and previous not in self._objects:
+                raise ValueError("The record to replace does not belong to this conversation.")
             ref = f"{PREFIX[type(obj)]}_{len(self._objects) + 1}"
             self._objects[ref] = obj
-            if meta:
-                self._meta[ref] = meta
-            if supersedes:
+            metadata = dict(meta or {})
+            if previous:
                 # A model that still cites the ref it started from (a batch of
                 # calls issued before any of them had a result to chain from,
                 # or just a stale reference in a later turn) reaches this
                 # record's latest version instead of a dead end.
-                old = str(supersedes).strip()
-                if old and old != ref:
-                    self._superseded_by[old] = ref
+                self._superseded_by[previous] = ref
+                metadata["supersedes"] = previous
+            if metadata:
+                self._meta[ref] = metadata
             self._register(obj)
             return ref
 
@@ -99,6 +105,12 @@ class Store:
                 if meta:
                     self._meta[ref] = meta
                 self._register(obj)
+            # Versions remain immutable. The alias is only a convenience for
+            # tools asking for the latest record; evidence links use get_exact.
+            for ref, _, meta in entries:
+                old = (meta or {}).get("supersedes")
+                if old in self._objects and old != ref:
+                    self._superseded_by[old] = ref
 
     def next_ref(self, obj: Any) -> str:
         return f"{PREFIX[type(obj)]}_{len(self._objects) + 1}"
@@ -112,12 +124,31 @@ class Store:
 
     def get(self, ref: str, kind: type | tuple[type, ...] | None = None) -> Any:
         key = self._current_ref(str(ref or "").strip())
+        return self.get_exact(key, kind)
+
+    def current_ref(self, ref: str) -> str:
+        key = self._current_ref(str(ref or "").strip())
+        self.get_exact(key)
+        return key
+
+    def get_exact(self, ref: str, kind: type | tuple[type, ...] | None = None) -> Any:
+        """Read the immutable version named by ref, without following updates."""
+        key = str(ref or "").strip()
         obj = self._objects.get(key)
         if obj is None:
             raise ValueError("No such ref, or it does not belong to this conversation.")
         if kind is not None and not isinstance(obj, kind):
             raise ValueError(f"{ref} is not the kind of object this tool needs.")
         return obj
+
+    def fingerprint(self, ref: str) -> str:
+        """Content fingerprint of this exact version, never its latest alias."""
+        key = str(ref or "").strip()
+        obj = self.get_exact(key)
+        if key not in self._fingerprints:
+            data = json.dumps(encode(obj), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            self._fingerprints[key] = hashlib.sha256(data.encode("utf-8")).hexdigest()
+        return self._fingerprints[key]
 
     def meta(self, ref: str) -> dict:
         """The plugin-supplied sidecar of one stored object (e.g. the fields
@@ -126,8 +157,9 @@ class Store:
         return self._meta.get(str(ref or "").strip(), {})
 
     def all(self, kind: type | tuple[type, ...] | None = None) -> list[tuple[str, Any]]:
-        return [(ref, obj) for ref, obj in self._objects.items()
-                if kind is None or isinstance(obj, kind)]
+        with self._lock:
+            return [(ref, obj) for ref, obj in self._objects.items()
+                    if kind is None or isinstance(obj, kind)]
 
     def entries(self) -> list[tuple[str, Any, dict | None]]:
         """Everything, for persistence."""
@@ -140,12 +172,38 @@ class Store:
         if isinstance(obj, Record):
             fields = {name: _clip(f.value) for name, f in obj.fields.items()}
             return {"ref": ref, "kind": "record", "record_type": obj.source_type,
-                    "provider": obj.provider, "record_id": obj.record_id, "fields": fields}
+                    "provider": obj.provider, "record_id": obj.record_id, "fields": fields,
+                    "field_origins": {n: f.origin for n, f in obj.fields.items()},
+                    "text_lengths": {n: len(f.value) for n, f in obj.fields.items() if len(f.value) > 300}}
         if isinstance(obj, Artifact):
             return {"ref": ref, "kind": "artifact", "artifact_kind": obj.kind,
                     "content": obj.content if isinstance(obj.content, str) else "<binary>"}
         return {"ref": ref, "kind": "finding", "verdict": obj.verdict, "detail": obj.detail,
                 "coverage": obj.coverage}
+
+    def catalog(self, *, query: str = "", kind: str = "all", offset: int = 0,
+                limit: int = 20, latest_only: bool = True) -> dict:
+        """Bounded discovery, independent of the model's conversation window."""
+        selected = []
+        for ref, obj in self.all():
+            if latest_only and self._current_ref(ref) != ref:
+                continue
+            obj_kind = {Record: "record", Artifact: "artifact", Finding: "finding"}[type(obj)]
+            if kind != "all" and obj_kind != kind:
+                continue
+            summary = self.summary(ref)
+            if query and query.casefold() not in json.dumps(summary, ensure_ascii=False).casefold():
+                continue
+            # A directory must not accidentally return an entire draft.
+            if isinstance(summary.get("content"), str):
+                summary["content"] = summary["content"][:300]
+            summary["current_ref"] = self._current_ref(ref)
+            summary["meta"] = {k: v for k, v in self.meta(ref).items()
+                               if k in {"supersedes", "coverage", "extraction", "research", "source_coverage", "extraction_coverage"}}
+            selected.append(summary)
+        page = selected[offset:offset + limit]
+        return {"items": page, "total": len(selected), "offset": offset,
+                "next_offset": offset + len(page) if offset + len(page) < len(selected) else None}
 
     # ── Contract checks ───────────────────────────────────────────────
 

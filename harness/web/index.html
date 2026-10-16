@@ -9,11 +9,58 @@
   </head>
   <body>
     <div class="shell">
-      <aside class="settings" id="settings" aria-label="Settings">
-        <div class="brand"><span class="mark">C</span><b>Cite Counsel</b></div>
+      <aside class="workspace" id="workspace" aria-label="Conversation workspace">
+        <div class="brand"><span class="mark">C</span><b>Cite Counsel</b><button id="close-workspace" class="secondary drawer-close" type="button" aria-label="Close workspace">Close</button></div>
         <button id="new-chat" class="primary" type="button">＋ New chat</button>
-
         <section class="group">
+          <label for="saved-chats">Saved conversations</label>
+          <select id="saved-chats" aria-label="Saved conversations"><option value="">Select a conversation</option></select>
+          <button id="delete-chat" type="button">Delete current conversation</button>
+          <p class="hint">Saved investigations stay until deleted. Other chats expire after 30 days without use.</p>
+        </section>
+        <details class="group" open>
+          <summary>Material library</summary>
+          <p class="hint">Sources stay here. Saved assertions and drafts appear in Research.</p>
+          <select id="material-kind" aria-label="Material category"><option value="record">Source materials</option><option value="artifact">Saved outputs</option><option value="finding">Quote findings</option><option value="all">Everything</option></select>
+          <input id="material-search" type="search" placeholder="Find a title or reference" aria-label="Find saved materials" />
+          <button id="refresh-materials" type="button">Refresh</button>
+          <div id="materials" class="material-list"></div>
+          <button id="more-materials" type="button" hidden>More materials</button>
+        </details>
+
+        <button id="workspace-settings" class="secondary" type="button">Model &amp; plugin settings</button>
+      </aside>
+
+      <main class="chat">
+        <header class="app-bar">
+          <div><p class="eyebrow">Legal research</p><b id="conversation-title">New conversation</b><p id="session-state" class="hint">Materials and research stay with this conversation.</p></div>
+          <nav aria-label="Workspace controls"><button id="toggle-workspace" class="secondary workspace-toggle" type="button" aria-controls="workspace" aria-expanded="false">Workspace</button><button id="toggle-research" class="secondary research-toggle" type="button" aria-controls="panels" aria-expanded="true">Research</button><button id="open-settings" class="secondary" type="button">Settings</button></nav>
+        </header>
+        <div id="empty" class="empty">
+          <h1>Start with a question or a source.</h1>
+          <p>Ask a legal or social question. Investigate the evidence, challenge key arguments, and keep track of what remains uncertain.</p>
+        </div>
+        <section id="transcript" class="transcript" aria-live="polite"></section>
+        <div class="composer-wrap">
+          <div id="chips" class="chips"></div>
+          <form id="composer" class="composer">
+            <input id="file" type="file" hidden accept=".pdf,.docx,.pptx,.xlsx,.jpg,.jpeg,.png,.webp" />
+            <button id="attach" type="button" class="icon" aria-label="Attach a file" title="Attach a file">＋</button>
+            <textarea id="input" rows="1" maxlength="4000" placeholder="Ask about your materials — Enter to send" aria-label="Message"></textarea>
+            <button id="send" type="submit" class="send" aria-label="Send">↑</button>
+            <button id="stop" type="button" hidden>Stop</button>
+          </form>
+        </div>
+      </main>
+
+      <aside id="panels" class="panels" hidden aria-label="Research and plugin panels"><button id="close-research" class="secondary drawer-close" type="button" aria-label="Close research panel">Close</button></aside>
+    </div>
+    <button id="drawer-backdrop" class="drawer-backdrop" type="button" hidden aria-label="Close workspace panels"></button>
+    <dialog id="settings-view" aria-labelledby="settings-title">
+      <form method="dialog" class="dialog-close"><button aria-label="Close settings">Close</button></form>
+      <h2 id="settings-title">Model &amp; plugins</h2>
+      <p class="hint">Settings apply to future calls. Your conversation and saved materials are kept.</p>
+      <section class="group settings-model">
           <h2>Model</h2>
           <p class="status"><span id="llm-dot" class="dot"></span><span id="llm-status">Loading…</span></p>
           <form id="model-form" class="row-form">
@@ -31,28 +78,19 @@
           <p class="hint">Enabled plugins don't run on their own; the model loads and calls them based on your message.</p>
           <div id="plugins" class="plugins"></div>
         </section>
-      </aside>
-
-      <main class="chat">
-        <div id="empty" class="empty">
-          <h1>What should I look up, cite, or check?</h1>
-          <p>Just ask — the model picks the plugins.</p>
-        </div>
-        <section id="transcript" class="transcript" aria-live="polite"></section>
-        <div class="composer-wrap">
-          <div id="chips" class="chips"></div>
-          <form id="composer" class="composer">
-            <input id="file" type="file" hidden accept=".pdf,.docx,.pptx,.xlsx,.jpg,.jpeg,.png,.webp" />
-            <button id="attach" type="button" class="icon" aria-label="Attach a file" title="Attach a file">＋</button>
-            <textarea id="input" rows="1" maxlength="4000" placeholder="Type a message — Enter to send, Shift+Enter for a new line" aria-label="Message"></textarea>
-            <button id="send" type="submit" class="send" aria-label="Send">↑</button>
-          </form>
-        </div>
-      </main>
-
-      <aside id="panels" class="panels" hidden aria-label="Plugin panels"></aside>
-    </div>
+    </dialog>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <dialog id="material-view" aria-labelledby="material-title">
+      <form method="dialog"><button aria-label="Close material">Close</button></form>
+      <h2 id="material-title">Saved material</h2>
+      <select id="material-field" aria-label="Material field"></select>
+      <div class="material-find"><input id="material-find" type="search" placeholder="Find words in this material" aria-label="Find words in material" /><button id="material-find-go" type="button">Find</button></div>
+      <div id="material-hits"></div>
+      <p id="material-status" class="hint"></p>
+      <pre id="material-text"></pre>
+      <button id="material-prev" type="button">Previous</button>
+      <button id="material-next" type="button">Next</button>
+    </dialog>
     <script src="/assets/harness.js"></script>
   </body>
 </html>

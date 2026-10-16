@@ -1,11 +1,9 @@
-"""Check a quotation against the judgment itself and find its paragraph.
+"""Check quotations against stored text and locate numbered paragraphs.
 
-A2AJ serves the (unofficial) full text of the decisions it indexes. When a
-citation on screen came from that database, a quotation the user wants to use
-can be looked up verbatim in the same record, and the paragraph marker above
-it ("[47]") gives the pinpoint. The paragraph number is then copied from the
-database text, not typed by the user or guessed by a model, so the citation
-stays verified with the pinpoint in it.
+Without supplied text, fetch the unofficial judgment identified by a database
+citation. With supplied text, preserve its database or extracted origin and
+exact value in the proof. A literal match establishes an occurrence in that
+material, not the source's authority or the quotation's legal meaning.
 
 Matching is literal. Only typography that word processors change silently is
 normalized (curly quotes, dashes, soft hyphens, whitespace); case is compared
@@ -23,7 +21,7 @@ from threading import Lock
 
 from core.tool_contracts import Derivation, Field, Finding
 
-RULE_ID = "quote.locate.a2aj.v1"
+RULE_ID = "quote.locate.material.v2"
 MIN_QUOTE, MAX_QUOTE = 12, 2000
 _TYPOGRAPHY = str.maketrans({"‘": "'", "’": "'", "‚": "'", "‛": "'", "“": '"', "”": '"', "„": '"',
                              "–": "-", "—": "-", "‑": "-", " ": " ", " ": " "})
@@ -52,18 +50,15 @@ _cache: OrderedDict[str, dict | None] = OrderedDict()
 _cache_lock = Lock()
 
 
-def judgment(citation: str) -> dict | None:
+def judgment(citation: str, *, refresh: bool = False) -> dict | None:
     """{"text", "url", "citations"} for exactly this citation, or None."""
     with _cache_lock:
-        if citation in _cache:
+        if not refresh and citation in _cache:
             _cache.move_to_end(citation)
             return _cache[citation]
-    from local_tools.a2aj_api import A2AJ_BASE, _same_citation
-    from local_tools.utils import a2aj_session, request_with_retry
-    response = request_with_retry(a2aj_session, "GET", f"{A2AJ_BASE}/fetch",
-                                  params={"citation": citation, "doc_type": "cases"}, read_timeout=20)
-    response.raise_for_status()
-    results = (response.json() or {}).get("results") or []
+    from local_tools.a2aj_api import _request_results, _same_citation
+    from local_tools.source_status import SourceRequestError
+    results = _request_results("/fetch", {"citation": citation, "doc_type": "cases"})
     found = None
     for record in results:
         if not isinstance(record, dict):
@@ -72,8 +67,11 @@ def judgment(citation: str) -> dict | None:
         text = record.get("unofficial_text_en")
         # Only the record for this very citation may answer for it.
         if isinstance(text, str) and text.strip() and any(_same_citation(c, citation) for c in citations):
-            found = {"text": normalize(text), "url": record.get("url_en") or "", "citations": citations}
+            found = {"text": normalize(text), "url": record.get("url_en") or "", "citations": citations,
+                     "coverage": results.coverage}
             break
+    if found is None and results.coverage.get("status") != "complete":
+        raise SourceRequestError("a2aj", "/fetch cases", reason="incomplete_response", coverage=results.coverage)
     with _cache_lock:
         _cache[citation] = found
         while len(_cache) > 16:
@@ -94,16 +92,23 @@ class Located:
 
 def _find_parts(haystack: str, parts: list[str]) -> tuple[int, int] | None:
     """All parts in order, the whole span no longer than a few paragraphs."""
-    position, start = 0, None
-    for part in parts:
-        index = haystack.find(part, position)
-        if index < 0:
-            return None
-        start = index if start is None else start
-        position = index + len(part)
-    if start is None or position - start > 6000:
+    if not parts:
         return None
-    return start, position
+    start = haystack.find(parts[0])
+    while start >= 0:
+        position = start + len(parts[0])
+        for part in parts[1:]:
+            index = haystack.find(part, position, start + 6000)
+            if index < 0:
+                break
+            position = index + len(part)
+        else:
+            if position - start <= 6000:
+                return start, position
+        # The first occurrence may be too far from the next part. A later
+        # occurrence can still form a valid quotation with that same next part.
+        start = haystack.find(parts[0], start + 1)
+    return None
 
 
 def paragraphs_between(text: str, start: int, end: int) -> tuple[int, ...]:
@@ -135,7 +140,14 @@ def locate(text: str, quote: str) -> Located:
     span = _find_parts(flat, parts)
     verdict = "exact"
     if span is None:
-        span = _find_parts(flat.casefold(), [part.casefold() for part in parts])
+        folded_parts, offsets = [], []
+        for index, char in enumerate(flat):
+            folded = char.casefold()
+            folded_parts.append(folded)
+            offsets.extend([index] * len(folded))
+        span = _find_parts("".join(folded_parts), [part.casefold() for part in parts])
+        if span is not None:
+            span = offsets[span[0]], offsets[span[1] - 1] + 1
         verdict = "case_differs"
     if span is None:
         return Located("not_found")
@@ -164,7 +176,7 @@ def case_citation(item: dict) -> str:
 
 
 def check(item: dict, quote: str, *, quoted: Field | None = None, text: str | None = None,
-          source_id: str | None = None) -> dict:
+          source_id: str | None = None, text_origin: str = "database", coverage: str = "complete") -> dict:
     """Locate ``quote`` in the judgment behind ``item``.
 
     By default the judgment text is fetched from the database by the
@@ -185,20 +197,29 @@ def check(item: dict, quote: str, *, quoted: Field | None = None, text: str | No
     if not MIN_QUOTE <= len(quote) <= MAX_QUOTE:
         raise ValueError(f"Paste a quotation of {MIN_QUOTE}–{MAX_QUOTE} characters.")
     citation = case_citation(item)
-    if not citation:
-        raise ValueError("Only a judgment fetched from a case database can be checked against its own text.")
     if text is None:
+        if not citation:
+            raise ValueError("Only a judgment fetched from a case database can be checked against its own text.")
         found = judgment(citation)
         if found is None:
             raise ValueError("The database has no full text for this judgment, so it cannot be checked.")
         text, url = found["text"], found["url"]
         source_id = source_id or url or f"a2aj:{citation}"
+    if text_origin not in ("database", "extracted"):
+        raise ValueError("Quote checks require stored database or extracted source text.")
+    if coverage not in ("complete", "partial"):
+        raise ValueError("Unknown text coverage.")
+    # Preserve the exact evidence value for the store's audit; normalization is
+    # only for matching and displayed excerpts, never an origin upgrade.
+    source = Field(text, text_origin, source_id=source_id)
+    text = normalize(text)
     located = locate(text, quote)
-    source = Field(text, "database", source_id=source_id or f"a2aj:{citation}")
     quoted = quoted or Field(quote, "user")
     if located.verdict == "not_found":
-        finding = Finding("contradicted", "The quotation does not appear in the unofficial full text.",
-                          "complete", Derivation((quoted, source), RULE_ID, ("quote", "source")))
+        finding = Finding("contradicted" if coverage == "complete" else "inconclusive",
+                          "The quotation does not appear in the stored text" +
+                          ("; extraction coverage is partial." if coverage == "partial" else "."),
+                          coverage, Derivation((quoted, source), RULE_ID, ("quote", "source")))
         return {"verdict": "not_found", "pinpoint": "", "excerpt": "", "match": None,
                 "url": source_id, "finding": finding}
     lo, hi = max(0, located.start - 220), min(len(text), located.end + 220)
@@ -209,8 +230,8 @@ def check(item: dict, quote: str, *, quoted: Field | None = None, text: str | No
         hi -= 1
     excerpt = text[lo:hi]
     verdict = "confirmed" if located.verdict == "exact" else "inconclusive"
-    detail = ("The quotation appears verbatim in the unofficial full text." if verdict == "confirmed" else
+    detail = ("The quotation appears verbatim in the stored text." if verdict == "confirmed" else
               "The words appear, but capitalization differs from the text.")
-    finding = Finding(verdict, detail, "complete", Derivation((quoted, source), RULE_ID, ("quote", "source")))
+    finding = Finding(verdict, detail, coverage, Derivation((quoted, source), RULE_ID, ("quote", "source")))
     return {"verdict": located.verdict, "pinpoint": pinpoint_for(located.paragraphs), "excerpt": excerpt,
             "match": [located.start - lo, located.end - lo], "url": source_id, "finding": finding}

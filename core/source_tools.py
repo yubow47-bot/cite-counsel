@@ -17,6 +17,7 @@ from local_tools.a2aj_api import _map_fields, fetch_by_citation, search_cases_mu
 from local_tools.crossref_api import extract_doi, fetch_crossref
 from local_tools.legisinfo_api import find_bills
 from local_tools.openlibrary_api import extract_isbn, fetch_openlibrary, validate_isbn
+from local_tools.source_status import SourceRequestError, SourceResults
 
 
 class SourceContractError(ValueError):
@@ -42,12 +43,20 @@ def _provider_and_id(item: Mapping[str, Any], kind: str) -> tuple[str, str, str]
 
 
 def _database_results(results: Any) -> list[Mapping[str, Any]]:
-    """Drop explicit unverified/error candidates from legacy connector output."""
+    """Reject errors and retain coverage while filtering unverified candidates."""
     if not isinstance(results, list):
-        return []
-    return [item for item in results if isinstance(item, Mapping)
-            and ("verified" not in item or item.get("verified") is True)
-            and "warning" not in item and "error" not in item]
+        raise SourceRequestError("a2aj", "lookup", reason="invalid_response")
+    for item in results:
+        if isinstance(item, Mapping) and item.get("error"):
+            raise SourceRequestError(item.get("source", "a2aj"), item.get("operation", "lookup"),
+                                     reason=item.get("reason", "request_failed"), coverage=item.get("coverage"))
+    valid = [item for item in results if isinstance(item, Mapping)
+             and ("verified" not in item or item.get("verified") is True)
+             and "warning" not in item]
+    coverage = dict(getattr(results, "coverage", {"status": "complete"}))
+    if len(valid) < len(results):
+        coverage.update(status="partial", rejected_records=len(results) - len(valid))
+    return SourceResults(valid, coverage=coverage)
 
 
 def _text(value: Any) -> str:
@@ -99,10 +108,12 @@ def source_cases(query: str) -> list[Record]:
     from local_tools.a2aj_api import _CASE_CITATION_RE
     if _CASE_CITATION_RE.fullmatch(query.strip()):
         found = fetch_by_citation(query)
-        results = _database_results([found]) if found.get("style_of_cause") else []
+        checked = _database_results([found])
+        results = SourceResults(checked if found.get("style_of_cause") else [],
+                                coverage=found.get("_source_coverage", {"status": "complete", "query": query}))
     else:
         results = _database_results(search_cases_multi(query, size=5))
-    return [_case_record(item) for item in results]
+    return SourceResults([_case_record(item) for item in results], coverage=getattr(results, "coverage", None))
 
 
 def source_legislation(query: str) -> list[Record]:
@@ -111,10 +122,12 @@ def source_legislation(query: str) -> list[Record]:
     match = _CITATION_REGEX.search(query)
     if match:
         found = fetch_by_citation(match.group(0), doc_type="laws")
-        results = _database_results([found]) if found.get("statute_title") else []
+        checked = _database_results([found])
+        results = SourceResults(checked if found.get("statute_title") else [],
+                                coverage=found.get("_source_coverage", {"status": "complete", "query": query}))
     else:
         results = _database_results(search_laws_by_name(query))
-    return [_legislation_record(item) for item in results]
+    return SourceResults([_legislation_record(item) for item in results], coverage=getattr(results, "coverage", None))
 
 
 _BILL_NUMBER_RE = re.compile(r"\s*(?:bill\s+)?([CS])\s*-?\s*(\d+)(?:\s+(\d{4}))?\s*", re.I)
@@ -140,25 +153,28 @@ def source_bill_keyword(keywords: str, limit: int = 5) -> list[Record]:
     from local_tools.legisinfo_api import fetch_legisinfo_bills
 
     def tokens(text: str) -> set[str]:
-        return {word.casefold() for word in re.findall(r"[^\W\d_]+", text) if len(word) > 2}
+        import unicodedata
+        normalized = "".join(c for c in unicodedata.normalize("NFKD", text.casefold()) if not unicodedata.combining(c))
+        return {word for word in re.findall(r"[^\W\d_]+", normalized) if len(word) > 2}
 
     wanted = tokens(keywords)
     if not wanted:
         raise SourceContractError("Supply keywords from the bill's title")
-    try:
-        bills = fetch_legisinfo_bills()
-    except Exception:
-        return []
+    bills = fetch_legisinfo_bills()
     scored = []
     for item in bills:
         if not isinstance(item, Mapping):
             continue
-        title = item.get("LongTitleEn") or item.get("ShortTitleEn") or ""
-        if wanted and wanted <= tokens(title):
+        titles = [item.get(key) or "" for key in ("LongTitleEn", "ShortTitleEn", "LongTitleFr", "ShortTitleFr")]
+        if any(wanted <= tokens(title) for title in titles):
             date = item.get("LatestCompletedMajorActivityDateTime") or item.get("IntroducedDateTime") or ""
             scored.append((str(date), item))
     scored.sort(key=lambda pair: pair[0], reverse=True)
-    return _bill_records([item for _, item in scored[:limit]])
+    matches = SourceResults([item for _, item in scored[:limit]],
+                            coverage={**getattr(bills, "coverage", {"status": "complete"}),
+                                      "query": keywords, "languages": ["en", "fr"],
+                                      "matched": len(scored), "returned": min(limit, len(scored))})
+    return _bill_records(matches)
 
 
 def _bill_records(items: list) -> list[Record]:
@@ -173,17 +189,29 @@ def _bill_records(items: list) -> list[Record]:
         values = {
             "number": item.get("BillNumberFormatted") or item.get("NumberCode"),
             "title": item.get("LongTitleEn") or item.get("ShortTitleEn"),
+            "title_fr": item.get("LongTitleFr") or item.get("ShortTitleFr"),
             "parliament": item.get("ParliamentNumber"),
             "session": item.get("SessionNumber"),
             "session_code": item.get("ParlSessionCode"),
             "introduced": item.get("IntroducedDateTime"),
+            # Current status and the last completed stage are different facts.
+            # Never relabel a completed first reading as the current status.
+            "status": next((item.get(k) for k in ("StatusNameEn", "CurrentStatusEn", "CurrentStatusNameEn", "StatusEn") if item.get(k)), None),
+            "status_fr": next((item.get(k) for k in ("StatusNameFr", "CurrentStatusFr", "CurrentStatusNameFr", "StatusFr") if item.get(k)), None),
+            "status_date": item.get("StatusDateTime") or item.get("CurrentStatusDateTime"),
+            "status_code": item.get("StatusId") or item.get("CurrentStatusId"),
+            "latest_activity": next((item.get(k) for k in ("LatestCompletedMajorActivityEn", "LatestCompletedBillStageNameEn", "LatestCompletedBillStageEn") if item.get(k)), None),
+            "latest_activity_fr": next((item.get(k) for k in ("LatestCompletedMajorActivityFr", "LatestCompletedBillStageNameFr", "LatestCompletedBillStageFr") if item.get(k)), None),
+            "latest_activity_date": item.get("LatestCompletedMajorActivityDateTime"),
+            "latest_activity_code": item.get("LatestCompletedBillStageId"),
+            "source_metadata": dict(item),
             "year": next((_year(item.get(key)) for key in ("PassedHouseFirstReadingDateTime", "PassedSenateFirstReadingDateTime", "IntroducedDateTime") if _year(item.get(key))), ""),
         }
         fields = _fields(values, source_id)
         if not fields:
             raise SourceContractError("bill result has no database fields")
         records.append(Record("bill", fields, "legisinfo", str(record_id).strip()))
-    return records
+    return SourceResults(records, coverage=getattr(items, "coverage", None))
 
 
 def source_doi(query: str) -> list[Record]:

@@ -13,6 +13,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from core.source_tools import source_book_title, source_isbn
+from local_tools.source_status import SourceRequestError
 from harness.plugin import Plugin, Result, Tool
 
 ISBN_FACTS = (r"\bISBN(?:-1[03])?\b", r"\b97[89][- ]?\d{1,5}[- ]?\d+[- ]?\d+[- ]?[\dxX]\b")
@@ -23,7 +24,10 @@ class IsbnParams(BaseModel):
 
 
 def find_isbn(ctx, p: IsbnParams) -> Result:
-    return _result(ctx, source_isbn(p.isbn))
+    try:
+        return _result(ctx, source_isbn(p.isbn))
+    except SourceRequestError as exc:
+        return Result(exc.content(), [{"type": "notice", "level": "warning", "text": str(exc)}])
 
 
 class BookParams(BaseModel):
@@ -32,7 +36,10 @@ class BookParams(BaseModel):
 
 
 def find_book(ctx, p: BookParams) -> Result:
-    return _result(ctx, source_book_title(p.title))
+    try:
+        return _result(ctx, source_book_title(p.title))
+    except SourceRequestError as exc:
+        return Result(exc.content(), [{"type": "notice", "level": "warning", "text": str(exc)}])
 
 
 def _result(ctx, records):
