@@ -777,6 +777,16 @@ class Harness:
         facts = self._annotate_reply(session, raw)
         blocks.append({"type": "text", "text": raw, **({"facts": facts} if facts else {})})
 
+    def log_event(self, session: Session, kind: str, payload: dict) -> None:
+        """Audit-log an event with the turn number and, mid-run, the phase and
+        remaining budget, so a run can be laid out as a timeline later."""
+        state = {"turn": sum(item.get("role") == "user" for item in session.timeline)}
+        runtime = session.runtime
+        if runtime is not None:
+            state.update(phase=runtime.phase, remaining_s=round(runtime.remaining(), 1),
+                         tool_calls=runtime.tool_count, max_calls=runtime.max_calls)
+        self.sessions.append_event(session, kind, payload, state)
+
     @staticmethod
     def _cancelled(session):
         return (session.deleted or session.cancelled.is_set()
@@ -796,7 +806,7 @@ class Harness:
             return None, audit
         runtime.review_attempted = True
         model = self.review_model
-        self.sessions.append_event(session, "answer_review_request", {"model": model, "messages": messages,
+        self.log_event(session, "answer_review_request", {"model": model, "messages": messages,
                                    "tools": tools, "mode": mode, "deadline_remaining": deadline - time.monotonic()})
         try:
             message = llm.chat(model, messages, tools, timeout=max(.1, deadline - time.monotonic()),
@@ -807,21 +817,21 @@ class Harness:
                 raise llm.LLMDeadline("The optional review reached its deadline.")
             audit = {**audit, "status": "model_reviewed", "model": model}
             audit.pop("reason", None)
-            self.sessions.append_event(session, "answer_review_response", {"message": message, "mode": mode})
+            self.log_event(session, "answer_review_response", {"message": message, "mode": mode})
             return message, audit
         except llm.LLMCancelled:
             raise
         except Exception as exc:
             _ensure_running(session)
             audit.update(status="failed", reason=type(exc).__name__)
-            self.sessions.append_event(session, "answer_review_result", audit)
+            self.log_event(session, "answer_review_result", audit)
             return None, audit
 
     def _run_tool_call(self, session, call, failed):
         """The single execution/receipt/history path, including final completion."""
         _ensure_running(session)
         runtime = session.runtime
-        self.sessions.append_event(session, "tool_call", call)
+        self.log_event(session, "tool_call", call)
         if runtime is not None and not runtime.can_call():
             name, result = _call_name(call), _error("resource_limit", "The turn's execution budget was reached.", False)
         else:
@@ -831,7 +841,7 @@ class Harness:
         _ensure_running(session)
         if runtime and not _is_error(result) and result.reply:
             runtime.candidate_reply = result.reply.strip()
-        self.sessions.append_event(session, "tool_result", {"call_id": call["id"], "name": name,
+        self.log_event(session, "tool_result", {"call_id": call["id"], "name": name,
                                    "content": result.content, "final": result.final, "reply": result.reply})
         session.messages.append({"role": "tool", "tool_call_id": call["id"], "content": _model_content(result.content)})
         self.sessions.save(session)
@@ -880,7 +890,7 @@ class Harness:
                 finally:
                     runtime.reviewed_call_id, runtime.review_audit = None, {}
                 blocks.extend({"plugin": plugin.name, **block} for block in result.blocks)
-                self.sessions.append_event(session, "answer_review_result", {**audit,
+                self.log_event(session, "answer_review_result", {**audit,
                     "status": "failed" if _is_error(result) or not result.reply else "model_reviewed"})
                 if not _is_error(result) and result.reply:
                     return result.reply.strip()
@@ -900,7 +910,7 @@ class Harness:
         if not raw.strip():
             raw = session.runtime.candidate_reply if session.runtime else ""
             if not raw:
-                self.sessions.append_event(session, "answer_unavailable", {"reason": "no_complete_answer"})
+                self.log_event(session, "answer_unavailable", {"reason": "no_complete_answer"})
                 chinese = any("一" <= c <= "鿿" for c in (session.user_texts()[-1] if session.user_texts() else ""))
                 text = ("本轮没有生成完整答复。已保存的材料和检查仍可查看；可以继续基于这些材料调查。" if chinese else
                         "This run did not produce a complete answer. Saved materials and checks remain available; continue from that work.")
@@ -913,7 +923,7 @@ class Harness:
             session.runtime.phase = "delivery"
         if not session.messages or session.messages[-1] != {"role": "assistant", "content": raw}:
             session.messages.append({"role": "assistant", "content": raw})
-        self.sessions.append_event(session, "answer_delivered", {"text": raw, "sha256": hashlib.sha256(raw.encode()).hexdigest()})
+        self.log_event(session, "answer_delivered", {"text": raw, "sha256": hashlib.sha256(raw.encode()).hexdigest()})
         self._add_caption(session, raw, blocks)
 
     def run_turn(self, session: Session, text: str, attachments: list[str] = (), *, request_generation: int | None = None) -> list[dict]:
@@ -972,6 +982,7 @@ class Harness:
                                  "attachments": [session.attachments[a]["name"] for a in attachments
                                                  if a in session.attachments]})
         session.messages.append({"role": "user", "content": text.strip()})
+        self.log_event(session, "turn_start", {"text": text.strip()[:300]})
         logger.info("[%s] USER  %s", session.id[:6], text.strip()[:300])
         self._note_attachments(session, attachments)
         self.sessions.save(session)
@@ -1006,7 +1017,7 @@ class Harness:
                       "Prioritize decisive evidence and a useful conditional answer over accumulating intermediate objects.")
             history = [{"role": "system", "content": budget + "\n\n" + self._system_prompt(session)}, *self._history(session)]
             tools = self._tool_specs(session)
-            self.sessions.append_event(session, "model_request", {"model": self.config["model"],
+            self.log_event(session, "model_request", {"model": self.config["model"],
                                                                  "messages": history, "tools": tools})
             sniffer = llm.think_sniffer(self.config["model"])
             reasoning_parts: list[str] = []
@@ -1050,7 +1061,7 @@ class Harness:
             if interrupted:
                 # Discard incomplete prose/arguments. Keep completed evidence
                 # and use the reserved time for one tool-free answer.
-                self.sessions.append_event(session, "model_interrupted", {"reason": interruption_reason})
+                self.log_event(session, "model_interrupted", {"reason": interruption_reason})
                 yield "thinking_end", None
                 break
             for text in sniffer.flush():
@@ -1061,7 +1072,7 @@ class Harness:
                                                             self.config["model"])
             if reasoning_parts or sniffed_parts or full_thinking:
                 yield "thinking_end", "".join(reasoning_parts) or full_thinking
-            self.sessions.append_event(session, "model_response", message)
+            self.log_event(session, "model_response", message)
             # Unlike _turn, no consolidated "thinking" block follows: the
             # thinking_delta events above already carried it, live -- adding
             # it again here would just repeat what the page already showed.
@@ -1114,7 +1125,7 @@ class Harness:
         yield "block", {"type": "notice", "level": "warning", "text": "Preparing an answer from the work completed so far; further investigation is paused for this turn."}
         message: dict = {}
         wrap_history = self._wrap_up_history(session)
-        self.sessions.append_event(session, "model_request", {"model": self.config["model"],
+        self.log_event(session, "model_request", {"model": self.config["model"],
                                                              "messages": wrap_history, "tools": []})
         runtime.phase = "answer"
         try:
@@ -1131,9 +1142,9 @@ class Harness:
         except (llm.LLMCancelled, TurnCancelled):
             raise
         except llm.LLMError as exc:
-            self.sessions.append_event(session, "model_interrupted", {"reason": "final_answer_unavailable", "error_kind": type(exc).__name__})
+            self.log_event(session, "model_interrupted", {"reason": "final_answer_unavailable", "error_kind": type(exc).__name__})
         yield "thinking_end", None
-        self.sessions.append_event(session, "model_response", message)
+        self.log_event(session, "model_response", message)
         reply, _ = llm.split_thinking(message.get("content") or "", self.config["model"])
         session.messages.append({"role": "assistant", "content": reply})
         closing: list[dict] = []

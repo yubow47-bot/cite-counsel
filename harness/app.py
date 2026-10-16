@@ -68,6 +68,10 @@ class MaterialQuery(SessionRef):
     limit: int = Field(default=20, ge=1, le=50)
 
 
+class RunLogQuery(SessionRef):
+    turns: int = Field(default=5, ge=1, le=20)
+
+
 class MaterialRead(SessionRef):
     field: str = Field(default="", max_length=80)
     offset: int = Field(default=0, ge=0)
@@ -250,6 +254,17 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
             return fail("No such conversation.", 404)
         session.cancel()
         return {"ok": True, "message": "Stopping at the next safe boundary; an in-flight request may take time to return."}
+
+    @app.post("/api/run-log")
+    def run_log(body: RunLogQuery):
+        """What actually ran in recent turns, read from the audit log."""
+        from harness import run_log as log
+        session, _ = session_for(body, create=False)
+        if session is None:
+            return fail("No such conversation.", 404)
+        store = harness.sessions.store_dir
+        events = log.read_events(store / f"{session.id}.events.jsonl") if store else []
+        return {"ok": True, "turns": log.summarize(events, turns=body.turns)}
 
     @app.post("/api/materials")
     def materials(body: MaterialQuery):

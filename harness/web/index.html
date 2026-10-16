@@ -34,7 +34,7 @@
       <main class="chat">
         <header class="app-bar">
           <div><p class="eyebrow">Legal research</p><b id="conversation-title">New conversation</b><p id="session-state" class="hint">Materials and research stay with this conversation.</p></div>
-          <nav aria-label="Workspace controls"><button id="toggle-workspace" class="secondary workspace-toggle" type="button" aria-controls="workspace" aria-expanded="false">Workspace</button><button id="toggle-research" class="secondary research-toggle" type="button" aria-controls="panels" aria-expanded="true">Research</button><button id="open-settings" class="secondary" type="button">Settings</button></nav>
+          <nav aria-label="Workspace controls"><button id="toggle-workspace" class="secondary workspace-toggle" type="button" aria-controls="workspace" aria-expanded="false">Workspace</button><button id="toggle-research" class="secondary research-toggle" type="button" aria-controls="panels" aria-expanded="true">Research</button><button id="open-run-log" class="secondary" type="button">Run log</button><button id="open-settings" class="secondary" type="button">Settings</button></nav>
         </header>
         <div id="empty" class="empty">
           <h1>Start with a question or a source.</h1>
@@ -95,6 +95,12 @@
       <pre id="material-text"></pre>
       <button id="material-prev" type="button">Previous</button>
       <button id="material-next" type="button">Next</button>
+    </dialog>
+    <dialog id="run-log-view" aria-labelledby="run-log-title">
+      <form method="dialog"><button aria-label="Close run log">Close</button></form>
+      <h2 id="run-log-title">Run log</h2>
+      <p class="hint">What actually ran in recent turns: model requests, tool calls with their receipts, the answer review and delivery. Times are seconds from the start of each turn. Older conversations may lack turn starts and budget figures.</p>
+      <div id="run-log"></div>
     </dialog>
     <script src="/assets/harness.js"></script>
   </body>

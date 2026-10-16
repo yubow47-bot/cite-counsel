@@ -117,18 +117,20 @@ class SessionStore:
 
     # ── Persistence ───────────────────────────────────────────────────
 
-    def append_event(self, session: Session, kind: str, payload: dict) -> None:
-        """Append the exact model/tool exchange independently of session snapshots."""
+    def append_event(self, session: Session, kind: str, payload: dict, state: dict | None = None) -> None:
+        """Append the exact model/tool exchange independently of session snapshots.
+        ``state`` is the harness's own turn/phase/budget snapshot, kept apart
+        from the payload so the recorded exchange stays exact."""
         with self._lock:
             if session.deleted or session.id in self._deleted:
                 return
-            self._append_event(session, kind, payload)
+            self._append_event(session, kind, payload, state)
 
-    def _append_event(self, session: Session, kind: str, payload: dict) -> None:
+    def _append_event(self, session: Session, kind: str, payload: dict, state: dict | None = None) -> None:
         if self.store_dir is None:
             return
         self.store_dir.mkdir(parents=True, exist_ok=True)
-        event = {"time": time.time(), "kind": kind, "payload": payload}
+        event = {"time": time.time(), "kind": kind, "payload": payload, **({"state": state} if state else {})}
         path = self.store_dir / f"{session.id}.events.jsonl"
         with path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
@@ -430,7 +432,7 @@ class Context:
 
     def log_event(self, kind: str, data: dict) -> None:
         """Append to this session's audit log (not the model's history)."""
-        self._harness.sessions.append_event(self.session, kind, data)
+        self._harness.log_event(self.session, kind, data)
 
     def save_source(self, ref: str, body: bytes, *, requested_url: str, response: dict) -> dict:
         """Keep the raw bytes a source record ``ref`` was built from."""

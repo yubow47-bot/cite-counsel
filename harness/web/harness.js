@@ -502,6 +502,52 @@
     pendingTitle = ''; beginSession(null); $('input').value = ''; grow(); $('input').focus();
   };
   $('open-settings').onclick = $('workspace-settings').onclick = () => { closeDrawers(); $('settings-view').showModal(); };
+  const RUN_KINDS = {model_request: 'Model request', model_response: 'Model response', tool_call: 'Tool call',
+    tool_result: 'Tool result', answer_review_request: 'Review request', answer_review_response: 'Review response',
+    answer_review_result: 'Review result', model_interrupted: 'Model interrupted', answer_delivered: 'Answer delivered',
+    answer_unavailable: 'No answer'};
+  function runDetail(row) {
+    const known = value => value == null ? 'unknown' : value;
+    switch (row.kind) {
+      case 'model_request': return `${known(row.model)} · ${row.messages} messages · ${row.tools} tools`;
+      case 'model_response': return row.tool_calls ? 'calls ' + row.tool_calls.join(', ') : `reply, ${row.reply_chars} characters`;
+      case 'tool_call': return known(row.tool);
+      case 'tool_result': return `${known(row.tool)} · ${row.error ? 'error: ' + row.error : row.receipt_status ? 'receipt ' + row.receipt_status : 'completed'}`
+        + (row.seconds == null ? '' : ` · ${row.seconds}s`);
+      case 'answer_review_request': case 'answer_review_response': return [row.model, row.mode].filter(Boolean).join(' · ');
+      case 'answer_review_result': return [row.status, row.reason, row.model].filter(Boolean).join(' · ');
+      case 'model_interrupted': case 'answer_unavailable': return known(row.reason);
+      case 'answer_delivered': return `${row.chars} characters`;
+      default: return '';
+    }
+  }
+  function renderRunLog(turns) {
+    if (!turns.length) { $('run-log').replaceChildren(el('p', 'hint', 'Nothing has run in this conversation yet.')); return; }
+    $('run-log').replaceChildren(...turns.map(turn => {
+      const section = el('section', 'run-turn');
+      const when = new Date(turn.started * 1000).toLocaleTimeString();
+      section.append(el('h3', '', `${turn.marked ? 'Turn' : 'Earlier activity (turn start not recorded)'} · ${when} · ${turn.seconds}s`));
+      if (turn.text) section.append(el('p', 'run-question', turn.text));
+      const list = el('ol', 'run-rows');
+      for (const row of turn.rows) {
+        const item = el('li', 'run-row' + (row.error ? ' failed' : ''));
+        const budget = row.phase == null ? 'budget not recorded'
+          : `${row.phase} · ${row.remaining_s}s left · ${row.tool_calls}/${row.max_calls} calls`;
+        item.append(el('span', 'run-at', `+${row.at}s`), el('span', 'run-kind', RUN_KINDS[row.kind] || row.kind),
+                    el('span', 'run-detail', runDetail(row)), el('span', 'run-budget', budget));
+        list.append(item);
+      }
+      section.append(list);
+      if (turn.truncated) section.append(el('p', 'hint', 'Later rows in this turn are not shown.'));
+      return section;
+    }));
+  }
+  $('open-run-log').onclick = async () => {
+    closeDrawers();
+    if (!session) { toast('Nothing has run in this conversation yet.'); return; }
+    try { renderRunLog((await post('/api/run-log', sessionRef())).turns); $('run-log-view').showModal(); }
+    catch (error) { toast(error.message); }
+  };
   $('toggle-workspace').onclick = () => {
     const open = !document.body.classList.contains('show-workspace'); closeDrawers();
     document.body.classList.toggle('show-workspace', open); $('drawer-backdrop').hidden = !open;

@@ -339,6 +339,9 @@ def test_event_log_captures_exact_model_request_and_result(monkeypatch, harness)
     harness.run_turn(session, "hello")
     path = harness.sessions.store_dir / f"{session.id}.events.jsonl"
     events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    # The turn marker is harness bookkeeping; the exchange after it is exact.
+    assert events[0]["kind"] == "turn_start" and events[0]["payload"] == {"text": "hello"}
+    events = events[1:]
     assert [event["kind"] for event in events] == [
         "model_request", "model_response", "tool_call", "tool_result", "model_request", "model_response", "answer_delivered"]
     request = events[0]["payload"]
