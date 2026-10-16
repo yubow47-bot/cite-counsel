@@ -222,12 +222,17 @@ def test_review_can_recognize_that_a_direct_input_requires_an_unknown_premise(ct
     assert updated.checks[0].premises[0].status == "unknown"
 
 
-def test_too_many_additions_preserve_original_instead_of_dropping_known_premises(ctx, monkeypatch):
+def test_too_many_additions_keep_known_premises_and_list_the_extra_as_a_gap(ctx, monkeypatch):
+    # Live runs lost every review correction when a reviewer added one
+    # condition too many. Known premises still come first and are all kept;
+    # the extra condition stays visible as an open gap.
     original = params(premises=[premise(statement=f"Existing condition {i}.") for i in range(3)])
     updated, audit, _ = review(ctx, monkeypatch, original,
                               edited(original, premises=[premise(statement="Another condition.")]))
-    assert updated is original and audit["status"] == "failed"
-    assert len(original.checks[0].premises) == 3
+    assert audit["status"] == "model_reviewed"
+    assert [value.statement for value in updated.checks[0].premises] == [f"Existing condition {i}." for i in range(3)]
+    assert [value.model_dump() for value in updated.checks[0].premises] == [value.model_dump() for value in original.checks[0].premises]
+    assert any(gap.startswith("Unverified condition: Another condition.") for gap in updated.gaps)
 
 
 @pytest.mark.parametrize("extra", [{"premise_ids": []}, {"task_ids": []}, {"passages": []}])

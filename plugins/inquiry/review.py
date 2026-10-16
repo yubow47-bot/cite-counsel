@@ -182,6 +182,14 @@ def review_candidate(ctx, params, contexts, delivery_evidence=None):
         if isinstance(decoded, dict):
             if "delivery_evidence" in decoded and decoded["delivery_evidence"] == payload["delivery_evidence"]:
                 del decoded["delivery_evidence"]
+            # The input calls the gaps "known_gaps"; a reviewer may answer
+            # under that name. It is the same list, not a new field.
+            if "known_gaps" in decoded:
+                echoed = decoded.pop("known_gaps")
+                if "gaps" not in decoded:
+                    decoded["gaps"] = echoed
+                elif isinstance(echoed, list) and isinstance(decoded["gaps"], list):
+                    decoded["gaps"] = list(dict.fromkeys([*decoded["gaps"], *echoed]))
             if isinstance(decoded.get("checks"), list):
                 for original, item in zip(params.checks, decoded["checks"]):
                     if not isinstance(item, dict):
@@ -210,7 +218,7 @@ def review_candidate(ctx, params, contexts, delivery_evidence=None):
         review = Review.model_validate(decoded)
         if len(review.checks) != len(params.checks):
             raise ValueError("Review omitted or added critical checks.")
-        checks, corrections = [], list(review.corrections)
+        checks, corrections, overflow = [], list(review.corrections), []
         for original, revised in zip(params.checks, review.checks):
             change = revised.model_dump(exclude={"premises", "claim_kind", "premise_branches"})
             kind = revised.claim_kind or original.claim_kind
@@ -248,9 +256,21 @@ def review_candidate(ctx, params, contexts, delivery_evidence=None):
                 # A second occurrence of a newly added premise must not change
                 # its proposed consequences by implicit last-write-wins.
                 edited.add(len(premises) - 1)
+            limit = type(original).model_fields["premises"].metadata[0].max_length
+            if len(premises) > limit:
+                # Originals come first and are kept. Conditions the reviewer
+                # added beyond a check's capacity stay visible as open gaps
+                # instead of discarding the whole review.
+                overflow += [f"Unverified condition: {value['statement']} (next check: {value['next_check']})"
+                             for value in premises[limit:]]
+                premises = premises[:limit]
+                corrections.append("Listed review-added conditions beyond a check's three premises as open gaps.")
             checks.append(type(original).model_validate({**original.model_dump(), **change,
                                                          "claim_kind": kind, "premises": premises}))
         fields = {key: getattr(review, key) for key in ("facts", "conditions", "gaps") if getattr(review, key) is not None}
+        if overflow:
+            gap_limit = type(params).model_fields["gaps"].metadata[0].max_length
+            fields["gaps"] = list(dict.fromkeys([*fields.get("gaps", params.gaps), *overflow]))[:gap_limit]
         from core import inquiry
         for key, values in fields.items():
             inquiry._strings(values, key)

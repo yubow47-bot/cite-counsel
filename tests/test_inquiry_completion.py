@@ -442,3 +442,42 @@ def test_final_model_timeout_reports_incomplete_without_false_delivery(ctx, monk
     assert blocks[-1]["type"] == "notice" and "complete answer" in blocks[-1]["text"]
     assert ctx.session.runtime is None
 
+
+
+def _premise(n):
+    return {"statement": f"Condition {n} holds.", "if_true": f"Answer A{n}.", "if_false": f"Answer B{n}.",
+            "next_check": f"Check source {n}."}
+
+
+def _review_reply(monkeypatch, body):
+    monkeypatch.setattr(llm, "chat", lambda *a, **k: {"content": json.dumps(body)})
+
+
+def _running(ctx):
+    import time
+    ctx.session.running = True
+    ctx.session.runtime = TurnBudget(time.monotonic() + 90, 18, 60, 0)
+
+
+def test_review_adding_premises_past_capacity_keeps_them_as_gaps(ctx, monkeypatch):
+    from plugins.inquiry.review import review_candidate
+    _running(ctx)
+    p = params(checks=[{**params().checks[0].model_dump(), "claim_kind": "inference",
+                        "premises": [_premise(1), _premise(2)]}])
+    check = {key: getattr(p.checks[0], key) for key in ("conclusion", "reasoning", "objection", "response", "verdict")}
+    _review_reply(monkeypatch, {"answer": "Reviewed answer.", "corrections": ["Added conditions."],
+                                "checks": [{**check, "premises": [_premise(3), _premise(4)]}]})
+    new, audit = review_candidate(ctx, p, [])
+    assert audit["status"] == "model_reviewed" and new.answer == "Reviewed answer."
+    assert [value.statement for value in new.checks[0].premises] == ["Condition 1 holds.", "Condition 2 holds.", "Condition 3 holds."]
+    assert any("Condition 4 holds." in gap for gap in new.gaps)
+
+
+def test_review_answering_under_the_input_gap_name_is_accepted(ctx, monkeypatch):
+    from plugins.inquiry.review import review_candidate
+    _running(ctx)
+    p = params(gaps=["Original gap."])
+    check = {key: getattr(p.checks[0], key) for key in ("conclusion", "reasoning", "objection", "response", "verdict")}
+    _review_reply(monkeypatch, {"answer": "Reviewed answer.", "checks": [check], "known_gaps": ["Original gap.", "New gap."]})
+    new, audit = review_candidate(ctx, p, [])
+    assert audit["status"] == "model_reviewed" and new.gaps == ["Original gap.", "New gap."]
