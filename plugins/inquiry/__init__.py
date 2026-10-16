@@ -16,7 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from core import inquiry, research
+from core import inquiry, receipt_coverage, research
 from core.tool_contracts import Artifact, Record
 from harness.plugin import CompletionRequest, Plugin, Result, Tool, UserText
 from plugins.inquiry.review import review_candidate
@@ -236,12 +236,9 @@ def _premise_kwargs(ctx, spec):
     """Select trusted acquisition/read receipts; core validates their contents."""
     ids = []
     for ref in spec.evidence_refs:
-        fingerprint = ctx.records.fingerprint(ref)
-        matches = [row for row in _receipts(ctx) if row.get("status") == "ok"
-                   and row.get("executed") is not False and row.get("category") in inquiry.INVESTIGATION_CATEGORIES
-                   and any(value.get("ref") == ref and value.get("fingerprint") == fingerprint
-                           for value in row.get("refs", []) if isinstance(value, dict))]
-        acquisition = [row for row in matches if row.get("category") in {"source", "extract"}]
+        matches = receipt_coverage.bound_to(_receipts(ctx), ref, ctx.records.fingerprint(ref),
+                                            inquiry.INVESTIGATION_CATEGORIES)
+        acquisition = [row for row in matches if row.get("category") in receipt_coverage.ACQUISITION]
         ids.extend(row["id"] for row in (acquisition[-1:] or matches))
     return {**spec.model_dump(exclude={"ref"}), "receipt_ids": list(dict.fromkeys(ids)),
             "receipts": _receipts(ctx), "user_texts": ctx.user_texts()}
@@ -446,6 +443,218 @@ def answer(ctx, p: AnswerParams) -> Result:
     return result
 
 
+def _passage_repair(ctx, passage):
+    """Actual source text near a failed quote, so the model can copy a contiguous one."""
+    record = ctx.records.get_exact(passage.source_ref)
+    if not isinstance(record, Record):
+        return None
+    name = passage.field or next((key for key in ("full_text", "text", "content") if key in record.fields), "")
+    original = record.fields.get(name)
+    if original is None or not isinstance(original.value, str) or original.origin == "model":
+        return None
+    fragments = re.split(r"\.{3}|…", passage.quote)
+    anchors = [original.value.find(part.strip()[:80]) for part in fragments if len(part.strip()) >= 16]
+    at = next((at for at in anchors if at >= 0), 0)
+    left = max(0, at - 150)
+    return {"source_ref": passage.source_ref, "field": name, "offset": left,
+            "text": original.value[left:left + 2000],
+            "next_step": "Retry conclude with a shorter contiguous exact quote copied from this text. Do not join fragments with ellipses. Nothing from this failed call was saved."}
+
+
+def _bind_passage(ctx, rc, index, passage):
+    """Locate one exact quote and the real receipts that obtained or read it.
+
+    Returns the excerpt params, receipt IDs and a review context; writes nothing.
+    """
+    from plugins import research as research_plugin
+    try:
+        ctx.records.get_exact(passage.source_ref, Record)
+    except (ValueError, TypeError) as exc:
+        refs = [ref for ref, _ in ctx.records.all(Record)][-12:]
+        raise PassageSelectionError(
+            f"checks[{index}].passages source_ref={passage.source_ref!r} is not a source Record. "
+            f"Available source refs: {refs}. Put user wording in observations/calculations with source_ref omitted. "
+            "Keep checks for arguments with actual retrieved source passages; do not create a source ref named 'user'.",
+            {"available_source_refs": refs, "next_step": "Remove the user-only check; the separate calculations already preserve its numeric results. Keep 1-2 sourced checks with exact contiguous quotes."}) from exc
+    params = research_plugin.ExcerptParams(ref=passage.source_ref, field=passage.field, quote=passage.quote)
+    try:
+        _, field_name, field, start, end = research_plugin.select_passage(rc, params)
+    except ValueError as exc:
+        raise PassageSelectionError(f"checks[{index}], source {passage.source_ref}: {exc}",
+                                    _passage_repair(ctx, passage)) from exc
+    matches = receipt_coverage.bound_to(_receipts(ctx), passage.source_ref,
+                                        ctx.records.fingerprint(passage.source_ref), inquiry.INVESTIGATION_CATEGORIES)
+    # A read proves inspection only of its returned field and span. Keep older
+    # relevant reads; adjacent page reads can jointly cover one exact excerpt.
+    spans = receipt_coverage.read_spans(matches, passage.source_ref, field_name, field.value, start, end)
+    receipt_ids = receipt_coverage.covering_reads(spans, start, end)
+    if receipt_ids is None:
+        # Retrieval/extraction receipts establish acquisition of this exact
+        # material version, without claiming passage inspection.
+        retrieved = [row for row in matches if row.get("category") in receipt_coverage.ACQUISITION]
+        if not retrieved:
+            raise ValueError(f"No successful source retrieval or complete passage read is bound to {passage.source_ref}, "
+                             f"field {field_name}, span {start}:{end}. Use record__read with ref={passage.source_ref}, "
+                             f"field={field_name}, offset={start}, limit={min(end - start, 4000)} "
+                             "and continue at next_offset if needed. Saved text or an unrelated read is not passage inspection.")
+        receipt_ids = [retrieved[-1]["id"]]
+    left, right = max(0, start - 700), min(len(field.value), end + 700)
+    context = {"check": index, "ref": passage.source_ref, "field": field_name,
+               "text": field.value[left:right][:6000], "offset": left, "truncated": right - left > 6000}
+    return params, receipt_ids, context
+
+
+def _bind_checks(ctx, p, node, tasks):
+    """Validate every check against the inquiry and real receipts before any write."""
+    _, rc = ctx.use("research")
+    task_ids = {item["id"] for item in tasks}
+    prepared, contexts, revised_claims = [], [], set()
+    for index, check in enumerate(p.checks, 1):
+        if check.claim_ref:
+            if not node or check.claim_ref not in node["candidate_refs"] or check.claim_ref in revised_claims:
+                raise ValueError("claim_ref must identify a distinct existing claim in this inquiry.")
+            if ctx.records.current_ref(check.claim_ref) != check.claim_ref:
+                raise ValueError(f"Claim revision conflict: use current ref {ctx.records.current_ref(check.claim_ref)}.")
+            revised_claims.add(check.claim_ref)
+        addressed = check.task_ids or ([tasks[0]["id"]] if len(tasks) == 1 else [])
+        unknown = set(addressed) - task_ids
+        if unknown:
+            raise ValueError(f"checks[{index}].task_ids has unknown IDs {sorted(unknown)}; available: {sorted(task_ids)}.")
+        passages, receipt_ids = [], []
+        for passage in check.passages:
+            params, ids, context = _bind_passage(ctx, rc, index, passage)
+            passages.append(params)
+            receipt_ids.extend(ids)
+            contexts.append(context)
+        receipt_ids = list(dict.fromkeys(receipt_ids))
+        inquiry._receipt_bindings(ctx.records, receipt_ids, _receipts(ctx))
+        prepared.append((check, passages, receipt_ids, addressed))
+    return rc, prepared, contexts
+
+
+def _default_observations(ctx, p, prepared):
+    observations = evaluate_observations(ctx, p.observations)
+    if not observations:
+        # Preserve decisive source wording if no explicit observation was supplied.
+        for _, passages, _, _ in prepared:
+            for passage in passages:
+                if len(observations) < 3 and len(passage.quote) <= 1500:
+                    observations.extend(evaluate_observations(ctx, [Observation(
+                        source_ref=passage.ref, quote=passage.quote, field=passage.field)]))
+    return observations
+
+
+def _source_request(ctx, sources, missing):
+    """Ask once per turn for named sources not yet fetched, if time allows."""
+    unvisited = [row for row in missing if row["status"] == "unvisited"]
+    runtime = ctx.session.runtime
+    can_investigate = runtime is None or (runtime.phase == "investigation" and runtime.remaining() > 35 and runtime.can_call())
+    if not (unvisited and ctx.is_enabled("web") and can_investigate
+            and ctx.state.get("source_request_turn") != _turn_key(ctx)):
+        return None
+    ctx.state["source_request_turn"] = _turn_key(ctx)
+    return Result({"status": "needs_sources", "source_checks": sources,
+                   "next_step": "Read these supplied sources before finalizing, then call conclude once. A failed fetch should be reported honestly, not retried indefinitely.",
+                   "suggested_calls": [{"name": "web__fetch", "arguments": {"url": row["url"]}} for row in unvisited]})
+
+
+def _reviewed(ctx, p, contexts, evidence, prior, initial, scope_patch):
+    """One bounded review, then premise staging; an invalid review falls back to the draft."""
+    supplied_review = ctx.completion_review
+    original = p
+    if supplied_review:
+        review = {**supplied_review, "reviewed_answer_sha256": research.digest(p.answer)}
+    else:
+        p, review = review_candidate(ctx, p, _review_contexts(ctx, contexts), delivery_evidence=evidence)
+    try:
+        staged = _stage_premises(ctx, prior, initial, scope_patch, p.checks)
+    except ValueError:
+        # A malformed review cannot consume the budget and strand a valid
+        # candidate, or authorize its unreviewed prose. Preserve safe evidence.
+        p = original
+        review = {**review, "status": "failed", "reason": "invalid_review_premises"}
+        review.pop("reviewed_answer_sha256", None)
+        staged = _stage_premises(ctx, prior, initial, scope_patch, p.checks)
+    return p, review, staged
+
+
+def _source_links(ctx, prepared, delivered, answer_text):
+    links = []
+    for source_ref in dict.fromkeys(passage.ref for _, passages, _, _ in prepared for passage in passages):
+        url = ctx.records.get_exact(source_ref, Record).fields.get("url")
+        value = url.value if url else ""
+        if isinstance(value, str) and value.startswith(("https://", "http://")) and value not in delivered:
+            links.append(f"- [{source_ref}]({value.replace('(', '%28').replace(')', '%29')})")
+    if not links:
+        return ""
+    label = "来源" if any("一" <= ch <= "鿿" for ch in answer_text) else "Sources"
+    return "\n\n" + label + ":\n\n" + "\n".join(links)
+
+
+def _delivery(ctx, p, review, premise_ids, premise_states, observations, calculations, missing, prepared):
+    """The exact text to deliver, its gaps, the effective verdicts and the review record."""
+    safe_checks = [{"conclusion": check.conclusion, "claim_kind": check.claim_kind, "premise_ids": ids}
+                   for check, ids in zip(p.checks, premise_ids)]
+    inquiry._strings(p.conditions, "conditions")
+    inquiry._strings(p.facts, "facts")
+    delivered, premise_gaps = _conditional_answer(p.answer, safe_checks, premise_states, review=review,
+                                                  observations=observations, calculations=calculations)
+    source_gaps = [f"{row['url']}: " + ("retrieval failed" if row["status"] == "failed" else "not retrieved") for row in missing]
+    if source_gaps:
+        zh = any("一" <= ch <= "鿿" for ch in p.answer)
+        delivered += "\n\n" + ("尚未取得的指定来源（相关结论需保留）：" if zh else "Requested sources still unavailable (related conclusions remain provisional):") + "\n\n" + "\n".join("- " + gap for gap in source_gaps)
+    effective_verdicts = ["limited" if check.verdict == "supported" and (
+        check.claim_kind == "hypothesis" or any(premise_states[identifier]["effective_status"] != "supported" for identifier in ids))
+        else check.verdict for check, ids in zip(p.checks, premise_ids)]
+    gaps = list(dict.fromkeys(p.gaps + premise_gaps + source_gaps))
+    inquiry._strings(gaps, "gaps")
+    if delivered != p.answer:
+        review = {**review, "conditional_gate": True, "draft_sha256": research.digest(p.answer),
+                  "corrections": [*review.get("corrections", []), "Bound delivery to a completed prose review and independently preserved validated evidence/calculations."]}
+    delivered += _source_links(ctx, prepared, delivered, p.answer)
+    if len(delivered) > 24000:
+        raise ValueError("Answer with source links exceeds 24000 characters; shorten the answer or use fewer decisive passages.")
+    return delivered, gaps, effective_verdicts, review
+
+
+def _save_checks(ctx, rc, p, prior, prepared, effective_verdicts, premise_ids, premise_states, scope, gaps):
+    """Write excerpts, claims, assessments and task updates; returns the new inquiry ref and claims."""
+    from plugins import research as research_plugin
+    claims, updates = [], {}
+    for index, (check, passages, receipt_ids, addressed) in enumerate(prepared):
+        verdict = effective_verdicts[index]
+        excerpts = [research_plugin.excerpt(rc, params).content["ref"] for params in passages]
+        claim_scope = {**{key: value or "" for key, value in scope.items()},
+                       "applicability": "conditional" if p.conditions or gaps or verdict != "supported" else "asserted_applicable"}
+        claim_ref = research_plugin.claim(rc, research_plugin.ClaimParams(
+            text=check.conclusion, status="disputed" if verdict == "disputed" else "supported" if verdict == "supported" else "unknown",
+            evidence=[{"excerpt_ref": ref, "relation": "supports"} for ref in excerpts],
+            reasoning=check.reasoning, scope=claim_scope, limitations=p.conditions,
+            counterargument=check.objection, counterargument_response=check.response, assessment="model_assessed",
+            kind=research.unpack(ctx.records.get_exact(check.claim_ref, Artifact))["type"] if check.claim_ref else "claim",
+            prior_ref=check.claim_ref or None)).content["ref"]
+        if check.claim_ref:
+            current = inquiry.unpack(ctx.records.get_exact(prior, Artifact))
+            prior = _persist(ctx, inquiry.refine(ctx.records, prior, candidate_refs=[
+                ref for ref in current["candidate_refs"] if ref != check.claim_ref]), prior)
+        claims.append(claim_ref)
+        prior = _persist(ctx, inquiry.assess(ctx.records, prior, claim_ref, check.reasoning,
+                         verdict=check.verdict, conditions=p.conditions, response=check.response,
+                         premise_ids=premise_ids[index], claim_kind=check.claim_kind,
+                         receipt_ids=receipt_ids, receipts=_receipts(ctx), scope=scope), prior)
+        for task_id in addressed:
+            pending = check.claim_kind == "hypothesis" or any(premise_states[identifier]["effective_status"] != "supported" for identifier in premise_ids[index])
+            updates.setdefault(task_id, []).append((check, receipt_ids, verdict, pending))
+    for task_id, checks in updates.items():
+        resolved = all(verdict in {"supported", "limited"} and not pending for _, _, verdict, pending in checks)
+        findings = "\n".join(check.conclusion + " " + check.reasoning for check, _, _, _ in checks)[:8000]
+        prior = _persist(ctx, inquiry.pursue(ctx.records, prior, task_id,
+                         "resolved" if resolved else "inconclusive", findings=findings,
+                         receipt_ids=list(dict.fromkeys(identifier for _, ids, _, _ in checks for identifier in ids)),
+                         next_step="; ".join(gaps)[:4000], receipts=_receipts(ctx)), prior)
+    return prior, claims
+
+
 def conclude(ctx, p: ConcludeParams) -> Result:
     """A short completion path using the same evidence and inquiry contracts.
 
@@ -480,204 +689,28 @@ def conclude(ctx, p: ConcludeParams) -> Result:
     research_plugin.AnalysisScope.model_validate({key: value or "" for key, value in scope.items()})
     initial = inquiry.frame(ctx.records, question, scope=scope) if node is None else None
     tasks = node["tasks"] if node else inquiry.unpack(initial)["tasks"]
-    task_ids = {item["id"] for item in tasks}
-    _, rc = ctx.use("research")
-    prepared, contexts = [], []
-    revised_claims = set()
-    for index, check in enumerate(p.checks, 1):
-        if check.claim_ref:
-            if not node or check.claim_ref not in node["candidate_refs"] or check.claim_ref in revised_claims:
-                raise ValueError("claim_ref must identify a distinct existing claim in this inquiry.")
-            if ctx.records.current_ref(check.claim_ref) != check.claim_ref:
-                raise ValueError(f"Claim revision conflict: use current ref {ctx.records.current_ref(check.claim_ref)}.")
-            revised_claims.add(check.claim_ref)
-        addressed = check.task_ids or ([tasks[0]["id"]] if len(tasks) == 1 else [])
-        unknown = set(addressed) - task_ids
-        if unknown:
-            raise ValueError(f"checks[{index}].task_ids has unknown IDs {sorted(unknown)}; available: {sorted(task_ids)}.")
-        passages, receipt_ids = [], []
-        for passage in check.passages:
-            try:
-                source = ctx.records.get_exact(passage.source_ref, Record)
-            except (ValueError, TypeError) as exc:
-                refs = [ref for ref, _ in ctx.records.all(Record)][-12:]
-                raise PassageSelectionError(
-                    f"checks[{index}].passages source_ref={passage.source_ref!r} is not a source Record. "
-                    f"Available source refs: {refs}. Put user wording in observations/calculations with source_ref omitted. "
-                    "Keep checks for arguments with actual retrieved source passages; do not create a source ref named 'user'.",
-                    {"available_source_refs": refs, "next_step": "Remove the user-only check; the separate calculations already preserve its numeric results. Keep 1-2 sourced checks with exact contiguous quotes."}) from exc
-            params = research_plugin.ExcerptParams(ref=passage.source_ref, field=passage.field, quote=passage.quote)
-            try:
-                record, field_name, field, start, end = research_plugin.select_passage(rc, params)
-            except ValueError as exc:
-                repair = None
-                record = ctx.records.get_exact(passage.source_ref)
-                if isinstance(record, Record):
-                    name = passage.field or next((key for key in ("full_text", "text", "content") if key in record.fields), "")
-                    original = record.fields.get(name)
-                    if original is not None and isinstance(original.value, str) and original.origin != "model":
-                        fragments = re.split(r"\.{3}|…", passage.quote)
-                        anchors = [original.value.find(part.strip()[:80]) for part in fragments if len(part.strip()) >= 16]
-                        at = next((at for at in anchors if at >= 0), 0)
-                        left = max(0, at - 150)
-                        repair = {"source_ref": passage.source_ref, "field": name, "offset": left,
-                                  "text": original.value[left:left + 2000],
-                                  "next_step": "Retry conclude with a shorter contiguous exact quote copied from this text. Do not join fragments with ellipses. Nothing from this failed call was saved."}
-                raise PassageSelectionError(f"checks[{index}], source {passage.source_ref}: {exc}", repair) from exc
-            fingerprint = ctx.records.fingerprint(passage.source_ref)
-            matches = [row for row in _receipts(ctx)
-                       if row.get("category") in inquiry.INVESTIGATION_CATEGORIES and row.get("status") == "ok"
-                       and row.get("executed") is not False and any(value.get("ref") == passage.source_ref
-                           and value.get("fingerprint") == fingerprint
-                           for value in row.get("refs", []) if isinstance(value, dict))]
-            # A read proves inspection only of its returned field and span.
-            # Keep older relevant reads instead of binding an unrelated latest
-            # read; adjacent page reads can jointly cover one exact excerpt.
-            spans = []
-            for sequence, row in enumerate(matches):
-                if row.get("category") != "read":
-                    continue
-                for observation in row.get("observations", []):
-                    if not isinstance(observation, dict):
-                        continue
-                    left, right = observation.get("offset"), observation.get("end")
-                    if (observation.get("ref") == passage.source_ref and observation.get("field") == field_name
-                            and type(left) is int and type(right) is int
-                            and 0 <= left < right <= len(field.value) and left < end and right > start
-                            and observation.get("text_sha256") == research.digest(field.value[left:right])):
-                        spans.append((left, right, sequence, row["id"]))
-            covered, inspected = start, []
-            while covered < end:
-                choices = [span for span in spans if span[0] <= covered < span[1]]
-                if not choices:
-                    break
-                best = max(choices, key=lambda span: (span[1], span[2]))
-                covered = best[1]
-                inspected.append(best[3])
-            if covered >= end:
-                receipt_ids.extend(inspected)
-            else:
-                # Retrieval/extraction receipts establish acquisition of this
-                # exact material version, without claiming passage inspection.
-                retrieved = [row for row in matches if row.get("category") in {"source", "extract"}]
-                if not retrieved:
-                    raise ValueError(f"No successful source retrieval or complete passage read is bound to {passage.source_ref}, "
-                                     f"field {field_name}, span {start}:{end}. Use record__read with ref={passage.source_ref}, "
-                                     f"field={field_name}, offset={start}, limit={min(end - start, 4000)} "
-                                     "and continue at next_offset if needed. Saved text or an unrelated read is not passage inspection.")
-                receipt_ids.append(retrieved[-1]["id"])
-            passages.append(params)
-            left, right = max(0, start - 700), min(len(field.value), end + 700)
-            contexts.append({"check": index, "ref": passage.source_ref, "field": field_name,
-                             "text": field.value[left:right][:6000], "offset": left,
-                             "truncated": right - left > 6000})
-        # Validate the server-owned receipt snapshots before any writes.
-        receipt_ids = list(dict.fromkeys(receipt_ids))
-        inquiry._receipt_bindings(ctx.records, receipt_ids, _receipts(ctx))
-        prepared.append((check, passages, receipt_ids, addressed))
+    rc, prepared, contexts = _bind_checks(ctx, p, node, tasks)
 
     # Parameter repair should not consume the one model-review allowance.
     _stage_premises(ctx, prior, initial, scope_patch, p.checks)
-    observations = evaluate_observations(ctx, p.observations)
-    if not observations:
-        # Preserve decisive source wording if no explicit observation was supplied.
-        for _, passages, _, _ in prepared:
-            for passage in passages:
-                if len(observations) < 3 and len(passage.quote) <= 1500:
-                    observations.extend(evaluate_observations(ctx, [Observation(
-                        source_ref=passage.ref, quote=passage.quote, field=passage.field)]))
+    observations = _default_observations(ctx, p, prepared)
     sources = _source_checks(ctx, node, p.checks)
     missing = missing_required(sources)
-    unvisited = [row for row in missing if row["status"] == "unvisited"]
-    runtime = ctx.session.runtime
-    can_investigate = runtime is None or (runtime.phase == "investigation" and runtime.remaining() > 35 and runtime.can_call())
-    if (unvisited and ctx.is_enabled("web") and can_investigate
-            and ctx.state.get("source_request_turn") != _turn_key(ctx)):
-        ctx.state["source_request_turn"] = _turn_key(ctx)
-        return Result({"status": "needs_sources", "source_checks": sources,
-                       "next_step": "Read these supplied sources before finalizing, then call conclude once. A failed fetch should be reported honestly, not retried indefinitely.",
-                       "suggested_calls": [{"name": "web__fetch", "arguments": {"url": row["url"]}} for row in unvisited]})
+    request = _source_request(ctx, sources, missing)
+    if request is not None:
+        return request
     evidence = {"observations": observations, "calculations": calculations, "source_checks": sources,
                 "source_checks_scope": "explicitly_requested_urls_only; additional acquired sources appear in source_contexts"}
-    supplied_review = ctx.completion_review
-    original = p
-    p, review = (p, {**supplied_review, "reviewed_answer_sha256": research.digest(p.answer)}) if supplied_review else review_candidate(ctx, p, _review_contexts(ctx, contexts), delivery_evidence=evidence)
-    try:
-        stages, premise_ids, premise_states = _stage_premises(ctx, prior, initial, scope_patch, p.checks)
-    except ValueError:
-        # A malformed review cannot consume the budget and strand a valid
-        # candidate, or authorize its unreviewed prose. Preserve safe evidence.
-        p = original
-        review = {**review, "status": "failed", "reason": "invalid_review_premises"}
-        review.pop("reviewed_answer_sha256", None)
-        stages, premise_ids, premise_states = _stage_premises(ctx, prior, initial, scope_patch, p.checks)
-    safe_checks = [{"conclusion": check.conclusion, "claim_kind": check.claim_kind, "premise_ids": ids}
-                   for check, ids in zip(p.checks, premise_ids)]
-    inquiry._strings(p.conditions, "conditions")
-    inquiry._strings(p.facts, "facts")
-    delivered, premise_gaps = _conditional_answer(p.answer, safe_checks, premise_states, review=review,
-                                                  observations=observations, calculations=calculations)
-    source_gaps = [f"{row['url']}: " + ("retrieval failed" if row["status"] == "failed" else "not retrieved") for row in missing]
-    if source_gaps:
-        zh = any("一" <= ch <= "鿿" for ch in p.answer)
-        delivered += "\n\n" + ("尚未取得的指定来源（相关结论需保留）：" if zh else "Requested sources still unavailable (related conclusions remain provisional):") + "\n\n" + "\n".join("- " + gap for gap in source_gaps)
-    effective_verdicts = ["limited" if check.verdict == "supported" and (
-        check.claim_kind == "hypothesis" or any(premise_states[identifier]["effective_status"] != "supported" for identifier in ids))
-        else check.verdict for check, ids in zip(p.checks, premise_ids)]
-    gaps = list(dict.fromkeys(p.gaps + premise_gaps + source_gaps))
-    inquiry._strings(gaps, "gaps")
-    if delivered != p.answer:
-        review = {**review, "conditional_gate": True, "draft_sha256": research.digest(p.answer),
-                  "corrections": [*review.get("corrections", []), "Bound delivery to a completed prose review and independently preserved validated evidence/calculations."]}
+    p, review, (stages, premise_ids, premise_states) = _reviewed(ctx, p, contexts, evidence, prior, initial, scope_patch)
+    # The review may rewrite check text; passages and receipts stay as bound.
     prepared = [(p.checks[index], passages, receipt_ids, addressed)
                 for index, (_, passages, receipt_ids, addressed) in enumerate(prepared)]
-    source_links = []
-    for source_ref in dict.fromkeys(passage.ref for _, passages, _, _ in prepared for passage in passages):
-        record = ctx.records.get_exact(source_ref, Record)
-        url = record.fields.get("url")
-        value = url.value if url else ""
-        if isinstance(value, str) and value.startswith(("https://", "http://")) and value not in delivered:
-            source_links.append(f"- [{source_ref}]({value.replace('(', '%28').replace(')', '%29')})")
-    if source_links:
-        label = "来源" if any("一" <= ch <= "鿿" for ch in p.answer) else "Sources"
-        delivered += "\n\n" + label + ":\n\n" + "\n".join(source_links)
-    if len(delivered) > 24000:
-        raise ValueError("Answer with source links exceeds 24000 characters; shorten the answer or use fewer decisive passages.")
+    delivered, gaps, effective_verdicts, review = _delivery(
+        ctx, p, review, premise_ids, premise_states, observations, calculations, missing, prepared)
 
     for artifact in stages:
         prior = _persist(ctx, artifact, prior)
-    claims, updates = [], {}
-    for index, (check, passages, receipt_ids, addressed) in enumerate(prepared):
-        verdict = effective_verdicts[index]
-        excerpts = [research_plugin.excerpt(rc, params).content["ref"] for params in passages]
-        claim_scope = {**{key: value or "" for key, value in scope.items()},
-                       "applicability": "conditional" if p.conditions or gaps or verdict != "supported" else "asserted_applicable"}
-        claim_ref = research_plugin.claim(rc, research_plugin.ClaimParams(
-            text=check.conclusion, status="disputed" if verdict == "disputed" else "supported" if verdict == "supported" else "unknown",
-            evidence=[{"excerpt_ref": ref, "relation": "supports"} for ref in excerpts],
-            reasoning=check.reasoning, scope=claim_scope, limitations=p.conditions,
-            counterargument=check.objection, counterargument_response=check.response, assessment="model_assessed",
-            kind=research.unpack(ctx.records.get_exact(check.claim_ref, Artifact))["type"] if check.claim_ref else "claim",
-            prior_ref=check.claim_ref or None)).content["ref"]
-        if check.claim_ref:
-            current = inquiry.unpack(ctx.records.get_exact(prior, Artifact))
-            prior = _persist(ctx, inquiry.refine(ctx.records, prior, candidate_refs=[
-                ref for ref in current["candidate_refs"] if ref != check.claim_ref]), prior)
-        claims.append(claim_ref)
-        prior = _persist(ctx, inquiry.assess(ctx.records, prior, claim_ref, check.reasoning,
-                         verdict=check.verdict, conditions=p.conditions, response=check.response,
-                         premise_ids=premise_ids[index], claim_kind=check.claim_kind,
-                         receipt_ids=receipt_ids, receipts=_receipts(ctx), scope=scope), prior)
-        for task_id in addressed:
-            pending = check.claim_kind == "hypothesis" or any(premise_states[identifier]["effective_status"] != "supported" for identifier in premise_ids[index])
-            updates.setdefault(task_id, []).append((check, receipt_ids, verdict, pending))
-    for task_id, checks in updates.items():
-        resolved = all(verdict in {"supported", "limited"} and not pending for _, _, verdict, pending in checks)
-        findings = "\n".join(check.conclusion + " " + check.reasoning for check, _, _, _ in checks)[:8000]
-        prior = _persist(ctx, inquiry.pursue(ctx.records, prior, task_id,
-                         "resolved" if resolved else "inconclusive", findings=findings,
-                         receipt_ids=list(dict.fromkeys(identifier for _, ids, _, _ in checks for identifier in ids)),
-                         next_step="; ".join(gaps)[:4000], receipts=_receipts(ctx)), prior)
+    prior, claims = _save_checks(ctx, rc, p, prior, prepared, effective_verdicts, premise_ids, premise_states, scope, gaps)
     final = _save(ctx, inquiry.answer(ctx.records, prior, delivered, claim_refs=claims,
                   conditions=p.conditions, gaps=gaps, receipts=_receipts(ctx), review=review, delivery_evidence=evidence), prior)
     final.content = {"ref": final.content["ref"], "readiness": final.content["readiness"],
