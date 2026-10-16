@@ -134,7 +134,7 @@ class ConcludeParams(BaseModel):
     answer: str = Field(min_length=1, max_length=16000, description="Final useful answer in the user's language, including source URLs, conditions and next steps. Delivered directly, without another model round.")
     facts: list[str] = Field(default_factory=list, max_length=3, description="Legacy prose notes, treated as model interpretation. Prefer observations for literal evidence and calculations for arithmetic; these notes are not independently delivered.")
     observations: list[Observation] = Field(default_factory=list, max_length=6, description="Useful exact source/user wording with attribution. No inferred fact summaries.")
-    calculations: list[Calculation] = Field(max_length=4, description="Required: for numeric comparisons supply inputs copied from an exact user/source quote. Use [] if there is no calculation. The server computes and always includes the results in the final answer.")
+    calculations: list[Calculation] = Field(default_factory=list, max_length=4, description="For numeric comparisons supply inputs copied from an exact user/source quote. Omit when there is no calculation. The server computes and includes the results in the final answer; valid calculations from an earlier repair attempt in this turn are retained.")
     checks: list[KeyCheck] = Field(min_length=1, max_length=3, description="Only the decisive arguments. Saves exact excerpts, claims and checks in one call; real receipts are bound automatically.")
     ref: str = Field(default="", description="Current inquiry ref if already framed. Omit to use this turn's inquiry or start one from the user's question.")
     jurisdiction: str | None = Field(default=None, max_length=300)
@@ -1018,7 +1018,7 @@ def prepare_completion(ctx, text):
 PLUGIN = Plugin(
     name="inquiry", title="Question and investigation",
     description="Investigate legal or social questions. After obtaining decisive source passages, conclude saves evidence, key checks and the final answer in one call. Frame/pursue/assess are optional for longer work.",
-    tools=[Tool("conclude", "Finish an investigation: answer + calculations (numeric inputs and exact user/source quote, or [] if none) + 1-2 checks (short exact passages, reasoning, objection, response). For unknown premises include both if_true and if_false. Saves and delivers directly; no prior frame needed.", ConcludeParams, conclude),
+    tools=[Tool("conclude", 'Save and deliver an answer with 1-2 decisive checks. Minimal shape: {"answer":"...","checks":[{"conclusion":"...","passages":[{"source_ref":"rec_1","quote":"exact source wording"}],"reasoning":"...","objection":"..."}]}. For inferences include decisive premises with if_true/if_false; for arithmetic add calculations with quoted inputs. Omit field/task_ids for their defaults. No prior frame needed.', ConcludeParams, conclude),
            Tool("frame", "Save a question, goal, context and useful subquestions; supply prior_ref to refine it after clarification while preserving previous investigation.", FrameParams, frame),
            Tool("premise", "Save or update one decisive premise: what changes if true/false, and the next concrete source check or user question. Actual source receipts/user quotes are bound automatically; status remains a model assessment. Use its stable ID when new material arrives.", PremiseParams, premise),
            Tool("pursue", "Update one subquestion with a plan, actual execution receipts, findings and the next useful step. Does not perform searches itself.", PursueParams, pursue),

@@ -218,14 +218,14 @@ def test_failed_source_attempt_is_preserved_as_failure_and_does_not_defer_again(
     assert any(URL in gap for gap in answer["gaps"])
 
 
-def test_completion_requires_an_explicit_calculation_decision():
+def test_completion_without_calculations_still_saves_the_bound_answer(ctx):
     payload = params().model_dump()
     del payload["calculations"]
-    with pytest.raises(ValidationError) as exc:
-        plugin.ConcludeParams.model_validate(payload)
-    assert any(error["loc"] == ("calculations",) and error["type"] == "missing" for error in exc.value.errors())
-    payload["calculations"] = []
-    assert plugin.ConcludeParams.model_validate(payload).calculations == []
+    result = plugin.conclude(ctx, plugin.ConcludeParams.model_validate(payload))
+    answer = saved(ctx, result)["object"]["answer"]
+    assert result.final and answer["text"] == result.reply
+    assert answer["delivery_evidence"]["calculations"] == []
+    assert QUOTE in result.reply
 
 
 def user_premise(**changes):
@@ -359,9 +359,13 @@ def test_cached_source_calculations_are_revalidated_before_fallback(ctx, change)
     assert "(160 − 200)" not in request.failure_reply and "-20%" not in request.failure_reply
 
 
-def test_empty_calculation_list_cannot_discard_verified_work_from_an_earlier_repair_attempt(ctx):
+@pytest.mark.parametrize("omitted", [False, True])
+def test_empty_calculation_list_cannot_discard_verified_work_from_an_earlier_repair_attempt(ctx, omitted):
     fail_after_valid_calculation(ctx)
-    result = plugin.conclude(ctx, params(calculations=[]))
+    payload = params(calculations=[]).model_dump()
+    if omitted:
+        del payload["calculations"]
+    result = plugin.conclude(ctx, plugin.ConcludeParams.model_validate(payload))
     assert result.final and "-16.6667%" in result.reply
     evidence = saved(ctx, result)["object"]["answer"]["delivery_evidence"]
     assert evidence["calculations"][0]["before"] == "120" and evidence["calculations"][0]["after"] == "100"
