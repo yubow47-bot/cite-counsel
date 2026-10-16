@@ -298,13 +298,15 @@ class Harness:
     # ── Configuration (the settings bar) ─────────────────────────────
 
     def _load_config(self, model: str) -> dict:
-        config = {"model": model, "enabled": [n for n, p in self.plugins.items() if p.default_enabled],
-                  "plugin_settings": {}}
+        config = {"model": model, "review_model": "",
+                  "enabled": [n for n, p in self.plugins.items() if p.default_enabled], "plugin_settings": {}}
         try:
             saved = json.loads(self.config_path.read_text(encoding="utf-8"))
             if isinstance(saved, dict):
                 if isinstance(saved.get("model"), str) and saved["model"].strip():
                     config["model"] = saved["model"].strip()
+                if isinstance(saved.get("review_model"), str):
+                    config["review_model"] = saved["review_model"].strip()
                 if isinstance(saved.get("enabled"), list):
                     # Plugins installed since the last save get their own default.
                     known = set(saved.get("known") or saved["enabled"])
@@ -338,6 +340,17 @@ class Harness:
         with self._config_lock:
             self.config["model"] = model
             self._save_config()
+
+    def set_review_model(self, model: str) -> None:
+        """Blank means reviews use the main model, as before this setting existed."""
+        with self._config_lock:
+            self.config["review_model"] = model.strip()
+            self._save_config()
+
+    @property
+    def review_model(self) -> str:
+        """The model for answer reviews, including the final completion review."""
+        return self.config.get("review_model") or self.config["model"]
 
     def set_enabled(self, name: str, enabled: bool) -> list[str]:
         if name not in self.plugins:
@@ -398,7 +411,8 @@ class Harness:
                                  else {"value": values.get(s.name)})}
                              for s in plugin.settings],
             })
-        return {"model": self.config["model"], "llm_configured": llm.configured(), "plugins": plugins}
+        return {"model": self.config["model"], "review_model": self.config.get("review_model", ""),
+                "llm_configured": llm.configured(), "plugins": plugins}
 
     # ── Context and dependencies ─────────────────────────────────────
 
@@ -779,7 +793,7 @@ class Harness:
             audit["reason"] = "review_already_attempted" if runtime.review_attempted else "insufficient_time"
             return None, audit
         runtime.review_attempted = True
-        model = self.config["model"]
+        model = self.review_model
         self.sessions.append_event(session, "answer_review_request", {"model": model, "messages": messages,
                                    "tools": tools, "mode": mode, "deadline_remaining": deadline - time.monotonic()})
         try:

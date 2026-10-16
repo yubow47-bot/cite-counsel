@@ -157,7 +157,6 @@ def task_context(ctx, params=None):
 
 
 def review_candidate(ctx, params, contexts, delivery_evidence=None):
-    model = ctx.model
     payload = {"task": task_context(ctx, params), "facts": params.facts,
                "candidate": params.answer, "conditions": params.conditions, "known_gaps": params.gaps,
                "checks": [check.model_dump(include=set(ReviewedCheck.model_fields) | {"premise_ids"})
@@ -174,7 +173,7 @@ def review_candidate(ctx, params, contexts, delivery_evidence=None):
     if message is None:
         return params, audit
     try:
-        reply, _ = llm.split_thinking(message.get("content") or "", model)
+        reply, _ = llm.split_thinking(message.get("content") or "", audit.get("model") or ctx.model)
         if reply.startswith("```json") and reply.rstrip().endswith("```"):
             reply = reply[7:].rstrip()[:-3].strip()
         decoded = json.loads(reply)

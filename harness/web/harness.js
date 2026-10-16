@@ -430,6 +430,7 @@
     $('llm-dot').className = 'dot ' + (config.llm_configured ? 'on' : 'off');
     $('llm-status').textContent = config.llm_configured ? 'API key configured' : 'No API key';
     $('model').value = config.model || '';
+    $('review-model').value = config.review_model || '';
     $('plugins').replaceChildren(...config.plugins.map(plugin => {
       const card = el('div', 'plugin' + (plugin.enabled ? ' enabled' : ''));
       const head = el('label', 'plugin-head');
@@ -528,6 +529,11 @@
   $('model-form').onsubmit = async event => {
     event.preventDefault();
     try { config = {...config, ...(await post('/api/settings/model', {model: $('model').value.trim()}))}; renderSettings(); toast('Model saved.'); }
+    catch (error) { toast(error.message); }
+  };
+  $('review-model-form').onsubmit = async event => {
+    event.preventDefault();
+    try { config = {...config, ...(await post('/api/settings/review-model', {model: $('review-model').value.trim()}))}; renderSettings(); toast($('review-model').value ? 'Review model saved.' : 'Reviews use the main model.'); }
     catch (error) { toast(error.message); }
   };
   $('key-form').onsubmit = async event => {

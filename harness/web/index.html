@@ -67,6 +67,11 @@
             <input id="model" maxlength="200" placeholder="Model ID, e.g. qwen/qwen3.7-flash" aria-label="Model ID" />
             <button type="submit">Save</button>
           </form>
+          <form id="review-model-form" class="row-form">
+            <input id="review-model" maxlength="200" placeholder="Review model (blank: same as above)" aria-label="Review model ID" />
+            <button type="submit">Save</button>
+          </form>
+          <p class="hint">The review model checks a drafted answer once before delivery. It does not make the answer verified.</p>
           <form id="key-form" class="row-form">
             <input id="api-key" type="password" autocomplete="new-password" maxlength="400" placeholder="OpenRouter API key (hidden)" aria-label="API key" />
             <button type="submit">Save</button>

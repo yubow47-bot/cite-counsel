@@ -61,6 +61,7 @@ def main(argv=None):
     parser.add_argument("--live", action="store_true", help="Explicitly allow bounded real model and public-source calls.")
     parser.add_argument("--task", choices=["all", *TASKS], default="all")
     parser.add_argument("--model", default="")
+    parser.add_argument("--review-model", default="", help="Model for the answer review; blank uses --model.")
     parser.add_argument("--reasoning-effort", choices=["low", "medium", "high"], default=None)
     parser.add_argument("--output", type=Path, default=Path(".chatbox-runtime/inquiry-eval"))
     args = parser.parse_args(argv)
@@ -99,9 +100,10 @@ def main(argv=None):
         # Direct public-page reading needs no search-provider subscription.
         # The isolated evaluation must actually offer its advertised source tool.
         h.set_enabled("web", True)
+        h.set_review_model(args.review_model)
         session, _ = h.sessions.start()
         write(directory / "task.json", TASKS[name])
-        write(directory / "config.json", {"model": model, "mode": "real-model-public-source", "synthetic_policy_numbers": True,
+        write(directory / "config.json", {"model": model, "review_model": h.review_model, "mode": "real-model-public-source", "synthetic_policy_numbers": True,
               "max_steps": core.MAX_STEPS, "max_calls": core.MAX_TOOL_CALLS, "max_seconds": core.MAX_TURN_SECONDS,
               "max_output_tokens": 7000, "reasoning_effort": args.reasoning_effort,
               "graded": False, "legal_capability_score": None})
@@ -127,7 +129,7 @@ def main(argv=None):
         event_path = h.sessions.store_dir / (session.id + ".events.jsonl")
         events = [json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()] if event_path.exists() else []
         results = [row["payload"] for row in events if row.get("kind") == "tool_result"]
-        summary = {"task": name, "model": model, "error": error, "active_inquiry": active,
+        summary = {"task": name, "model": model, "review_model": h.review_model, "error": error, "active_inquiry": active,
                    "elapsed_seconds": round(time.monotonic() - started, 2),
                    "model_requests": sum(row.get("kind") == "model_request" for row in events),
                    "answer_review_requests": sum(row.get("kind") == "answer_review_request" for row in events),

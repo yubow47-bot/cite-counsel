@@ -85,6 +85,11 @@ class ModelChoice(BaseModel):
     model: str = Field(min_length=1, max_length=200, pattern=r"^\S+$")
 
 
+class ReviewModelChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model: str = Field(default="", max_length=200, pattern=r"^\S*$")
+
+
 class Keys(BaseModel):
     model_config = ConfigDict(extra="forbid")
     openrouter_api_key: SecretStr
@@ -196,6 +201,11 @@ def create_app(harness: Harness | None = None, *, max_upload_mb: int = 50) -> Fa
     @app.post("/api/settings/model")
     def set_model(body: ModelChoice):
         harness.set_model(body.model)
+        return {"ok": True, **harness.describe()}
+
+    @app.post("/api/settings/review-model")
+    def set_review_model(body: ReviewModelChoice):
+        harness.set_review_model(body.model)
         return {"ok": True, **harness.describe()}
 
     @app.post("/api/settings/keys")
