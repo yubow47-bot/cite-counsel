@@ -83,18 +83,33 @@
       section.open = (block.fields || []).length === 1;
       section.append(api.el('summary', '', `${field.field}: ${field.old_chars} → ${field.new_chars} characters`));
       const text = api.el('div', 'compare-text');
+      const headings = api.el('div', 'compare-pair compare-headings');
+      headings.append(api.el('strong', '', `Earlier · ${block.ref}`), api.el('strong', '', `Newer · ${block.current_ref}`));
+      text.append(headings);
       for (const segment of field.segments || []) {
         if (segment.op === 'too_large') { text.append(api.el('p', 'note', 'Too large to compare here; open both versions as materials.')); continue; }
+        const pair = api.el('div', 'compare-pair');
+        const before = api.el('div', 'compare-before'), after = api.el('div', 'compare-after');
         if (segment.op === 'equal') {
-          if (segment.text) text.append(document.createTextNode(segment.text));
-          if (segment.elided) text.append(api.el('span', 'compare-elided', ` … ${segment.elided} unchanged characters … `));
-          if (segment.tail) text.append(document.createTextNode(segment.tail));
-          continue;
+          for (const column of [before, after]) {
+            if (segment.text) column.append(document.createTextNode(segment.text));
+            if (segment.elided) column.append(api.el('span', 'compare-elided', ` … ${segment.elided} unchanged characters … `));
+            if (segment.tail) column.append(document.createTextNode(segment.tail));
+          }
+        } else {
+          if (segment.old) before.append(api.el('del', 'compare-old', segment.old));
+          if (segment.new) after.append(api.el('ins', 'compare-new', segment.new));
         }
-        if (segment.old) text.append(api.el('del', 'compare-old', segment.old));
-        if (segment.new) text.append(api.el('ins', 'compare-new', segment.new));
+        pair.append(before, after); text.append(pair);
+      }
+      const controls = api.el('div', 'research-controls');
+      for (const [label, ref] of [['Open earlier original', block.ref], ['Open newer original', block.current_ref]]) {
+        const open = api.el('button', '', label);
+        open.onclick = () => api.openMaterial(ref, field.field, 0, true).catch(error => api.toast(error.message));
+        controls.append(open);
       }
       section.append(text);
+      section.append(controls);
       card.append(section);
     }
     if (!(block.fields || []).length && block.newer_version) card.append(api.el('p', 'note', 'No text field changed.'));
@@ -109,7 +124,14 @@
     const latest = (block.affected || []).filter(row => row.is_latest);
     if (latest.length) {
       const list = api.el('ul', 'compare-affected');
-      for (const row of latest) list.append(api.el('li', '', `${'  '.repeat(row.depth - 1)}${row.type} ${row.ref} (via ${row.via})`));
+      for (const row of latest) {
+        const item = api.el('li', 'compare-node', `${'  '.repeat(row.depth - 1)}${row.type} ${row.ref} (via ${row.via})`);
+        const revise = api.el('button', '', 'Revise this item');
+        revise.onclick = () => api.prepareMessage(`Review ${row.ref}, which depends on ${row.via}, after source ${block.ref} changed to ${block.current_ref}. `
+          + `Inspect the saved dependency path and compare the exact original versions. Revise only this item and the dependencies it needs, saving new versions with prior_ref=${row.ref} where applicable. `
+          + 'Keep the original versions and report changes in meaning; do not silently rebind evidence.');
+        item.append(revise); list.append(item);
+      }
       card.append(api.el('h4', '', 'Saved work that depends on it'), list);
     }
     card.append(api.el('p', 'note', block.note));
