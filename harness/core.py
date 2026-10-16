@@ -300,7 +300,7 @@ class Harness:
     # ── Configuration (the settings bar) ─────────────────────────────
 
     def _load_config(self, model: str) -> dict:
-        config = {"model": model, "review_model": "",
+        config = {"model": model, "review_model": "", "models": dict.fromkeys(("decide", "review", "completion"), ""),
                   "enabled": [n for n, p in self.plugins.items() if p.default_enabled], "plugin_settings": {}}
         try:
             saved = json.loads(self.config_path.read_text(encoding="utf-8"))
@@ -309,6 +309,13 @@ class Harness:
                     config["model"] = saved["model"].strip()
                 if isinstance(saved.get("review_model"), str):
                     config["review_model"] = saved["review_model"].strip()
+                config["models"]["review"] = config["review_model"]
+                if isinstance(saved.get("models"), dict):
+                    for stage in config["models"]:
+                        value = saved["models"].get(stage)
+                        if isinstance(value, str):
+                            config["models"][stage] = value.strip()
+                config["review_model"] = config["models"]["review"]
                 if isinstance(saved.get("enabled"), list):
                     # Plugins installed since the last save get their own default.
                     known = set(saved.get("known") or saved["enabled"])
@@ -345,14 +352,26 @@ class Harness:
 
     def set_review_model(self, model: str) -> None:
         """Blank means reviews use the main model, as before this setting existed."""
+        self.set_models({"review": model})
+
+    def set_models(self, models: dict[str, str]) -> None:
+        """Set only the supplied phases; blank falls back to the default model."""
+        if any(stage not in {"decide", "review", "completion"} or not isinstance(value, str)
+               or (value.strip() and not re.fullmatch(r"\S{1,200}", value.strip()))
+               for stage, value in models.items()):
+            raise ValueError("Use decide, review or completion with a valid model ID, or blank for the default.")
         with self._config_lock:
-            self.config["review_model"] = model.strip()
+            self.config["models"].update({stage: value.strip() for stage, value in models.items()})
+            self.config["review_model"] = self.config["models"]["review"]
             self._save_config()
+
+    def model_for(self, stage: str) -> str:
+        return self.config["models"].get(stage) or self.config["model"]
 
     @property
     def review_model(self) -> str:
         """The model for answer reviews, including the final completion review."""
-        return self.config.get("review_model") or self.config["model"]
+        return self.model_for("review")
 
     def set_enabled(self, name: str, enabled: bool) -> list[str]:
         if name not in self.plugins:
@@ -414,6 +433,7 @@ class Harness:
                              for s in plugin.settings],
             })
         return {"model": self.config["model"], "review_model": self.config.get("review_model", ""),
+                "models": dict(self.config["models"]),
                 "llm_configured": llm.configured(), "plugins": plugins}
 
     # ── Context and dependencies ─────────────────────────────────────
@@ -1017,13 +1037,14 @@ class Harness:
                       "Prioritize decisive evidence and a useful conditional answer over accumulating intermediate objects.")
             history = [{"role": "system", "content": budget + "\n\n" + self._system_prompt(session)}, *self._history(session)]
             tools = self._tool_specs(session)
-            self.log_event(session, "model_request", {"model": self.config["model"],
+            model = self.model_for("decide")
+            self.log_event(session, "model_request", {"model": model,
                                                                  "messages": history, "tools": tools})
-            sniffer = llm.think_sniffer(self.config["model"])
+            sniffer = llm.think_sniffer(model)
             reasoning_parts: list[str] = []
             sniffed_parts: list[str] = []
             message: dict = {}
-            stream = llm.chat_stream(self.config["model"], history, tools,
+            stream = llm.chat_stream(model, history, tools,
                                      timeout=min(60, max(.1, remaining - reserve)),
                                      deadline=runtime.deadline - reserve, cancelled=lambda: self._cancelled(session))
             interrupted = False
@@ -1069,7 +1090,7 @@ class Harness:
                     sniffed_parts.append(text)
                     yield "thinking_delta", text
             full_reply, full_thinking = llm.split_thinking(message.get("content") or "",
-                                                            self.config["model"])
+                                                            model)
             if reasoning_parts or sniffed_parts or full_thinking:
                 yield "thinking_end", "".join(reasoning_parts) or full_thinking
             self.log_event(session, "model_response", message)
@@ -1125,11 +1146,12 @@ class Harness:
         yield "block", {"type": "notice", "level": "warning", "text": "Preparing an answer from the work completed so far; further investigation is paused for this turn."}
         message: dict = {}
         wrap_history = self._wrap_up_history(session)
-        self.log_event(session, "model_request", {"model": self.config["model"],
-                                                             "messages": wrap_history, "tools": []})
         runtime.phase = "answer"
+        model = self.model_for("completion")
+        self.log_event(session, "model_request", {"model": model,
+                                                 "messages": wrap_history, "tools": []})
         try:
-            for kind, payload in llm.chat_stream(self.config["model"], wrap_history, [],
+            for kind, payload in llm.chat_stream(model, wrap_history, [],
                                                 timeout=min(60, max(.1, runtime.remaining())),
                                                 deadline=runtime.deadline, cancelled=lambda: self._cancelled(session)):
                 _ensure_running(session)
@@ -1145,7 +1167,7 @@ class Harness:
             self.log_event(session, "model_interrupted", {"reason": "final_answer_unavailable", "error_kind": type(exc).__name__})
         yield "thinking_end", None
         self.log_event(session, "model_response", message)
-        reply, _ = llm.split_thinking(message.get("content") or "", self.config["model"])
+        reply, _ = llm.split_thinking(message.get("content") or "", model)
         session.messages.append({"role": "assistant", "content": reply})
         closing: list[dict] = []
         self._deliver_reply(session, reply, closing, failed)

@@ -581,7 +581,7 @@ class Context:
     @property
     def model(self) -> str:
         """The model configured for ordinary tool-deciding turns."""
-        return self._harness.config["model"]
+        return self._harness.model_for("decide")
 
     def is_enabled(self, name: str) -> bool:
         """Whether another plugin is switched on; its tools stay out of reach."""

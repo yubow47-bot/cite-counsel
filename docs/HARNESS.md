@@ -44,7 +44,7 @@
 
 插件只通过 `Context` 的公开方法接触 harness：`use(name)` 取得已在 `requires` 声明的插件，`model`、`is_enabled(name)`、`log_event(kind, data)`、`save_source(...)`、`request_review(...)`。`plugins/` 下出现 `._harness` 会使测试失败。
 
-复核可以单独配置模型（设置里的 Review model，或 `review_model`）。它用于一次答复复核，包括收尾复核；留空则用主模型。少数模型（如经 OpenRouter 的 `anthropic/claude-sonnet-5.5`）拒绝指定工具的 `tool_choice`，此时同一请求改用 `auto` 重试一次，harness 仍只接受恰好调用指定工具的回复。
+模型可以按阶段配置为 `models: {decide, review, completion}`，留空的阶段使用默认 `model`。`decide` 处理普通工具决策与普通答复；`review` 处理一次候选答复复核，包括负责复核和保存的 `final_completion`；`completion` 处理预算耗尽后的无工具答复生成。设置弹窗提供对应输入框，事件日志记录实际使用的模型。旧 `review_model` 设置和接口继续映射到 `models.review`。少数模型拒绝指定工具的 `tool_choice`，此时同一请求改用 `auto` 重试一次，harness 仍只接受恰好调用指定工具的回复。所有阶段共享本轮截止时间和原有复核额度。
 
 Plugin 的可选 `context_provider(ctx)->str` 将保存的当前任务数据重新带入每轮输入；`final_response_checks(ctx,text)->list[dict]` 提供最终答复旁的检查卡片。错误会如实提示。只读动作不签发调查执行回执。问题工具通过受信回执表核对实际执行，无法通过模型参数声称已查证。
 

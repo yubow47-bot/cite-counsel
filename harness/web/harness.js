@@ -431,6 +431,8 @@
     $('llm-status').textContent = config.llm_configured ? 'API key configured' : 'No API key';
     $('model').value = config.model || '';
     $('review-model').value = config.review_model || '';
+    $('decide-model').value = config.models?.decide || '';
+    $('completion-model').value = config.models?.completion || '';
     $('plugins').replaceChildren(...config.plugins.map(plugin => {
       const card = el('div', 'plugin' + (plugin.enabled ? ' enabled' : ''));
       const head = el('label', 'plugin-head');
@@ -582,6 +584,15 @@
     try { config = {...config, ...(await post('/api/settings/review-model', {model: $('review-model').value.trim()}))}; renderSettings(); toast($('review-model').value ? 'Review model saved.' : 'Reviews use the main model.'); }
     catch (error) { toast(error.message); }
   };
+  for (const stage of ['decide', 'completion']) {
+    $(`${stage}-model-form`).onsubmit = async event => {
+      event.preventDefault();
+      try {
+        config = {...config, ...(await post('/api/settings/models', {[stage]: $(`${stage}-model`).value.trim()}))};
+        renderSettings(); toast('Model saved.');
+      } catch (error) { toast(error.message); }
+    };
+  }
   $('key-form').onsubmit = async event => {
     event.preventDefault();
     try { config = {...config, ...(await post('/api/settings/keys', {openrouter_api_key: $('api-key').value}))}; $('api-key').value = ''; renderSettings(); toast('API key saved to the local .env.'); }
