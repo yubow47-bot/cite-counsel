@@ -287,9 +287,11 @@ BUILTIN_TOOLS = (
 
 class Harness:
     def __init__(self, plugins: dict[str, Plugin] | None = None, *, model: str = "",
-                 config_path: Path = CONFIG_PATH):
+                 config_path: Path | None = None):
         self.plugins = plugins if plugins is not None else discover()
         self.skills = discover_skills(ROOT, self.plugins)
+        # Read at call time so tests can redirect the default location.
+        config_path = Path(config_path) if config_path else CONFIG_PATH
         self.config_path = config_path
         self.sessions = SessionStore(store_dir=config_path.parent / "sessions")
         self._config_lock = threading.Lock()

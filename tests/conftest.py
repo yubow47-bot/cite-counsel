@@ -37,6 +37,13 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture(autouse=True)
+def _private_runtime(tmp_path, monkeypatch):
+    """A Harness built without config_path must not read or rewrite the
+    developer's real settings, keys or saved conversations."""
+    monkeypatch.setattr("harness.core.CONFIG_PATH", tmp_path / "runtime" / "harness.json")
+
+
+@pytest.fixture(autouse=True)
 def _no_network(request, monkeypatch):
     if request.node.get_closest_marker("live"):
         yield
