@@ -274,8 +274,8 @@ def fetch(ctx, p: FetchParams) -> Result:
             meta["web_source"]["material_ref"] = material_ref
         snapshot = None
         if fetched:
-            snapshot = ctx._harness.sessions.save_source(ctx.session, expected_ref, fetched["body"],
-                        requested_url=p.url, response=fetched["response"])
+            snapshot = ctx.save_source(expected_ref, fetched["body"],
+                                       requested_url=p.url, response=fetched["response"])
             meta["source_snapshot"] = snapshot
         saved_ref = ctx.save(value, meta=meta, supersedes=prior)
         if saved_ref != expected_ref:

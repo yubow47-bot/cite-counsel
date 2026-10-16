@@ -481,7 +481,7 @@ def conclude(ctx, p: ConcludeParams) -> Result:
     initial = inquiry.frame(ctx.records, question, scope=scope) if node is None else None
     tasks = node["tasks"] if node else inquiry.unpack(initial)["tasks"]
     task_ids = {item["id"] for item in tasks}
-    rc = ctx._harness.context(ctx.session, "research")
+    _, rc = ctx.use("research")
     prepared, contexts = [], []
     revised_claims = set()
     for index, check in enumerate(p.checks, 1):
@@ -591,7 +591,7 @@ def conclude(ctx, p: ConcludeParams) -> Result:
     unvisited = [row for row in missing if row["status"] == "unvisited"]
     runtime = ctx.session.runtime
     can_investigate = runtime is None or (runtime.phase == "investigation" and runtime.remaining() > 35 and runtime.can_call())
-    if (unvisited and "web" in ctx._harness.config["enabled"] and can_investigate
+    if (unvisited and ctx.is_enabled("web") and can_investigate
             and ctx.state.get("source_request_turn") != _turn_key(ctx)):
         ctx.state["source_request_turn"] = _turn_key(ctx)
         return Result({"status": "needs_sources", "source_checks": sources,

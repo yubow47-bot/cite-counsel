@@ -418,3 +418,21 @@ class Context:
     def use(self, name: str):
         """(api, context) of a plugin this one declared in ``requires``."""
         return self._harness.dependency(self.plugin, name, self.session)
+
+    @property
+    def model(self) -> str:
+        """The model configured for ordinary tool-deciding turns."""
+        return self._harness.config["model"]
+
+    def is_enabled(self, name: str) -> bool:
+        """Whether another plugin is switched on; its tools stay out of reach."""
+        return name in self._harness.config["enabled"]
+
+    def log_event(self, kind: str, data: dict) -> None:
+        """Append to this session's audit log (not the model's history)."""
+        self._harness.sessions.append_event(self.session, kind, data)
+
+    def save_source(self, ref: str, body: bytes, *, requested_url: str, response: dict) -> dict:
+        """Keep the raw bytes a source record ``ref`` was built from."""
+        return self._harness.sessions.save_source(self.session, ref, body,
+                                                  requested_url=requested_url, response=response)

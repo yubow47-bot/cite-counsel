@@ -157,7 +157,7 @@ def task_context(ctx, params=None):
 
 
 def review_candidate(ctx, params, contexts, delivery_evidence=None):
-    model = ctx._harness.config["model"]
+    model = ctx.model
     payload = {"task": task_context(ctx, params), "facts": params.facts,
                "candidate": params.answer, "conditions": params.conditions, "known_gaps": params.gaps,
                "checks": [check.model_dump(include=set(ReviewedCheck.model_fields) | {"premise_ids"})
@@ -258,11 +258,11 @@ def review_candidate(ctx, params, contexts, delivery_evidence=None):
         updated = params.model_copy(update={"answer": review.answer, "checks": checks, **fields})
         audit = {**audit, "corrections": list(dict.fromkeys(corrections)),
                  "reviewed_answer_sha256": hashlib.sha256(updated.answer.encode("utf-8")).hexdigest()}
-        ctx._harness.sessions.append_event(ctx.session, "answer_review_result", audit)
+        ctx.log_event("answer_review_result", audit)
         return updated, audit
     except Exception as exc:
         # No retry loop. Return the draft for the caller's evidence-only
         # fallback; this failure does not authenticate its answer or branches.
         audit.update(status="failed", reason=type(exc).__name__)
-        ctx._harness.sessions.append_event(ctx.session, "answer_review_result", audit)
+        ctx.log_event("answer_review_result", audit)
         return params, audit
