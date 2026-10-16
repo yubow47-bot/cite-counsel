@@ -901,22 +901,40 @@ class Harness:
         self._add_caption(session, raw, blocks)
 
     def run_turn(self, session: Session, text: str, attachments: list[str] = (), *, request_generation: int | None = None) -> list[dict]:
-        self._open_turn(session, text, attachments, request_generation=request_generation)
         blocks: list[dict] = []
+        for _ in self._run(session, text, attachments, request_generation, blocks, keep_thinking=True):
+            pass
+        return blocks
+
+    def run_turn_stream(self, session: Session, text: str, attachments: list[str] = (), *, request_generation: int | None = None):
+        """Same as ``run_turn``, live: a generator of ``(kind, payload)``
+        pairs -- ``("thinking_delta", text)`` as the model's reasoning
+        streams in, then ``("block", block)`` for each block ``run_turn``
+        would have returned, in the same order. The reply text itself still
+        lands as one whole ``text`` block, same as before -- only the
+        thinking is meant to be watched as it happens."""
+        yield from self._run(session, text, attachments, request_generation, [], keep_thinking=False)
+
+    def _run(self, session: Session, text: str, attachments: list[str], request_generation: int | None,
+             blocks: list[dict], *, keep_thinking: bool):
+        """The one turn lifecycle behind both entry points. ``keep_thinking``
+        folds streamed reasoning into a ``thinking`` block for callers that
+        cannot watch it live; a streaming caller already showed it."""
+        self._open_turn(session, text, attachments, request_generation=request_generation)
         session.timeline.append({"role": "assistant", "blocks": blocks})
+        thinking: list[str] = []
         try:
-            thinking: list[str] = []
             for kind, payload in self._turn_events(session):
-                if kind == "thinking_delta":
+                if kind == "block":
+                    blocks.append(payload)
+                elif keep_thinking and kind == "thinking_delta":
                     thinking.append(payload)
-                elif kind == "thinking_end":
+                elif keep_thinking and kind == "thinking_end":
                     complete = payload if isinstance(payload, str) else "".join(thinking)
                     if complete.strip():
                         blocks.append({"type": "thinking", "text": complete.strip()})
                         thinking.clear()
-                elif kind == "block":
-                    blocks.append(payload)
-            return blocks
+                yield kind, payload
         except Exception as exc:
             blocks.append({"type": "notice", "level": "warning", "text": str(exc) if isinstance(exc, llm.LLMError)
                            else "This run did not complete. Saved results can be reviewed and continued."})
@@ -952,31 +970,6 @@ class Harness:
                  if aid in session.attachments]
         if notes:
             session.messages.append({"role": "user", "_note": True, "content": "\n".join(notes)})
-
-    def run_turn_stream(self, session: Session, text: str, attachments: list[str] = (), *, request_generation: int | None = None):
-        """Same as ``run_turn``, live: a generator of ``(kind, payload)``
-        pairs -- ``("thinking_delta", text)`` as the model's reasoning
-        streams in, then ``("block", block)`` for each block ``run_turn``
-        would have returned, in the same order. The reply text itself still
-        lands as one whole ``text`` block, same as before -- only the
-        thinking is meant to be watched as it happens."""
-        self._open_turn(session, text, attachments, request_generation=request_generation)
-        blocks = []
-        session.timeline.append({"role": "assistant", "blocks": blocks})
-        try:
-            for kind, payload in self._turn_events(session):
-                if kind == "block":
-                    blocks.append(payload)
-                yield kind, payload
-        except Exception as exc:
-            blocks.append({"type": "notice", "level": "warning", "text": str(exc) if isinstance(exc, llm.LLMError)
-                           else "This run did not complete. Saved results can be reviewed and continued."})
-            raise
-        finally:
-            _close_pending_calls(session)
-            session.running = False
-            session.runtime = None
-            self.sessions.save(session)
 
     def _turn_events(self, session: Session):
         failed: dict = {}

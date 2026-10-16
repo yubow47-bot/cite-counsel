@@ -1014,3 +1014,27 @@ def test_stream_step_limit_ends_with_a_wrap_up_reply(monkeypatch, harness):
     blocks = [payload for kind, payload in events if kind == "block"]
     assert blocks[-2]["type"] == "notice"
     assert blocks[-1] == {"type": "text", "text": "Here is where things stand."}
+
+
+def test_both_entry_points_share_one_lifecycle(monkeypatch, harness):
+    """run_turn folds reasoning into thinking blocks; the stream shows it live
+    instead, so its saved timeline has no thinking block. Both leave the
+    session idle and record a warning when the model fails."""
+    replies = [{**say("done"), "reasoning": "Plan."}]
+    Script(monkeypatch, list(replies))
+    session, _ = harness.sessions.start()
+    assert [b["type"] for b in harness.run_turn(session, "hi")] == ["thinking", "text"]
+    StreamScript(monkeypatch, list(replies))
+    events = list(harness.run_turn_stream(session, "again"))
+    assert ("thinking_delta", "Plan.") in events
+    assert [b["type"] for b in session.timeline[-1]["blocks"]] == ["text"]
+
+    def broken(*_, **__):
+        raise llm.LLMError("provider down")
+        yield
+    monkeypatch.setattr(llm, "chat_stream", broken)
+    for run in (lambda: harness.run_turn(session, "x"), lambda: list(harness.run_turn_stream(session, "x"))):
+        with pytest.raises(llm.LLMError):
+            run()
+        assert not session.running and session.runtime is None
+        assert session.timeline[-1]["blocks"][-1] == {"type": "notice", "level": "warning", "text": "provider down"}
