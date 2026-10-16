@@ -1,0 +1,5 @@
+.footnote-list { margin: 8px 0; padding-left: 28px; }
+.footnote { margin: 6px 0; }
+.footnote-text { overflow-wrap: anywhere; }
+.footnote-facts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.footnotes-card .note.warn { color: var(--warn); }
