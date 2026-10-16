@@ -81,11 +81,21 @@ def _request_results(endpoint: str, params: dict) -> SourceResults:
 def fetch_by_citation(citation: str, doc_type: str = "cases") -> dict:
     """Resolve a citation; errors remain structured for legacy dict callers."""
     try:
-        results = _request_results("/fetch", {"citation": citation, "doc_type": doc_type})
+        if _mark_first_a2aj():
+            logger.debug("[DUR] A2AJ fetch_by_citation — FIRST call (DNS + TCP setup expected)")
+        started = time.perf_counter()
+        with prof.measure("http.a2aj_fetch", endpoint="/fetch", doc_type=doc_type):
+            results = _request_results("/fetch", {"citation": citation, "doc_type": doc_type})
+        if timing.ENABLE_TIMING:
+            timing.report().add_a2aj(f"fetch({doc_type}) {citation[:40]}", time.perf_counter() - started)
         searched = [doc_type]
         if not results and doc_type == "cases" and " v. " not in citation and " v " not in citation:
             try:
-                results = _request_results("/fetch", {"citation": citation, "doc_type": "laws"})
+                started = time.perf_counter()
+                with prof.measure("http.a2aj_fetch_fallback", endpoint="/fetch", doc_type="laws"):
+                    results = _request_results("/fetch", {"citation": citation, "doc_type": "laws"})
+                if timing.ENABLE_TIMING:
+                    timing.report().add_a2aj(f"fetch(laws fallback) {citation[:40]}", time.perf_counter() - started)
             except SourceRequestError as exc:
                 exc.coverage["completed_doc_types"] = searched
                 raise
