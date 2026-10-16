@@ -50,7 +50,7 @@ Plugins handle the repeatable work, such as formatting citations, comparing quot
 
 The research workspace also saves exact source passages, premises, claims and drafts. A passage stays bound to its original record version and character range. If a source or premise is revised, dependent claims and drafts show that they need review. Support relationships and legal conclusions remain assertions; a human review records acknowledgement of a snapshot, not legal correctness. See [the research workspace guide](docs/RESEARCH_WORKSPACE.md).
 
-Saved conversations, result cards and materials survive reloads and plugin changes. New chat keeps earlier work available in the local conversation selector; deletion is explicit. Creating an inquiry retains that investigation and its materials until explicit deletion, including beyond the normal chat expiry and disk-count sweep. Other local chats expire after 30 days without use. Saved investigations currently belong to their conversation; cross-conversation project sharing is not implemented. The materials directory provides paged reading and literal text search, including text beyond the chat history. File extraction saves all extracted text with its coverage; scanned PDFs can be processed in successive page ranges.
+Saved conversations, result cards and materials survive reloads and plugin changes. Snapshots are kept in a local SQLite file and each save writes only what changed; snapshots from earlier JSON-file versions are imported once and the files kept. The Run log shows, per turn, every model request, tool call, review and delivery with timings and the remaining budget. New chat keeps earlier work available in the local conversation selector; deletion is explicit. Creating an inquiry retains that investigation and its materials until explicit deletion, including beyond the normal chat expiry and disk-count sweep. Other local chats expire after 30 days without use. Saved investigations currently belong to their conversation; cross-conversation project sharing is not implemented. The materials directory provides paged reading and literal text search, including text beyond the chat history. File extraction saves all extracted text with its coverage; scanned PDFs can be processed in successive page ranges.
 
 ## Example
 
@@ -88,7 +88,8 @@ The current plugins cover legal and bibliographic databases, web search and page
 | Quote | function | Checks quotations against judgment text |
 | Bibliography | function | Bibliography from saved citations |
 | Deadlines | function | Date calculations from given inputs |
-| Research | function | Versioned excerpts, premises, claims, drafts and dependency review |
+| Research | function | Versioned excerpts, premises, claims, drafts, dependency review and source version comparison |
+| Footnotes | function | Ordered case footnotes with full citation, Ibid and supra worked out from note order |
 
 ## Quick start
 
