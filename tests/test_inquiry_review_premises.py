@@ -80,6 +80,19 @@ def test_review_adds_a_specific_unknown_and_preserves_all_existing_bindings(ctx,
     assert len(payloads) == 1
 
 
+def test_omitted_review_verdict_keeps_the_correction_with_a_limited_assessment(ctx, monkeypatch):
+    original = params(verdict="supported")
+    output = edited(original)
+    del output["checks"][0]["verdict"]
+    updated, audit, _ = review(ctx, monkeypatch, original, output)
+    assert audit["status"] == "model_reviewed"
+    assert updated.answer == output["answer"]
+    assert audit["reviewed_answer_sha256"] == hashlib.sha256(updated.answer.encode()).hexdigest()
+    assert updated.checks[0].verdict == "limited"
+    assert updated.checks[0].passages == original.checks[0].passages
+    assert updated.checks[0].premises == original.checks[0].premises
+
+
 @pytest.mark.parametrize("output_premises", [None, []])
 def test_omission_or_empty_list_cannot_remove_input_premises(ctx, monkeypatch, output_premises):
     original = params(premises=[premise(status="supported", evidence_refs=["rec_3"])])
